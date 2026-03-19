@@ -1,0 +1,41 @@
+{
+  "hooks": {
+    "pre-generation": {
+      "description": "Validate prompt and references before Venice API call",
+      "trigger": "before image generation",
+      "checks": [
+        "character descriptions present for all characters in shot",
+        "reference images loaded for locked characters",
+        "aesthetic profile is set",
+        "prompt length within Venice API limits"
+      ]
+    },
+    "post-generation": {
+      "description": "Validate generated image quality",
+      "trigger": "after image generation",
+      "checks": [
+        "image was returned (non-empty response)",
+        "image dimensions match requested resolution",
+        "save image to disk with metadata"
+      ]
+    },
+    "pre-assembly": {
+      "description": "Validate all panels before HTML assembly",
+      "trigger": "before storyboard HTML generation",
+      "checks": [
+        "all planned shots have generated images",
+        "shot numbering is sequential",
+        "all scene metadata is complete"
+      ]
+    },
+    "post-assembly": {
+      "description": "Validate assembled storyboard",
+      "trigger": "after storyboard HTML generation",
+      "checks": [
+        "HTML file is valid and complete",
+        "all images embedded as data URIs",
+        "navigation links functional"
+      ]
+    }
+  }
+}

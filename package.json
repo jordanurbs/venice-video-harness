@@ -1,0 +1,49 @@
+{
+  "name": "venice-video-harness",
+  "version": "1.0.0",
+  "description": "Agent-first Venice-optimized harness for consistent video creation",
+  "homepage": "https://github.com/jordanurbs/venice-video-harness",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jordanurbs/venice-video-harness.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jordanurbs/venice-video-harness/issues"
+  },
+  "type": "module",
+  "main": "dist/mini-drama/cli.js",
+  "keywords": [
+    "venice",
+    "venice-ai",
+    "ai-video",
+    "storyboard",
+    "video-harness",
+    "consistent-video",
+    "claude-code",
+    "cursor"
+  ],
+  "bin": {
+    "video-harness": "./dist/mini-drama/cli.js",
+    "mini-drama": "./dist/mini-drama/cli.js",
+    "storyboard": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/mini-drama/cli.js",
+    "dev": "tsx src/mini-drama/cli.ts",
+    "dev:legacy": "tsx src/cli.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "fountain-js": "^1.1.0",
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pdf-parse": "^1.1.4",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
