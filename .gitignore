@@ -6,3 +6,5 @@ output/
 .env.local
 .env.*.local
 *.log
+*.png
+scripts/*.mjs

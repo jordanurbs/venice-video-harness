@@ -10,7 +10,9 @@
       "Bash(cd:*)",
       "Bash(ffprobe -v error -show_entries stream=width,height -of csv=p=0 episode-001-final.mp4)",
       "Bash(ffprobe -v error -show_streams -show_format /Users/jordanurbs/JAYEYE/venice-video-harness/output/pimon-pina/episodes/episode-002/episode-002-final.mp4)",
-      "Bash(ffmpeg -y -i episode-002-final.mp4 -c:v libx264 -preset fast -crf 18 -c:a copy -sn episode-002-final-nosubs-new.mp4)"
+      "Bash(ffmpeg -y -i episode-002-final.mp4 -c:v libx264 -preset fast -crf 18 -c:a copy -sn episode-002-final-nosubs-new.mp4)",
+      "Bash(node scripts/gen-oracle-refs.mjs)",
+      "Bash(node scripts/fix-oracle-refs.mjs)"
     ]
   }
 }
