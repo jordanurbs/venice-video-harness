@@ -11,6 +11,8 @@ import {
   DEFAULT_ACTION_MODEL,
   DEFAULT_ATMOSPHERE_MODEL,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
+  DEFAULT_IMAGE_GENERATION_MODEL,
+  DEFAULT_IMAGE_EDIT_MODEL,
 } from './types.js';
 
 const OUTPUT_BASE = resolve('output');
@@ -45,6 +47,11 @@ export function createSeries(
       actionModel: DEFAULT_ACTION_MODEL,
       atmosphereModel: DEFAULT_ATMOSPHERE_MODEL,
       characterConsistencyModel: DEFAULT_CHARACTER_CONSISTENCY_MODEL,
+      imageDefaults: {
+        generationModel: DEFAULT_IMAGE_GENERATION_MODEL,
+        editModel: DEFAULT_IMAGE_EDIT_MODEL,
+      },
+      seedanceCompatibility: 'prompt',
     },
     outputDir,
     createdAt: now,

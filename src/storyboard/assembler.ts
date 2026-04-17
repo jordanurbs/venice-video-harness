@@ -13,6 +13,7 @@ import type { AestheticProfile, PromptResult, VideoPromptResult, AudioNotes, Veo
 import type { Scene } from "../parsers/scene-extractor.js";
 import type { CharacterLock } from "../characters/reference-manager.js";
 import type { VeniceClient } from "../venice/client.js";
+import { writeImageProvenance } from "../venice/provenance.js";
 // Venice types not needed -- we parse raw responses directly.
 
 // ---- Public types ---------------------------------------------------------
@@ -121,8 +122,13 @@ export interface Storyboard {
 const DEFAULT_RESOLUTION = "1K";
 const DEFAULT_ASPECT_RATIO = "16:9";
 
-/** Model used for generation. */
-const DEFAULT_MODEL = "nano-banana-2";
+/**
+ * Model used for generation.
+ * `seedream-v5-lite` aligns with the Seedance 2.0 video pipeline; Seedance
+ * blocks images from other families. Override per-scene if targeting a
+ * non-Seedance video pipeline (e.g. Kling/Veo).
+ */
+const DEFAULT_MODEL = "seedream-v5-lite";
 
 /** Diffusion steps -- higher = better quality, slower. */
 const DEFAULT_STEPS = 30;
@@ -201,6 +207,11 @@ export class StoryboardAssembler {
       const imagePath = join(sceneDir, fileName);
       const imageBuffer = Buffer.from(imageBase64, "base64");
       await writeFile(imagePath, imageBuffer);
+
+      // Track which image model produced this panel so the Seedance
+      // pre-flight gate can validate it later. StoryboardAssembler always
+      // uses DEFAULT_MODEL for generation.
+      await writeImageProvenance(imagePath, DEFAULT_MODEL);
 
       // Save video prompt JSON alongside the image
       const vp = videoPrompts?.[i];

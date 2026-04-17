@@ -3,7 +3,10 @@ import type { VeniceClient } from './client.js';
 import type { MultiEditModel, MultiEditRequest } from './types.js';
 
 const MULTI_EDIT_PATH = '/api/v1/image/multi-edit';
-const DEFAULT_EDIT_MODEL: MultiEditModel = 'nano-banana-pro-edit';
+// Default is `seedream-v5-lite-edit` so that edited images are accepted by
+// Seedance 2.0 as references. Seedance blocks images produced by other
+// families. Override per-call when targeting a non-Seedance video pipeline.
+const DEFAULT_EDIT_MODEL: MultiEditModel = 'seedream-v5-lite-edit';
 
 export interface MultiEditOptions {
   model?: MultiEditModel;

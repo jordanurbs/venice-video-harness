@@ -8,6 +8,7 @@ import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
 import type { SeriesState, ShotScript, ShotEnvironment, MiniDramaCharacter } from '../series/types.js';
 import { FEMALE_BASE_TRAITS, MALE_BASE_TRAITS, DAYTIME_ENVIRONMENTS } from '../series/types.js';
 import { getCharacterDir } from '../series/manager.js';
+import { recordEditProvenance } from '../venice/provenance.js';
 
 /**
  * Venice multi-edit always returns 1024x1024 regardless of input.
@@ -207,7 +208,7 @@ export async function fixPanel(
   }
 
   console.log(`  Multi-editing panel with ${chars.length} character reference(s)...`);
-  console.log(`  Model: ${model || 'nano-banana-pro-edit'}`);
+  console.log(`  Model: ${model || 'seedream-v5-lite-edit'}`);
 
   const resultBuffer = await multiEditImage(client, {
     model,
@@ -228,6 +229,11 @@ export async function fixPanel(
   if (origW > 0 && origH > 0) {
     await restoreAspectRatio(panelPath, origW, origH);
   }
+
+  // Record the edit in the panel's provenance sidecar so the Seedance
+  // pre-flight gate can tell whether the panel is still compatible.
+  const editModelUsed = model ?? 'seedream-v5-lite-edit';
+  await recordEditProvenance(panelPath, editModelUsed);
 
   console.log(`  Fixed panel saved: ${panelPath}`);
   return panelPath;

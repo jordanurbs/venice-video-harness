@@ -50,6 +50,8 @@ Most Venice integrations are thin wrappers around API calls. This harness is the
 
 > **Regional availability:** Seedance 2.0 is not available to users in North America via Venice. If your Venice account is region-locked to North America, the harness will fall back to Kling O3 R2V for character shots and Veo 3.1 for atmosphere shots. Override the defaults in your `series.json` `videoDefaults` to select regionally available models.
 
+> **Seedance provenance requirement:** Seedance 2.0 **blocks** any request whose input images (panels, character references, scene refs, end frames) were produced by a family other than `seedream-v5-lite` / `seedream-v5-lite-edit`. The harness pairs image defaults to the video family automatically — see [Image / Video Family Pairing](#image--video-family-pairing) below.
+
 ### Image Models (22 generation + 1 background-remove)
 
 `nano-banana-pro`, `nano-banana-2`, `flux-2-pro`, `flux-2-max`, `gpt-image-1-5`, `grok-imagine`, `hunyuan-image-v3`, `imagineart-1.5-pro`, `qwen-image`, `qwen-image-2`, `qwen-image-2-pro`, `recraft-v4`, `recraft-v4-pro`, `seedream-v4`, `seedream-v5-lite`, `chroma`, `hidream`, `venice-sd35`, `lustify-sdxl`, `lustify-v7`, `wai-Illustrious`, `z-image-turbo`, `bria-bg-remover`
@@ -212,7 +214,48 @@ Seedance 2.0 (#1 ranked on [Artificial Analysis Video Arena](https://artificiala
 
 These defaults are overridable per-project via `series.json` → `videoDefaults`.
 
-> **North American users:** Seedance 2.0 is not available in North America via Venice. Set your `videoDefaults` to use `kling-o3-standard-reference-to-video` (character consistency) and `veo3.1-fast-image-to-video` (atmosphere) instead. See the [Venice blog post](https://venice.ai/blog/seedance-sota-video-generation-live-on-venice) for current regional availability.
+> **North American users:** Seedance 2.0 is not available in North America via Venice. Set your `videoDefaults` to use `kling-o3-standard-reference-to-video` (character consistency) and `veo3.1-fast-image-to-video` (atmosphere) instead, and flip `videoDefaults.imageDefaults` back to `nano-banana-pro` / `nano-banana-pro-edit`. See the [Venice blog post](https://venice.ai/blog/seedance-sota-video-generation-live-on-venice) for current regional availability.
+
+## Image / Video Family Pairing
+
+Seedance 2.0 **blocks** any video request whose input images (`image_url`, `end_image_url`, `reference_image_urls`, `scene_image_urls`, `elements[].frontal_image_url`, etc.) were not produced by `seedream-v5-lite` or edited by `seedream-v5-lite-edit`. Because of this, the harness pins image defaults to the Seedance-compatible family whenever the video target is Seedance:
+
+| Image Role | Default | Why |
+|------------|---------|-----|
+| Generation (`POST /image/generate`) | `seedream-v5-lite` | Only accepted input family for Seedance |
+| Multi-edit (`POST /image/multi-edit`) | `seedream-v5-lite-edit` | Only accepted input family for Seedance |
+
+These are configured per-project under `series.json`:
+
+```json
+{
+  "videoDefaults": {
+    "actionModel": "seedance-2-0-image-to-video",
+    "atmosphereModel": "seedance-2-0-image-to-video",
+    "characterConsistencyModel": "seedance-2-0-reference-to-video",
+    "imageDefaults": {
+      "generationModel": "seedream-v5-lite",
+      "editModel": "seedream-v5-lite-edit"
+    },
+    "seedanceCompatibility": "prompt"
+  }
+}
+```
+
+### Seedance Pre-flight Gate
+
+Even when defaults are correct, users occasionally bring existing assets (panels from a previous project, hand-crafted references, etc.). Before every Seedance call the harness runs a pre-flight gate that:
+
+1. Reads the provenance sidecar (`shot-NNN.provenance.json`) next to each input image
+2. Confirms each image's generation / most-recent-edit model is in the Seedance-compatible set
+3. If any are incompatible, behaves according to `seedanceCompatibility`:
+   - **`prompt`** (default in interactive shells) — list the offending files and ask the user to choose `fallback` or `launder`
+   - **`fallback`** (default in non-TTY / CI) — reroute this shot to `kling-o3-standard-reference-to-video` (R2V) or `veo3.1-fast-image-to-video` (i2v); other shots in the run continue to use Seedance if they're compatible
+   - **`launder`** — re-render each incompatible image through `seedream-v5-lite-edit` with a neutral "preserve image" prompt so it acquires compatible provenance, archive the pre-launder original, then proceed with Seedance
+
+Provenance sidecars are written automatically by the storyboard assembler, panel-fixer, reference-manager, and the mini-drama panel generator. Images without a sidecar (e.g. files from before this change) are treated as "unknown" and will always trigger the pre-flight gate.
+
+If you want to skip the pre-flight entirely, target a non-Seedance video model (e.g. switch `videoDefaults` to Kling O3 + Veo).
 
 ## Reference Implementation
 
@@ -276,7 +319,7 @@ The `src/mini-drama/` directory contains a full working implementation for narra
 
 ## Production Anti-Patterns
 
-The harness documents 12 production anti-patterns learned from real shoots in `CLAUDE.md`. These cover:
+The harness documents 13 production anti-patterns learned from real shoots in `CLAUDE.md`. These cover:
 
 - Multi-shot grouping bugs (wrong character overlap checks)
 - Character reference style drift across angles
@@ -285,6 +328,7 @@ The harness documents 12 production anti-patterns learned from real shoots in `C
 - Multi-edit cropping foreheads on close-up panels
 - Lighting inconsistency between consecutive shots
 - Logo/sigil prompt mismatches
+- Seedance 2.0 blocking non-seedream input images (provenance pairing)
 - And more
 
 See `CLAUDE.md` > "Learned Anti-Patterns" for the full list with root causes and fixes.

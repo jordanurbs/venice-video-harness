@@ -21,7 +21,10 @@ import type {
 const EDIT_PATH = "/api/v1/images/edit";
 const UPSCALE_PATH = "/api/v1/image/upscale";
 const BACKGROUND_REMOVE_PATH = "/api/v1/image/background-remove";
-const DEFAULT_MODEL = "nano-banana-2";
+// The /images/edit endpoint is deprecated; kept for backwards compat only.
+// Anything that goes downstream into Seedance should use the new
+// `seedream-v5-lite` family, so align the default here too.
+const DEFAULT_MODEL = "seedream-v5-lite";
 
 // ---- Edit (DEPRECATED) ----------------------------------------------------
 

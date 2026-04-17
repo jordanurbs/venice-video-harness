@@ -35,6 +35,7 @@ import {
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
 import { generateImage, generateWithReferences } from '../venice/generate.js';
+import { writeImageProvenance } from '../venice/provenance.js';
 import { getVeniceApiKey } from '../config.js';
 import { listVoices, filterVoices, auditionVoices } from '../venice/voices.js';
 import { generateDialogueForShots, generateSoundEffect, generateMusic } from '../venice/audio.js';
@@ -594,7 +595,7 @@ program
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--no-refine', 'Skip the multi-edit refinement pass (refinement is ON by default)')
-  .option('--edit-model <model>', 'Model for multi-edit refinement', 'nano-banana-pro-edit')
+  .option('--edit-model <model>', 'Model for multi-edit refinement (default: seedream-v5-lite-edit, required for Seedance 2.0 compatibility)', 'seedream-v5-lite-edit')
   .option('--cfg-scale <number>', 'Prompt adherence (1-10, higher = stricter)', parseFloat)
   .option('--debug', 'Save prompt payloads as shot-NNN.prompt.json for debugging', false)
   .option('--skip-approval', 'Skip script approval check', false)
@@ -754,6 +755,12 @@ program
               renameSync(tmpPath, imgPath);
             }
           } catch { /* conversion is best-effort */ }
+
+          // Record provenance — both generateImage and generateWithReferences
+          // use the default in src/venice/generate.ts when no explicit model
+          // is supplied, which the harness now pins to seedream-v5-lite.
+          const panelModel = series.videoDefaults.imageDefaults?.generationModel ?? 'seedream-v5-lite';
+          await writeImageProvenance(imgPath, panelModel);
 
           newlyGenerated.add(shot.shotNumber);
           generatedCount++;
@@ -961,7 +968,7 @@ program
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .requiredOption('-s, --shot <number>', 'Shot number to fix', parseInt)
   .option('-c, --characters <names>', 'Character names to fix (comma-separated)')
-  .option('--edit-model <model>', 'Multi-edit model', 'nano-banana-pro-edit')
+  .option('--edit-model <model>', 'Multi-edit model (default: seedream-v5-lite-edit, required for Seedance 2.0 compatibility)', 'seedream-v5-lite-edit')
   .option('--prompt <prompt>', 'Custom edit prompt (overrides auto-generated)')
   .action(async (opts: {
     project: string; episode: number; shot: number;

@@ -25,7 +25,28 @@ export interface VideoModelDefaults {
   actionModel: string;
   atmosphereModel: string;
   characterConsistencyModel?: string;
+  /**
+   * Paired image-generation defaults. When the video family is Seedance 2.0,
+   * Venice blocks requests that include images produced by any other family,
+   * so the image defaults must match the video family.
+   */
+  imageDefaults?: ImageModelDefaults;
+  /**
+   * Strategy when an incompatible (non-seedream) image is about to be sent
+   * to a Seedance model. Defaults to `prompt` in interactive shells and
+   * `fallback` in non-TTY environments.
+   */
+  seedanceCompatibility?: SeedanceCompatibilityMode;
 }
+
+export interface ImageModelDefaults {
+  /** Image generation model (t2i) — e.g. `seedream-v5-lite`, `nano-banana-pro`. */
+  generationModel: string;
+  /** Multi-edit model — e.g. `seedream-v5-lite-edit`, `nano-banana-pro-edit`. */
+  editModel: string;
+}
+
+export type SeedanceCompatibilityMode = 'prompt' | 'fallback' | 'launder';
 
 // ---------------------------------------------------------------------------
 // Character (general-purpose, not mini-drama specific)
@@ -179,6 +200,39 @@ export const DEFAULT_ATMOSPHERE_MODEL = 'seedance-2-0-image-to-video';
 export const DEFAULT_CHARACTER_CONSISTENCY_MODEL = 'seedance-2-0-reference-to-video';
 export const KLING_R2V_MODEL = 'kling-o3-standard-reference-to-video';
 export const KLING_MULTISHOT_MODEL = 'kling-o3-pro-image-to-video';
+
+/**
+ * Paired image defaults for the Seedance family. Seedance 2.0 blocks any
+ * request whose input images were not produced by `seedream-v5-lite` or
+ * edited by `seedream-v5-lite-edit`, so these are the only compatible
+ * defaults when the video target is a Seedance model.
+ */
+export const DEFAULT_IMAGE_GENERATION_MODEL = 'seedream-v5-lite';
+export const DEFAULT_IMAGE_EDIT_MODEL = 'seedream-v5-lite-edit';
+
+/**
+ * Models whose outputs Seedance 2.0 accepts as input images.
+ * Updated as Venice expands cross-family compatibility.
+ */
+export const SEEDANCE_COMPATIBLE_GENERATION_MODELS = new Set<string>([
+  'seedream-v5-lite',
+]);
+export const SEEDANCE_COMPATIBLE_EDIT_MODELS = new Set<string>([
+  'seedream-v5-lite-edit',
+]);
+
+/** True when the model id belongs to the Seedance 2.0 family. */
+export function isSeedanceVideoModel(modelId: string): boolean {
+  return modelId.startsWith('seedance-');
+}
+
+/**
+ * Atmosphere/i2v fallback when the user is on a Seedance default but the
+ * images in the request are not Seedance-compatible (or the user is in a
+ * region where Seedance is unavailable).
+ */
+export const SEEDANCE_FALLBACK_ATMOSPHERE_MODEL = 'veo3.1-fast-image-to-video';
+export const SEEDANCE_FALLBACK_R2V_MODEL = KLING_R2V_MODEL;
 
 export const VIDEO_NO_MUSIC_SUFFIX = 'No background music. Only generate dialogue, ambient sound, and sound effects.';
 

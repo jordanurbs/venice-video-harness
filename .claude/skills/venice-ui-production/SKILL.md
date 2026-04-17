@@ -60,7 +60,7 @@ A table of settings that stay constant for every shot:
 
 | Setting | Value |
 |---------|-------|
-| **Model** | `nano-banana-pro` |
+| **Model** | `seedream-v5-lite` (required when downstream video is Seedance 2.0 — harness default) — use `nano-banana-pro` only if the project targets Kling/Veo video |
 | **Seed** | `<aestheticSeed from series.json>` |
 | **CFG Scale** | `10` |
 | **Steps** | `30` |

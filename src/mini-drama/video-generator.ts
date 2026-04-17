@@ -19,6 +19,7 @@ import {
   MODELS_SUPPORTING_END_IMAGE,
   MODELS_SUPPORTING_AUDIO_INPUT,
   MODELS_USING_IMAGE_TAGS,
+  isSeedanceVideoModel,
 } from '../series/types.js';
 import { getCharacterDir } from '../series/manager.js';
 import {
@@ -27,6 +28,7 @@ import {
   type MiniDramaVideoPrompt,
 } from './prompt-builder.js';
 import { parseShotDuration } from './generation-planner.js';
+import { ensureSeedanceCompatibility } from '../venice/seedance-preflight.js';
 
 const VIDEO_QUEUE_PATH = '/api/v1/video/queue';
 const VIDEO_RETRIEVE_PATH = '/api/v1/video/retrieve';
@@ -138,6 +140,8 @@ interface RenderVideoOptions {
   audioUrl?: string;
   videoUrl?: string;
   aspectRatio?: string;
+  /** Seedance compatibility strategy when images aren't seedream-originated. */
+  seedanceCompatibility?: 'prompt' | 'fallback' | 'launder';
 }
 
 function fileToDataUri(filePath: string, mimeType = 'image/png'): string | undefined {
@@ -155,8 +159,40 @@ async function renderVideoFile(
     negativePrompt, audioUrl, videoUrl } = options;
   await mkdir(dirname(outputPath), { recursive: true });
 
+  // ── Seedance 2.0 pre-flight ─────────────────────────────────────────────
+  // Seedance blocks requests whose input images were not produced by
+  // seedream-v5-lite / seedream-v5-lite-edit. We check provenance against
+  // every file path being sent before the body is built — if the user has
+  // pre-existing (e.g. nano-banana-generated) assets, we either reroute
+  // the shot or launder the images through seedream-v5-lite-edit.
+  let effectiveModel = prompt.model;
+  if (isSeedanceVideoModel(prompt.model)) {
+    const elementsFrontalPaths = (elements ?? [])
+      .map(el => el.frontalImageUrl)
+      .filter((p): p is string => typeof p === 'string' && !p.startsWith('data:'));
+    const elementsReferencePaths = (elements ?? [])
+      .flatMap(el => el.referenceImageUrls ?? [])
+      .filter(p => !p.startsWith('data:'));
+
+    const action = await ensureSeedanceCompatibility(client, prompt.model, {
+      imageUrl: anchorImagePath,
+      endImageUrl: endFrameImagePath,
+      referenceImagePaths: referenceImagePaths?.filter(p => !p.startsWith('data:')),
+      sceneImagePaths: sceneImagePaths?.filter(p => !p.startsWith('data:')),
+      elementsFrontalPaths,
+      elementsReferencePaths,
+    }, { mode: options.seedanceCompatibility });
+
+    if (action.type === 'fallback') {
+      console.warn(`  ${action.reason}`);
+      effectiveModel = action.newModel;
+    } else if (action.type === 'laundered') {
+      console.log(`  Laundered ${action.lauderedPaths.length} image(s); proceeding with ${prompt.model}.`);
+    }
+  }
+
   const body: Record<string, unknown> = {
-    model: prompt.model,
+    model: effectiveModel,
     prompt: prompt.prompt,
     duration: prompt.duration,
     image_url: imageToDataUri(anchorImagePath),
@@ -167,29 +203,29 @@ async function renderVideoFile(
     body.negative_prompt = negativePrompt;
   }
 
-  if (endFrameImagePath && existsSync(endFrameImagePath) && MODELS_SUPPORTING_END_IMAGE.has(prompt.model)) {
+  if (endFrameImagePath && existsSync(endFrameImagePath) && MODELS_SUPPORTING_END_IMAGE.has(effectiveModel)) {
     body.end_image_url = imageToDataUri(endFrameImagePath);
   }
 
-  if (prompt.model.includes('seedance')) {
+  if (effectiveModel.includes('seedance')) {
     body.resolution = '720p';
-  } else if (prompt.model.includes('veo')) {
+  } else if (effectiveModel.includes('veo')) {
     body.resolution = '720p';
-  } else if (prompt.model.includes('wan-2.6') || prompt.model.includes('wan-2.5')) {
+  } else if (effectiveModel.includes('wan-2.6') || effectiveModel.includes('wan-2.5')) {
     body.resolution = '1080p';
-  } else if (prompt.model.includes('ltx-2')) {
+  } else if (effectiveModel.includes('ltx-2')) {
     body.resolution = '1080p';
-  } else if (prompt.model.includes('sora-2-pro')) {
+  } else if (effectiveModel.includes('sora-2-pro')) {
     body.resolution = '1080p';
-  } else if (prompt.model.includes('sora-2')) {
+  } else if (effectiveModel.includes('sora-2')) {
     body.resolution = '720p';
   }
 
-  if (prompt.model.includes('reference-to-video') || prompt.model.includes('seedance')) {
+  if (effectiveModel.includes('reference-to-video') || effectiveModel.includes('seedance')) {
     body.aspect_ratio = options.aspectRatio ?? '16:9';
   }
 
-  if (audioUrl && MODELS_SUPPORTING_AUDIO_INPUT.has(prompt.model)) {
+  if (audioUrl && MODELS_SUPPORTING_AUDIO_INPUT.has(effectiveModel)) {
     body.audio_url = audioUrl;
   }
 
@@ -197,7 +233,7 @@ async function renderVideoFile(
     body.video_url = videoUrl;
   }
 
-  if (elements && elements.length > 0 && MODELS_SUPPORTING_ELEMENTS.has(prompt.model)) {
+  if (elements && elements.length > 0 && MODELS_SUPPORTING_ELEMENTS.has(effectiveModel)) {
     const apiElements = elements.map(el => {
       const out: Record<string, unknown> = {};
       if (el.frontalImageUrl) {
@@ -218,7 +254,7 @@ async function renderVideoFile(
   }
 
   if (referenceImagePaths && referenceImagePaths.length > 0
-    && MODELS_SUPPORTING_REFERENCE_IMAGES.has(prompt.model)) {
+    && MODELS_SUPPORTING_REFERENCE_IMAGES.has(effectiveModel)) {
     body.reference_image_urls = referenceImagePaths
       .slice(0, 4)
       .map(p => p.startsWith('data:') ? p : (fileToDataUri(p) ?? p))
@@ -227,7 +263,7 @@ async function renderVideoFile(
   }
 
   if (sceneImagePaths && sceneImagePaths.length > 0
-    && MODELS_SUPPORTING_SCENE_IMAGES.has(prompt.model)) {
+    && MODELS_SUPPORTING_SCENE_IMAGES.has(effectiveModel)) {
     body.scene_image_urls = sceneImagePaths
       .slice(0, 4)
       .map(p => p.startsWith('data:') ? p : (fileToDataUri(p) ?? p))
@@ -240,11 +276,11 @@ async function renderVideoFile(
   }
 
   if (prompt.characterElements && prompt.characterElements.length > 0
-    && !prompt.model.includes('reference-to-video')) {
-    console.warn(`  ⚠ Shot has characters but model ${prompt.model} is NOT R2V — character identity may drift`);
+    && !effectiveModel.includes('reference-to-video')) {
+    console.warn(`  ⚠ Shot has characters but model ${effectiveModel} is NOT R2V — character identity may drift`);
   }
 
-  console.log(`  Queueing video: model=${prompt.model}, duration=${prompt.duration}, aspect=${body.aspect_ratio ?? 'default'}, prompt=${(prompt.prompt).length} chars`);
+  console.log(`  Queueing video: model=${effectiveModel}, duration=${prompt.duration}, aspect=${body.aspect_ratio ?? 'default'}, prompt=${(prompt.prompt).length} chars`);
 
   let queueResponse: QueueResponse;
   try {
@@ -540,6 +576,7 @@ async function renderSingleShotUnit(
     referenceImagePaths,
     sceneImagePaths,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
+    seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
   });
 
   const durationSec = getVideoDuration(savedPath);
@@ -642,6 +679,7 @@ async function renderMultiShotUnit(
     elements,
     referenceImagePaths,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
+    seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
   });
 
   const segments = splitRenderedUnitIntoShots(savedUnitPath, unit, new Map(shots.map(shot => [shot.shotNumber, shot])), sceneDir);

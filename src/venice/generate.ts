@@ -18,7 +18,10 @@ import type {
 // ---- Constants ------------------------------------------------------------
 
 const GENERATE_PATH = "/api/v1/image/generate";
-const DEFAULT_MODEL = "nano-banana-2";
+// Default is `seedream-v5-lite` so that generated images are accepted by
+// Seedance 2.0 (the harness's default video family). Seedance blocks images
+// produced by any other family. Override per-call or via series.videoDefaults.imageDefaults.
+const DEFAULT_MODEL = "seedream-v5-lite";
 const DEFAULT_RESOLUTION = "1K";
 const DEFAULT_ASPECT_RATIO = "1:1";
 

@@ -163,7 +163,15 @@ ATMOSPHERE_MODEL          = 'seedance-2-0-image-to-video'
 CHARACTER_CONSISTENCY_MODEL = 'seedance-2-0-reference-to-video'
 KLING_R2V_MODEL           = 'kling-o3-standard-reference-to-video'  (fallback for 3+ chars)
 MULTISHOT_MODEL           = 'kling-o3-pro-image-to-video'
+
+# Image defaults MUST be paired with Seedance — no other family is accepted
+IMAGE_GENERATION_MODEL    = 'seedream-v5-lite'
+MULTI_EDIT_MODEL          = 'seedream-v5-lite-edit'
 ```
+
+### Seedance Provenance Requirement
+
+Seedance 2.0 **blocks** any request whose input images (`image_url`, `end_image_url`, `reference_image_urls`, `scene_image_urls`, `elements[].frontal_image_url`) were not produced by `seedream-v5-lite` or `seedream-v5-lite-edit`. When picking an image generation or multi-edit model for a Seedance pipeline, the only valid choices are these two. The harness writes a provenance sidecar (`<image>.provenance.json`) on every generation and records edits on top. Before each Seedance call, `ensureSeedanceCompatibility()` (`src/venice/seedance-preflight.ts`) verifies every input image and — if any are incompatible — either prompts the user, reroutes the shot to Kling O3 R2V / Veo 3.1, or launders the offending images through `seedream-v5-lite-edit`. Mode is controlled by `series.videoDefaults.seedanceCompatibility` (`prompt` | `fallback` | `launder`).
 
 ## 2. Video Model Routing Decision
 
@@ -420,6 +428,7 @@ Seedance 2.0 (now the default for both atmosphere and character shots) accepts *
 - **Sending `image_references`/`image_1` to `nano-banana-pro`:** Returns 400. The generation model does not accept reference payloads at all.
 - **Sending invalid durations:** Seedance 2.0 accepts 4s/5s/8s/10s/12s/15s. Veo 3.1 accepts 4s/6s/8s. Duration auto-snap corrects this.
 - **Reference images below 300x300:** R2V models reject `reference_image_urls` and `elements` images smaller than 300x300 pixels. Never downscale character references below this threshold.
+- **Sending non-seedream images to Seedance 2.0:** Seedance blocks any request whose input images were produced by a different family (nano-banana, flux, recraft, etc). The pre-flight gate catches this; the only accepted generators are `seedream-v5-lite` / `seedream-v5-lite-edit`. Either keep the image-generation family paired with Seedance, switch the video target to Kling O3 / Veo, or let the gate launder the images.
 
 ### Visual Contamination
 
