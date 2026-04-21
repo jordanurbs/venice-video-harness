@@ -119,16 +119,16 @@ export const CHARACTERS: CharacterSpec[] = [
     shortName: "Teddy",
     age: "31",
     gender: "male",
-    // NOTE (2026-04-17): Teddy was originally written as an 11-year-old boy.
-    // Venice content moderation silently returned blank-black 1024x1024
-    // placeholders for every angle (see BUILD_JOURNAL stage-1 entry). Reframed
-    // as a 31-year-old "adult man-child" in the Royal-Tenenbaums-Richie /
-    // Bottle-Rocket-Dignan tradition: a slight-statured adult who wears a
-    // vintage schoolboy short-trouser suit as personal eccentricity. Same
-    // wardrobe + valise + sealed letter — preserves the visual silhouette
-    // and shotlist intent without triggering the minor-detection filter.
+    // NOTE (2026-04-17, revision 2): Earlier adult-rewrite still produced a
+    // Disney/Pixar-style illustration (round face, huge eyes, bowl haircut,
+    // airbrushed cartoon skin) that clashed with the painterly-photograph look
+    // of Wexley/Constance/Conductor. Teddy's Shot 5 read visibly cartoon-ish.
+    // Rewritten with the same detail-vocabulary used for other characters:
+    // specific adult features, photograph-adjacent descriptors, no "youthful"
+    // or "round" or "very large eyes" phrasing that pulls seedream into
+    // kids-book-illustration territory. Same wardrobe and silhouette preserved.
     description:
-      "A 31-year-old man of slight build and unusually short stature for an adult, with a clean-shaven youthful round face, a neat side-parted bowl haircut of light brown hair, very large solemn brown eyes, a small serious mouth, faint freckles across the bridge of the nose. He carries himself with the studied seriousness of a perpetual student; mannered and dignified.",
+      "A 32-year-old adult man of slight wiry build, pale ivory complexion with faint dark undereye shadows, narrow intelligent dark-brown eyes, neat side-parted chestnut-brown hair, a thin clean-shaven jaw with a faint blue stubble shadow, high cheekbones, small unsmiling mouth, a faint dusting of freckles across the bridge of the nose, and the solemn formal posture of a perpetual doctoral candidate. Detailed adult features, photograph-adjacent painterly rendering matching the other principal characters.",
     wardrobe:
       "A crisp mustard-yellow short-trouser suit with brass buttons (worn as a personal sartorial eccentricity), mustard knee socks, polished brown lace-up oxfords, a small striped bowtie of plum and cream, a miniature monogrammed leather valise (initials T.A.) at his side, a wax-sealed letter clutched in both hands inscribed in copperplate 'TO BE OPENED ON PLUTO'.",
     seed: 770404,
@@ -256,17 +256,22 @@ export const SHOTLIST: ShotSpec[] = [
     panelPrompt: [
       "Perfectly symmetric medium shot, dead-center. A refined elderly gentleman",
       "(Wexley) sits motionless in a private train sleeping compartment upholstered in deep",
-      "plum velvet embroidered with brass-thread filigree. He balances a worn leather",
-      "document portfolio across his knees, gripped firmly with both hands. A pink-shaded",
-      "brass reading lamp glows above his shoulder. Behind him an oval porthole shows",
-      "the deep blue void of space and a single distant star. Cream antimacassar on the",
-      "headrest behind him. Wes Anderson tableau, painterly, low contrast, 16:9.",
+      "plum velvet embroidered with brass-thread filigree. He balances a worn oxblood-leather",
+      "document portfolio across his knees, gripped firmly with both hands; the front cover of",
+      "the portfolio is embossed with a large prominent gold-and-orange Bitcoin logo (the",
+      "circular Bitcoin symbol with the letter B and two vertical strokes through it,",
+      "rendered as a beveled gold-foil emblem on the leather, dead-center on the portfolio,",
+      "instantly recognizable). A pink-shaded brass reading lamp glows above his shoulder.",
+      "Behind him an oval porthole shows the deep blue void of space and a single distant",
+      "star. Cream antimacassar on the headrest behind him. Wes Anderson tableau, painterly,",
+      "low contrast, 16:9.",
     ].join(" "),
     videoPrompt: [
       "Locked symmetric medium shot of @Image1 sitting motionless in the plum-velvet",
-      "compartment, clutching the leather portfolio. Camera tilts slowly down to the",
-      "portfolio for one full second, then tilts slowly back up to his deadpan face.",
-      "He does not move. The reading lamp glows steadily. No music.",
+      "compartment, clutching the oxblood leather portfolio embossed with a prominent",
+      "gold-and-orange Bitcoin logo on its front cover. Camera tilts slowly down to the",
+      "Bitcoin logo on the portfolio for one full second, holding on it, then tilts slowly",
+      "back up to his deadpan face. He does not move. The reading lamp glows steadily.",
     ].join(" "),
     routing: { kind: "r2v", characters: ["wexley"] },
   },
@@ -359,17 +364,69 @@ export const SHOTLIST: ShotSpec[] = [
  *
  * Beat pauses are encoded as ellipses; Kokoro respects them as breath gaps.
  */
+/**
+ * VO script (revision 4).
+ *
+ * Lessons learned from rev 3:
+ *   - Kokoro reliably renders SINGLE ellipses ("..."). Doubled ellipses
+ *     ("......") confuse it and can cause it to TRUNCATE the ending entirely
+ *     (rev 3 dropped "a film about being inflated off the planet" silently).
+ *   - Use single "..." for breath gaps and commas for sub-phrase rhythm.
+ *
+ * Each entry below is one caption row. Caption timings in `CAPTIONS` are
+ * derived from ffmpeg silencedetect on the rendered VO — never hand-tuned.
+ */
 export const VO_TEXT = [
-  "In the wake of the Great Liquidity...",
+  "In the wake of the Big Print...",
   "when seven trillion dollars appeared, very politely, from nowhere...",
-  "a small number of refined persons elected to depart.",
-  "Not for another country.",
-  "For another planet.",
+  "a small number of refined persons elected to depart...",
+  "Not for another country...",
+  "For another planet...",
   "The Grand Plutonian Sleeper Express departs Earth-Side Terminal...",
-  "nightly at eleven forty-seven.",
-  "First class only. No fiat accepted. Dress code, mournful.",
-  "This winter... a film about leaving.",
+  "nightly at eleven forty-seven...",
+  "First class only...",
+  "Payments in Bitcoin only...",
+  "No fiat accepted...",
+  "Dress code, mournful...",
+  "This winter... a film about being inflated off the planet.",
 ].join(" ");
+
+/**
+ * Caption rows for hardcoded burn-in subtitles. One row per VO phrase, with
+ * start/end times in absolute trailer-time (BEFORE the Bitcoin first-frame
+ * prepend — that adds the same 0.042s offset to both video and audio so
+ * relative sync is preserved).
+ *
+ * Times are DERIVED from `ffmpeg silencedetect` on the rendered vo.mp3:
+ *   ffmpeg -i audio/vo.mp3 -af "silencedetect=noise=-30dB:d=0.18" -f null -
+ *
+ * Mapping rule:
+ *   caption.start = 1.5 (VO adelay in 05-assemble.ts) + vo_segment_start - 0.1 (lead-in)
+ *   caption.end   = next caption.start - 0.05 (back-to-back, no gap)
+ *   final caption.end = end-of-speech + ~1.5s (linger before title card)
+ *
+ * Last measured against vo.mp3 duration 27.264s, 13 detected speech segments
+ * (2026-04-20).
+ */
+export const CAPTIONS: Array<{ text: string; start: number; end: number }> = [
+  { text: "In the wake of the Big Print...",                        start: 1.72,  end: 3.14 },
+  // Seg 2 split mid-phrase (proportional to syllable count) so each caption fits a single line at 38px.
+  { text: "when seven trillion dollars appeared,",                  start: 3.19,  end: 4.89 },
+  { text: "very politely, from nowhere...",                         start: 4.94,  end: 6.87 },
+  { text: "a small number of refined persons elected to depart...", start: 6.92,  end: 10.06 },
+  { text: "Not for another country...",                             start: 10.11, end: 11.51 },
+  { text: "For another planet...",                                  start: 11.56, end: 12.76 },
+  // Seg 6 split mid-phrase (same reason).
+  { text: "The Grand Plutonian Sleeper Express",                    start: 12.81, end: 14.60 },
+  { text: "departs Earth-Side Terminal...",                         start: 14.65, end: 16.42 },
+  { text: "nightly at eleven forty-seven...",                       start: 16.47, end: 18.43 },
+  { text: "First class only...",                                    start: 18.48, end: 19.79 },
+  { text: "Payments in Bitcoin only...",                            start: 19.84, end: 21.47 },
+  { text: "No fiat accepted...",                                    start: 21.52, end: 23.03 },
+  { text: "Dress code, mournful...",                                start: 23.08, end: 24.64 },
+  { text: "This winter...",                                         start: 24.69, end: 25.69 },
+  { text: "a film about being inflated off the planet.",            start: 25.74, end: 30.00 },
+];
 
 // ---- Music & SFX cues -----------------------------------------------------
 
