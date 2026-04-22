@@ -228,6 +228,50 @@ The full request schema for `POST /api/v1/video/queue`:
 
 **Parameter availability is model-dependent.** The harness automatically skips unsupported params per model. Use `getVideoModel()` from `src/venice/models.ts` to check capabilities.
 
+## Editing Pipeline
+
+Parallel to the generation pipeline. The generation pipeline **synthesizes** shots from prompts; the editing pipeline **cuts** already-existing media (either Venice-generated or user-supplied raw footage). They share ffmpeg and the burn-in-subtitles skill but are otherwise independent.
+
+Inspired by [browser-use/video-use](https://github.com/browser-use/video-use), the editing pipeline adopts the "text + on-demand visuals" philosophy: the LLM reads a compact `takes_packed.md` transcript rather than frame-dumping the video, and only calls `timeline-view` composite PNGs at explicit decision points.
+
+### When To Reach For Editing vs Generation
+
+| Task | Pipeline | Entry Point |
+|------|----------|-------------|
+| Synthesize new shots from prompts | Generation | `/produce-episode`, `/generate-episode-videos` |
+| Re-cut a generated episode for pacing | Editing | `/edit-footage` |
+| Trim filler words from a VO take | Editing | `/edit-footage` |
+| Edit raw user-supplied footage | Editing | `/edit-footage` |
+| Rescue a truncated TTS VO | Editing | `/edit-footage` |
+| Add branded lower-thirds / title cards | Editing | `overlay-designer` agent |
+| Post-assembly QA on any rendered video | Editing | `cut-qa` agent |
+
+### The Five Steps
+
+1. **Transcribe** via local `whisper-cpp` → per-source `*.words.json` + `takes_packed.md` pack
+2. **Read pack** — LLM forms a cut strategy from text
+3. **Confirm** — propose strategy to user, wait for yes
+4. **Render EDL** — JSON cut list → ffmpeg concat with 30ms audio fades (archive-first)
+5. **Self-eval** — `cut-qa` agent runs 6 programmatic checks at every cut boundary; max 3 fix iterations
+
+### Required Tools
+
+- `whisper-cpp` on PATH (`brew install whisper-cpp`) for transcription
+- A whisper.cpp model at `~/.cache/whisper.cpp/ggml-base.en.bin` (or `$WHISPER_CPP_MODELS_DIR`)
+- `sharp` npm dep (included) for the timeline_view composite
+- All other requirements come from the generation pipeline
+
+### Key Files
+
+- `.claude/skills/video-editing/SKILL.md` — full philosophy, EDL format, anti-patterns
+- `.claude/commands/edit-footage.md` — end-to-end playbook
+- `.claude/agents/cut-qa.md` — post-render quality gate
+- `.claude/agents/overlay-designer.md` — branded motion-graphics planner
+- `src/editing/` — type definitions, packer, aligner, EDL renderer, self-eval
+- `scripts/transcribe-sources.ts` — transcription CLI
+- `scripts/timeline-view.ts` — filmstrip + waveform + word-labels composite
+- `scripts/render-overlay.ts` — overlay compositing
+
 ## Architecture
 
 ```
@@ -253,6 +297,16 @@ src/
     panel-fixer     Multi-edit character correction
     subtitle-generator  SRT from script
     assembler       Video assembly + audio mix
+  editing/          Parallel editing pipeline (inspired by browser-use/video-use)
+    types.ts        WordTiming, Take, TakesPack, Edl, EditSession, Overlay
+    packer.ts       Collapse word streams -> takes_packed.md
+    aligner.ts      Ground-truth script alignment + truncation detection
+    providers/      Transcriber providers (whisper.cpp default)
+    silence.ts      silencedetect wrapper + filler-word detection
+    edl.ts          EDL authoring / validation / serialization
+    render.ts       EDL -> final-edit.mp4 with 30ms audio fades (archive-first)
+    self-eval.ts    Programmatic cut-qa checks (aspect, jump, pop, truncation)
+    overlays.ts     Overlay manifest types + Venice-logo validator
   storyboard/       Legacy screenplay pipeline
   characters/       Character extraction
   parsers/          Fountain + PDF parsing
@@ -313,6 +367,11 @@ Use `POST /video/quote` (via `quoteVideo()`) to estimate costs before committing
 24. **Seedance only blocks face-bearing images from non-seedream families.** Character portraits, character panels, and any image that depicts a recognizable human face must come from `seedream-v5-lite` or `seedream-v5-lite-edit` when the video target is Seedance 2.0. Faceless images (atmosphere plates, establishing shots, object inserts, silhouettes, scene refs) are accepted from any family. The provenance sidecar records `hasFace: true|false` and the pre-flight gate skips faceless images automatically. When editing existing face-bearing assets, pass them through `seedream-v5-lite-edit` first, or switch the video target to a non-Seedance family (Kling O3 R2V + Veo 3.1). See `src/venice/seedance-preflight.ts` and `src/venice/provenance.ts`.
 25. **Always ask before burning in subtitles.** Before assembling the final video on any project that includes a VO track, ask the user "Burn in subtitles? (yes / no)" — burn-in is a permanent baked-into-pixels decision and is not always wanted. If yes, follow `.claude/skills/burn-in-subtitles/SKILL.md`: never hand-estimate caption timings, always derive them from `ffmpeg silencedetect` on the rendered VO via `.claude/skills/burn-in-subtitles/scripts/derive-captions.ts`, and use single `...` ellipses only in TTS VO_TEXT (doubled `......` cause Kokoro/ElevenLabs to silently truncate the audio).
 26. **Never use doubled ellipses in TTS VO scripts.** Kokoro and ElevenLabs handle single `...` reliably as breath gaps. Doubled `......` cause silent truncation — the audio file ends mid-script with no error, and you only catch it when downstream captions reference dropped text. Use commas + single `...` for combined rhythm, or break across multiple TTS calls and concat with ffmpeg `apad`.
+27. **Editing pipeline is text-first.** When the task is to cut / trim / re-order existing media (not synthesize new shots), always transcribe sources first via `scripts/transcribe-sources.ts` and reason over `takes_packed.md`. Call `scripts/timeline-view.ts` ONLY at explicit decision points — never frame-dump to browse the footage. See `.claude/skills/video-editing/SKILL.md`.
+28. **Never render an EDL without user confirmation of the cut strategy.** Post a summary (sources, duration, trim rules, transitions) and wait for "yes" before calling `renderEdl()`. The render is cheap; a throwaway 15-minute render because intent was guessed is not. Mirrors video-use design principle 3.
+29. **Always run cut-qa after every assembly / edit render.** The `cut-qa` agent runs 6 programmatic checks (aspect, visual jump, VO truncation, lighting, audio pop, subtitle overlap) at cut boundaries. Max 3 fix iterations before surfacing to the user. Applies to BOTH the generation-pipeline assembler and the editing-pipeline render.
+30. **Overlays are a post-process, never baked into the EDL render.** Lower-thirds, title cards, chapter markers, and logo-bugs live in an `OverlayManifest` rendered via `scripts/render-overlay.ts` on top of `final-edit.mp4`. Changing overlay wording must not require re-rendering the cut.
+31. **Never auto-trim silence gaps that originated from `...` in a TTS script.** Those are intentional breath beats rendered by Kokoro / ElevenLabs, not dead air. The filler-word detector (`src/editing/silence.ts`) excludes them. User confirmation is required for every filler-word trim before it lands in an EDL.
 
 ## Learned Anti-Patterns (Production Issues Log)
 
@@ -403,6 +462,41 @@ Issues discovered during production and their fixes. The agent should internaliz
 - Added a pre-flight gate (`src/venice/seedance-preflight.ts`) that runs before every Seedance call and — if any face-bearing images are incompatible — prompts the user, reroutes the shot to Kling O3 R2V / Veo 3.1, or launders the images through `seedream-v5-lite-edit`.
 **Rule:** The Seedance face rule applies only to images with human faces. Always generate character-bearing panels and references with seedream; you can use `nano-banana-pro` freely for atmosphere/establishing/insert shots. When editing face-bearing panels, use `seedream-v5-lite-edit`. If a project intentionally uses non-seedream face-bearing images, override `videoDefaults` to a non-Seedance family (Kling O3 + Veo).
 **Files:** `src/venice/provenance.ts`, `src/venice/seedance-preflight.ts`, `src/series/types.ts`, `src/series/manager.ts`, `src/mini-drama/video-generator.ts`, `src/storyboard/assembler.ts`
+
+### 14. Editing Without Transcripts Wastes Tokens
+**Symptom:** Agent asked to "edit this footage" started frame-dumping random PNGs from the timeline to decide where to cut, burning tokens without producing a coherent strategy.
+**Root cause:** Frame-dump-first is the wrong substrate for cut decisions. 30 minutes of footage at 24fps = 43,200 frames × ~1,500 tokens = 64M tokens of noise. The LLM cannot hold that context and fabricates its way through the edit.
+**Fix:** Always transcribe first via `scripts/transcribe-sources.ts`, read the resulting `takes_packed.md` (~12KB), and only call `scripts/timeline-view.ts` at explicit decision points (comparing retakes, resolving an ambiguous pause, verifying a mouth-close before a cut). Inspired by browser-use/video-use.
+**Rule:** The text transcript is the primary editing surface. Pixels are consulted on demand only. See `.claude/skills/video-editing/SKILL.md`.
+**Files:** `src/editing/packer.ts`, `scripts/transcribe-sources.ts`, `scripts/timeline-view.ts`
+
+### 15. Skipping "Propose Strategy, Wait For Confirmation" Causes Throwaway Renders
+**Symptom:** Agent started rendering an EDL before the user had approved the cut strategy. User then asked for a completely different structure, wasting a 15-minute render.
+**Root cause:** The render is cheap to launch and expensive to throw away. Without an explicit pre-render confirmation step, intent is inferred and frequently wrong.
+**Fix:** `.claude/commands/edit-footage.md` step 3 and `.claude/skills/video-editing/SKILL.md` design principle 3 both mandate: post a summary (sources, duration estimate, trim rules, transitions) and wait for "yes / revise / cancel" BEFORE running `renderEdl()`.
+**Rule:** Never render without confirmation. The render is cheap; the redo is not. Video-use design principle 3 is non-negotiable.
+**Files:** `.claude/commands/edit-footage.md`, `.claude/skills/video-editing/SKILL.md`
+
+### 16. Auto-Trimming "..." Dead Air From Kokoro VOs Breaks Intended Pacing
+**Symptom:** Filler-word detector was configured to trim all silence gaps ≥ 0.45s. This removed the intentional breath beats rendered by Kokoro for `...` in `VO_TEXT`, producing a rushed, rhythm-less VO.
+**Root cause:** `...` in a Kokoro TTS script renders as an intentional ~0.6s breath gap. It's a creative beat, not dead air.
+**Fix:** `DEFAULT_FILLER_UNIGRAMS` in `src/editing/silence.ts` explicitly excludes `...` and the filler-word detector never touches gaps that were triggered by `...` in aligned mode. Always require user confirmation before a filler trim lands — `you know` and `i mean` can also be content-bearing for certain speakers.
+**Rule:** Never auto-trim silence gaps that originated from a script's `...`. Never land filler-word trims without user confirmation. See `.claude/skills/video-editing/SKILL.md` anti-pattern E2.
+**Files:** `src/editing/silence.ts`, `.claude/skills/burn-in-subtitles/SKILL.md` rules 1-2
+
+### 17. Rendering Overlays As Part Of The EDL Pass
+**Symptom:** Agent baked lower-thirds and title cards into the EDL render, then had to throw away the render when the user wanted to change the overlay wording.
+**Root cause:** Overlays are a post-process, not an edit decision. They belong in a separate compositing pass on top of the delivered cut.
+**Fix:** Overlay designs live in `OverlayManifest` (`src/editing/overlays.ts`), are rendered via `scripts/render-overlay.ts` on top of `final-edit.mp4`, and produce `delivered.mp4`. The EDL render never touches overlays.
+**Rule:** EDL handles cut decisions. Overlays are applied separately. `overlay-designer` agent only runs AFTER the EDL cut is approved.
+**Files:** `src/editing/overlays.ts`, `scripts/render-overlay.ts`, `.claude/agents/overlay-designer.md`
+
+### 18. Not Archiving Prior Renders Before A New Edit
+**Symptom:** A "quick fix" re-render overwrote a 15-minute `final-edit.mp4` before the user had a chance to compare against the prior version.
+**Root cause:** `renderEdl` or `render-overlay.ts` was called without the archive-first path enabled, or a shell one-liner was used that bypassed the harness renderer.
+**Fix:** Both `src/editing/render.ts` and `scripts/render-overlay.ts` archive any existing output to `<stem>-v<N>.<ext>` BEFORE writing the new file. This is on by default; disabling it requires passing `--skip-archive` explicitly. Mirrors workspace rule `.cursor/rules/shot-asset-safety.mdc`.
+**Rule:** Never bypass the harness renderer for editing output. Never call `ffmpeg` directly to overwrite a delivery file without archiving first.
+**Files:** `src/editing/render.ts`, `scripts/render-overlay.ts`, `.cursor/rules/shot-asset-safety.mdc`
 
 ## Output
 

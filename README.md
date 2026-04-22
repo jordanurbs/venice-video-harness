@@ -11,6 +11,7 @@ This harness is built for creators who want an IDE agent (Claude Code, Cursor, e
 - **Branded cinematic sequences, trailers, and teasers**
 - **Recurring-character social series**
 - **Any multi-shot Venice workflow where continuity matters**
+- **Text-first editing of existing footage** — transcribe sources with local whisper.cpp, read the 12KB pack, propose a cut, render with 30ms audio fades, then self-eval at every cut boundary. Inspired by [browser-use/video-use](https://github.com/browser-use/video-use).
 
 ## What This Is
 
@@ -75,6 +76,7 @@ Most Venice integrations are thin wrappers around API calls. This harness is the
 - Venice-native audio generation paths for TTS, SFX, and music
 - **Video quote endpoint** for cost estimation before generation
 - Model-aware parameter building (auto-skips unsupported params per model)
+- **Parallel editing pipeline** — transcribe existing footage locally, read a 12KB pack, render with 30ms audio fades, self-eval at every cut boundary
 
 ## Project Structure
 
@@ -107,6 +109,16 @@ src/
     panel-fixer.ts               Multi-edit character correction
     subtitle-generator.ts        SRT from script
     assembler.ts                 Video assembly + audio mix
+  editing/                       Parallel editing pipeline (inspired by browser-use/video-use)
+    types.ts                     WordTiming, Take, TakesPack, Edl, EditSession
+    packer.ts                    Collapse word streams -> takes_packed.md
+    aligner.ts                   Ground-truth script alignment for generated VO
+    providers/whisper-cpp.ts     Local transcription provider
+    edl.ts                       EDL authoring + ffmpeg rendering
+    silence.ts                   silencedetect wrapper + filler-word detection
+    render.ts                    EDL -> final-edit.mp4 with 30ms audio fades
+    self-eval.ts                 Drive cut-qa agent, max 3 iterations
+    overlays.ts                  Overlay manifest types
   storyboard/                    Legacy screenplay storyboard pipeline
   characters/                    Character extraction and references
   parsers/                       Fountain + PDF screenplay parsing
@@ -123,6 +135,13 @@ output/                          Generated projects (gitignored)
 - Node.js 20+
 - `ffmpeg` and `ffprobe` on your PATH
 - A `VENICE_API_KEY` (get one at [venice.ai](https://venice.ai))
+- **Optional (editing pipeline):** `whisper-cpp` on PATH for local transcription. Install with `brew install whisper-cpp`, then download a model:
+  ```bash
+  mkdir -p ~/.cache/whisper.cpp
+  curl -L -o ~/.cache/whisper.cpp/ggml-base.en.bin \
+    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+  ```
+  Or set `WHISPER_CPP_MODELS_DIR` to a directory that contains the `ggml-*.bin` files.
 
 ### Setup
 
@@ -283,6 +302,94 @@ The `src/mini-drama/` directory contains a full working implementation for narra
 - Audio post-production with layered ambient beds
 - Subtitle burn-in and final assembly
 
+## Editing Pipeline
+
+Parallel to the generation pipeline. The generation side **synthesizes** new shots from prompts; the editing side **cuts** already-existing media (Venice-generated shots or real raw footage). They share ffmpeg and the burn-in-subtitles skill but are otherwise independent.
+
+Inspired by [browser-use/video-use](https://github.com/browser-use/video-use), the pipeline is text-first: the LLM reads a compact `takes_packed.md` (~12KB per 40 min of audio) rather than frame-dumping video. Composite PNGs are only consulted at explicit decision points — comparing retakes, disambiguating a pause, verifying post-render QA.
+
+### When to reach for editing vs generation
+
+| Task | Pipeline | Entry |
+|------|----------|-------|
+| Synthesize new shots from prompts | Generation | `/produce-episode`, `/generate-episode-videos` |
+| Re-cut a generated episode for pacing | Editing | `/edit-footage` |
+| Trim filler words from a VO take | Editing | `/edit-footage` |
+| Edit raw user-supplied footage | Editing | `/edit-footage` |
+| Rescue a truncated TTS VO (rule 26) | Editing | `/edit-footage` |
+| Add branded lower-thirds / title cards | Editing | `overlay-designer` agent |
+| Post-assembly QA on any rendered video | Editing | `cut-qa` agent |
+
+### The five steps
+
+1. **Transcribe** via local whisper.cpp → per-source `*.words.json` + `takes_packed.md`
+2. **Read pack** — LLM forms a cut strategy from text alone
+3. **Confirm** — propose strategy to user, wait for "yes / revise / cancel"
+4. **Render EDL** — JSON cut list → ffmpeg concat with 30ms audio fades (archive-first)
+5. **Self-eval** — `cut-qa` agent runs 6 programmatic checks at every cut boundary; max 3 fix iterations
+
+### Required tooling
+
+- `whisper-cpp` on PATH (`brew install whisper-cpp`)
+- A whisper.cpp model, e.g.:
+  ```bash
+  mkdir -p ~/.cache/whisper.cpp
+  curl -L -o ~/.cache/whisper.cpp/ggml-base.en.bin \
+    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+  ```
+- `sharp` npm dep (bundled) for the `timeline-view` composite
+- `ffmpeg` + `ffprobe` (already required by the generation pipeline)
+
+### cut-qa checks
+
+Runs automatically after every assembly or edit render. Each check produces zero or more `CutQaFinding` entries:
+
+| Check | Kind | Typical severity |
+|-------|------|------------------|
+| Aspect regression vs `series.storyboardAspectRatio` | `aspect-regression` | `fail` |
+| Frame-hash jump across a cut | `visual-jump` | `warn` (or `fail` if inside a word) |
+| VO truncation vs ground-truth script | `vo-truncation` | `fail` |
+| Mean-luma delta across a cut in the same location | `lighting-discontinuity` | `warn` |
+| Audio peak > -6 dBFS within cut boundary | `audio-pop` | `fail` |
+| Caption overlap with in-frame text | `subtitle-overlap` | `warn` |
+
+Hard cap at 3 fix iterations before surfacing to the user with the persisting findings and the fixes that were attempted.
+
+### Overlay pipeline
+
+Branded motion graphics (lower-thirds, title cards, chapter markers, logo bugs) are a post-process on top of the delivered cut — never baked into the EDL render. The `overlay-designer` agent plans the overlays, spawns Remotion / ffmpeg workers in parallel, and composites via `scripts/render-overlay.ts`.
+
+Venice-logo safety rules (CLAUDE.md rule 17, anti-pattern #11) are enforced at manifest validation time — manifests that contain "VVV" / "triple-V" or pass mostly-transparent PNGs are rejected before rendering.
+
+### Editing pipeline commands
+
+```bash
+# Transcribe a folder of sources into a pack + per-source words.json
+npx tsx scripts/transcribe-sources.ts \
+  --dir output/<project>/shots \
+  --out output/<project>/edit/takes_packed.md \
+  --model base.en
+
+# Align against a ground-truth TTS script (detects VO truncation)
+npx tsx scripts/transcribe-sources.ts \
+  --dir output/<project>/audio \
+  --out output/<project>/edit/takes_packed.md \
+  --aligned-from scripts/<project>/config.ts
+
+# Inspect a specific time range as a composite PNG
+npx tsx scripts/timeline-view.ts \
+  --video output/<project>/final.mp4 \
+  --start 12.3 --end 16.1 \
+  --words output/<project>/edit/final.words.json \
+  --out /tmp/tl.png
+
+# Composite overlays onto a delivered cut
+npx tsx scripts/render-overlay.ts \
+  --manifest output/<project>/overlays/manifest.json
+```
+
+See [`.claude/skills/video-editing/SKILL.md`](.claude/skills/video-editing/SKILL.md) for the full philosophy, EDL format, and editing-specific anti-patterns.
+
 ## Commands, Agents, and Skills
 
 ### Workflow Commands (`.claude/commands/`)
@@ -308,6 +415,7 @@ The `src/mini-drama/` directory contains a full working implementation for narra
 | `audition-voices` | TTS voice auditions |
 | `generate-trailer` | Full trailer pipeline |
 | `ingest-screenplay` | Ingest Fountain/PDF screenplay |
+| `edit-footage` | Text-first editing pipeline for existing media (cuts, trims, re-orders) |
 
 ### Specialized Agents (`.claude/agents/`)
 
@@ -319,6 +427,10 @@ The `src/mini-drama/` directory contains a full working implementation for narra
 | `storyboard-assembler` | HTML storyboard viewer assembly |
 | `storyboard-qa` | Panel QA for continuity and character checks |
 | `trailer-curator` | Trailer shot selection and anti-spoiler rules |
+| `cut-qa` | Post-render quality gate — 6 checks at every cut boundary, max 3 fix iterations |
+| `overlay-designer` | Plans branded motion graphics; spawns Remotion / ffmpeg overlay workers in parallel |
+| `remotion-overlay` | Renders one animated overlay as transparent ProRes / WebM |
+| `ffmpeg-overlay` | Emits drawtext specs for static overlays |
 
 ### Production Skills (`.claude/skills/`)
 
@@ -330,6 +442,7 @@ The `src/mini-drama/` directory contains a full working implementation for narra
 | `shot-composition` | Shot composition and camera guidance |
 | `screenplay-parsing` | Screenplay parsing workflows |
 | `venice-ui-production` | Manual Venice web UI prompt guides |
+| `video-editing` | Text-first editing philosophy, EDL format, cut-qa loop (inspired by browser-use/video-use) |
 
 ## Production Anti-Patterns
 
@@ -365,6 +478,29 @@ See `CLAUDE.md` > "Learned Anti-Patterns" for the full list with root causes and
 | `POST /audio/complete` | Full | `audio.ts` |
 | `POST /chat/completions` | Partial | `client.ts` (vision) |
 | `POST /images/edit` | Deprecated | `edit.ts` |
+
+## Credits and Acknowledgments
+
+The editing pipeline (text-first transcripts, on-demand timeline composites, EDL + self-eval loop, parallel overlay sub-agents) is directly inspired by [**browser-use/video-use**](https://github.com/browser-use/video-use) — a 100% open source agentic video editor for Claude Code. Their core insight — *"the LLM never watches the video, it reads it"* via word-level transcripts plus on-demand filmstrip+waveform composites — is what makes agent-driven editing actually work instead of drowning in frame-dump tokens.
+
+Key patterns borrowed and adapted for this harness:
+
+- The `takes_packed.md` format and compact per-take phrase blocks
+- The timeline-view composite (filmstrip + waveform + word labels + silence-gap markers)
+- 30ms audio fades at every cut boundary to prevent pops
+- Self-evaluating QA loop at cut boundaries, max 3 fix iterations
+- Session persistence (`project.md` → our `session.json`) for cross-session memory
+- Parallel sub-agent spawning for overlay / animation rendering
+- The "ask → confirm strategy → execute → self-eval → persist" design principle
+
+Differences in this port:
+
+- Uses local **whisper.cpp** instead of ElevenLabs Scribe (no new API keys required; loses diarization out of the box — we inject speaker labels from the shot script for generated content instead)
+- Ground-truth script alignment mode via LCS matching, with automatic VO-truncation detection (rule 26 rescue)
+- Integrated with Venice's generation pipeline: shared provenance sidecars, shared ffmpeg primitives, shared burn-in-subtitles skill
+- TypeScript (Node) rather than Python, to stay consistent with the rest of the harness
+
+Go give [browser-use/video-use](https://github.com/browser-use/video-use) a star. It's a clean, opinionated reference for text-first video editing and it's the right shape for this kind of tool.
 
 ## License
 

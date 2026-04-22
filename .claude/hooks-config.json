@@ -36,6 +36,23 @@
         "all images embedded as data URIs",
         "navigation links functional"
       ]
+    },
+    "post-render-cut-qa": {
+      "description": "Run the cut-qa agent after any video assembly / edit render so regressions are caught before delivery",
+      "trigger": "after src/mini-drama/assembler.ts OR src/editing/render.ts writes final.mp4 / final-edit.mp4",
+      "agent": ".claude/agents/cut-qa.md",
+      "checks": [
+        "aspect-regression vs series.storyboardAspectRatio",
+        "visual-jump at every cut boundary (frame hash diff)",
+        "vo-truncation vs ground-truth script (when available)",
+        "lighting-discontinuity across same-location cuts",
+        "audio-pop at cut boundaries outside the fade window",
+        "max 3 fix iterations before surfacing to user"
+      ],
+      "outputs": [
+        "output/<project>/edit/session.json",
+        "console summary via summarizeReport()"
+      ]
     }
   }
 }

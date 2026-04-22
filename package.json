@@ -42,13 +42,16 @@
     "start": "node dist/mini-drama/cli.js",
     "dev": "tsx src/mini-drama/cli.ts",
     "dev:legacy": "tsx src/cli.ts",
+    "transcribe": "tsx scripts/transcribe-sources.ts",
+    "timeline": "tsx scripts/timeline-view.ts",
     "clean": "rm -rf dist"
   },
   "dependencies": {
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",
     "fountain-js": "^1.1.0",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
