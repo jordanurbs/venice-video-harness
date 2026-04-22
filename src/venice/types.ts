@@ -90,6 +90,7 @@ export type MultiEditModel =
   | 'qwen-image-2-pro-edit'
   | 'flux-2-max-edit'
   | 'gpt-image-1-5-edit'
+  | 'gpt-image-2-edit'
   | 'grok-imagine-edit'
   | 'nano-banana-2-edit'
   | 'nano-banana-pro-edit'

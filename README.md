@@ -53,11 +53,11 @@ Most Venice integrations are thin wrappers around API calls. This harness is the
 
 ### Image Models (22 generation + 1 background-remove)
 
-`nano-banana-pro`, `nano-banana-2`, `flux-2-pro`, `flux-2-max`, `gpt-image-1-5`, `grok-imagine`, `hunyuan-image-v3`, `imagineart-1.5-pro`, `qwen-image`, `qwen-image-2`, `qwen-image-2-pro`, `recraft-v4`, `recraft-v4-pro`, `seedream-v4`, `seedream-v5-lite`, `chroma`, `hidream`, `venice-sd35`, `lustify-sdxl`, `lustify-v7`, `wai-Illustrious`, `z-image-turbo`, `bria-bg-remover`
+`nano-banana-pro`, `nano-banana-2`, `gpt-image-2` (high-quality alternative to `nano-banana-pro`), `gpt-image-1-5`, `flux-2-pro`, `flux-2-max`, `grok-imagine`, `hunyuan-image-v3`, `imagineart-1.5-pro`, `qwen-image`, `qwen-image-2`, `qwen-image-2-pro`, `recraft-v4`, `recraft-v4-pro`, `seedream-v4`, `seedream-v5-lite`, `chroma`, `hidream`, `venice-sd35`, `lustify-sdxl`, `lustify-v7`, `wai-Illustrious`, `z-image-turbo`, `bria-bg-remover`
 
 ### Multi-Edit Models
 
-`qwen-edit`, `qwen-image-2-edit`, `qwen-image-2-pro-edit`, `flux-2-max-edit`, `gpt-image-1-5-edit`, `grok-imagine-edit`, `nano-banana-2-edit`, `nano-banana-pro-edit`, `seedream-v4-edit`, `seedream-v5-lite-edit`
+`qwen-edit`, `qwen-image-2-edit`, `qwen-image-2-pro-edit`, `flux-2-max-edit`, `gpt-image-2-edit` (high-quality alternative to `nano-banana-pro-edit`), `gpt-image-1-5-edit`, `grok-imagine-edit`, `nano-banana-2-edit`, `nano-banana-pro-edit`, `seedream-v4-edit`, `seedream-v5-lite-edit`
 
 ### Audio / Music Models
 
@@ -240,8 +240,8 @@ Seedance 2.0 blocks **face-bearing** input images that weren't produced by `seed
 | Character reference sheets | `seedream-v5-lite` | Always face-bearing; required for Seedance |
 | Character-bearing panels | `seedream-v5-lite` | Face-bearing; required for Seedance |
 | Character fix via multi-edit | `seedream-v5-lite-edit` | Touches faces; required for Seedance |
-| Atmosphere / establishing panels | `nano-banana-pro` (configurable) | Faceless — better quality from nano-banana |
-| Style-match multi-edit (no characters) | `nano-banana-pro-edit` (configurable) | Faceless — any family works |
+| Atmosphere / establishing panels | `nano-banana-pro` (configurable) | Faceless — better quality from nano-banana. `gpt-image-2` is a high-quality alternative |
+| Style-match multi-edit (no characters) | `nano-banana-pro-edit` (configurable) | Faceless — any family works. `gpt-image-2-edit` is a high-quality alternative |
 
 The faceless-side defaults are configurable per-project under `series.json`:
 

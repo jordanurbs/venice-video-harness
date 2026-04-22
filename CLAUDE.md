@@ -126,11 +126,11 @@ The full model registry lives in `src/venice/models.ts` with typed specs for eve
 
 ### Image Generation Models
 
-`nano-banana-pro` (default for storyboard), `nano-banana-2`, `flux-2-pro`, `flux-2-max`, `gpt-image-1-5`, `grok-imagine`, `hunyuan-image-v3`, `qwen-image-2`, `qwen-image-2-pro`, `recraft-v4`, `recraft-v4-pro`, `seedream-v4`, `seedream-v5-lite`, `chroma`, `hidream`, and more.
+`nano-banana-pro` (default for storyboard), `nano-banana-2`, `gpt-image-2` (high-quality alternative to nano-banana-pro), `gpt-image-1-5`, `flux-2-pro`, `flux-2-max`, `grok-imagine`, `hunyuan-image-v3`, `qwen-image-2`, `qwen-image-2-pro`, `recraft-v4`, `recraft-v4-pro`, `seedream-v4`, `seedream-v5-lite`, `chroma`, `hidream`, and more.
 
 ### Multi-Edit Models (10 models)
 
-`qwen-edit`, `qwen-image-2-edit`, `qwen-image-2-pro-edit`, `flux-2-max-edit`, `gpt-image-1-5-edit`, `grok-imagine-edit`, `nano-banana-2-edit`, `nano-banana-pro-edit`, `seedream-v4-edit`, `seedream-v5-lite-edit`
+`qwen-edit`, `qwen-image-2-edit`, `qwen-image-2-pro-edit`, `flux-2-max-edit`, `gpt-image-2-edit` (high-quality alternative to nano-banana-pro-edit), `gpt-image-1-5-edit`, `grok-imagine-edit`, `nano-banana-2-edit`, `nano-banana-pro-edit`, `seedream-v4-edit`, `seedream-v5-lite-edit`
 
 ### TTS Models
 
@@ -157,9 +157,9 @@ Preferred defaults (overridable per-project via `series.json` → `videoDefaults
 | Character shots (3+ characters) | `kling-o3-standard-reference-to-video` | Auto-fallback — structured `elements` + `reference_image_urls` for multi-character identity |
 | Establishing / mood / action (no chars) | `seedance-2-0-image-to-video` | Epic cinematic quality, physics-aware, up to 15s, native audio |
 | Image Generation (face-bearing) | `seedream-v5-lite` | **Required** when the image contains a human face and the video target is Seedance 2.0 |
-| Image Generation (faceless) | `nano-banana-pro` | Atmosphere / establishing / scene refs — any family is fine, nano-banana-pro gives best quality |
+| Image Generation (faceless) | `nano-banana-pro` | Atmosphere / establishing / scene refs — any family is fine. `gpt-image-2` is a high-quality alternative with sharper typography and stronger text rendering |
 | Multi-Edit (character fix) | `seedream-v5-lite-edit` | Required when editing a face-bearing panel that will feed Seedance |
-| Multi-Edit (style-match, no face) | `nano-banana-pro-edit` | Refining non-character panels — any family works |
+| Multi-Edit (style-match, no face) | `nano-banana-pro-edit` | Refining non-character panels — any family works. `gpt-image-2-edit` is a high-quality alternative |
 | TTS | `tts-kokoro` | 50+ voices, fast, consistent |
 | Music | `elevenlabs-music` | High quality music generation |
 | SFX | `elevenlabs-sound-effects-v2` | Best sound effect quality |
