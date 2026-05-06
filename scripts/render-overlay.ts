@@ -17,7 +17,7 @@
  *   npx tsx scripts/render-overlay.ts --manifest output/<project>/overlays.json
  */
 
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import {
@@ -32,6 +32,20 @@ interface Args {
   dryRun: boolean;
   skipArchive: boolean;
   font: string;
+}
+
+function runCommand(command: string, args: string[], inheritOutput = false): void {
+  const result = spawnSync(command, args, {
+    encoding: 'utf-8',
+    stdio: inheritOutput ? 'inherit' : 'pipe',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+    const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+    const detail = stderr || stdout || `exit code ${result.status}`;
+    throw new Error(`${command} failed: ${detail}`);
+  }
 }
 
 function parseArgs(argv: string[]): Args {
@@ -198,33 +212,41 @@ async function main() {
   if (!args.skipArchive) archived = archiveExisting(outputPath);
 
   const { graph, inputFiles } = buildFilterGraph(manifest, args.font);
-  const inputArgs = inputFiles.flatMap((f) => ['-i', `"${f}"`]);
-
-  const cmd = [
-    'ffmpeg',
+  const inputArgs = inputFiles.flatMap((f) => ['-i', f]);
+  const ffmpegArgs = [
     '-y',
     '-hide_banner',
-    '-loglevel', 'error',
+    '-loglevel',
+    'error',
     ...inputArgs,
-    '-filter_complex', `"${graph}"`,
-    '-map', '"[vout]"',
-    '-map', '"0:a?"',
-    '-c:v', 'libx264',
-    '-preset', 'slow',
-    '-crf', '18',
-    '-pix_fmt', 'yuv420p',
-    '-c:a', 'copy',
-    '-movflags', '+faststart',
-    `"${outputPath}"`,
-  ].join(' ');
+    '-filter_complex',
+    graph,
+    '-map',
+    '[vout]',
+    '-map',
+    '0:a?',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'slow',
+    '-crf',
+    '18',
+    '-pix_fmt',
+    'yuv420p',
+    '-c:a',
+    'copy',
+    '-movflags',
+    '+faststart',
+    outputPath,
+  ];
 
   if (args.dryRun) {
-    console.log(cmd);
+    console.log(`ffmpeg ${ffmpegArgs.join(' ')}`);
     if (archived) console.error(`[render-overlay] (dry-run) Would have archived to ${archived}`);
     return;
   }
 
-  execSync(cmd, { stdio: 'inherit' });
+  runCommand('ffmpeg', ffmpegArgs, true);
   if (archived) {
     console.error(`[render-overlay] Archived prior output to ${archived}`);
   }

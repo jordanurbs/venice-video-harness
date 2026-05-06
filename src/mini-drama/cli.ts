@@ -5,6 +5,7 @@ import { Command } from 'commander';
 import { resolve, join } from 'node:path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile, copyFile, unlink } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 
 import {
   createSeries,
@@ -55,6 +56,21 @@ program
   .name('mini-drama')
   .description('Mini-Drama creation pipeline using Venice AI')
   .version('1.0.0');
+
+function runCommand(command: string, args: string[]): string {
+  const result = spawnSync(command, args, {
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+    const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+    const detail = stderr || stdout || `exit code ${result.status}`;
+    throw new Error(`${command} failed: ${detail}`);
+  }
+  return typeof result.stdout === 'string' ? result.stdout : '';
+}
 
 // ── new-series ────────────────────────────────────────────────────────
 program
@@ -755,13 +771,15 @@ program
         if (imgBuffer) {
           await writeFile(imgPath, imgBuffer);
 
-          // Venice returns WebP internally disguised as PNG -- convert immediately
+          // Venice can return WebP internally disguised as PNG -- convert immediately.
           try {
-            const { execSync } = await import('node:child_process');
-            const header = execSync(`file -b "${imgPath}"`).toString().slice(0, 4);
-            if (header === 'RIFF') {
+            const isWebp =
+              imgBuffer.length >= 12 &&
+              imgBuffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+              imgBuffer.subarray(8, 12).toString('ascii') === 'WEBP';
+            if (isWebp) {
               const tmpPath = imgPath.replace(/\.png$/, '-webp-conv.png');
-              execSync(`ffmpeg -i "${imgPath}" -y "${tmpPath}" 2>/dev/null`);
+              runCommand('ffmpeg', ['-i', imgPath, '-y', tmpPath]);
               const { renameSync } = await import('node:fs');
               renameSync(tmpPath, imgPath);
             }
@@ -1577,7 +1595,6 @@ program
 
     const episodeDir = getEpisodeDir(series, opts.episode);
     const sceneDir = join(episodeDir, 'scene-001');
-    const { execSync } = await import('node:child_process');
     const expectedAR = series.storyboardAspectRatio ?? '16:9';
 
     let issues = 0;
@@ -1595,10 +1612,15 @@ program
       if (!existsSync(videoPath)) continue;
 
       try {
-        const dims = execSync(
-          `ffprobe -v quiet -show_entries stream=width,height -of csv=p=0 "${videoPath}"`,
-          { encoding: 'utf-8' },
-        ).trim().split('\n')[0];
+        const dims = runCommand('ffprobe', [
+          '-v',
+          'quiet',
+          '-show_entries',
+          'stream=width,height',
+          '-of',
+          'csv=p=0',
+          videoPath,
+        ]).trim().split('\n')[0];
         const [w, h] = dims.split(',').map(Number);
 
         if (expectedAR === '16:9' && h > w) {
@@ -1648,10 +1670,15 @@ program
 
       try {
         const actualDur = parseFloat(
-          execSync(
-            `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${videoPath}"`,
-            { encoding: 'utf-8' },
-          ).trim(),
+          runCommand('ffprobe', [
+            '-v',
+            'quiet',
+            '-show_entries',
+            'format=duration',
+            '-of',
+            'csv=p=0',
+            videoPath,
+          ]).trim(),
         );
         const requestedDur = parseInt(shot.duration, 10);
         const diff = Math.abs(actualDur - requestedDur);

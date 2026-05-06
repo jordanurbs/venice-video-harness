@@ -1,6 +1,6 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import type { ShotScript } from '../series/types.js';
 
@@ -9,6 +9,21 @@ export interface SubtitleEntry {
   startTime: string;
   endTime: string;
   text: string;
+}
+
+function runCommand(command: string, args: string[]): string {
+  const result = spawnSync(command, args, {
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+    const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+    const detail = stderr || stdout || `exit code ${result.status}`;
+    throw new Error(`${command} failed: ${detail}`);
+  }
+  return typeof result.stdout === 'string' ? result.stdout : '';
 }
 
 function formatSrtTime(seconds: number): string {
@@ -31,10 +46,15 @@ function getActualShotDuration(sceneDir: string | undefined, shotNumber: number,
   if (!existsSync(videoPath)) return parseDuration(fallbackDuration);
 
   try {
-    const out = execSync(
-      `ffprobe -v error -show_entries format=duration -of csv=p=0 "${videoPath}"`,
-      { encoding: 'utf-8' },
-    ).trim();
+    const out = runCommand('ffprobe', [
+      '-v',
+      'error',
+      '-show_entries',
+      'format=duration',
+      '-of',
+      'csv=p=0',
+      videoPath,
+    ]).trim();
     const duration = parseFloat(out);
     return Number.isFinite(duration) ? duration : parseDuration(fallbackDuration);
   } catch {
@@ -131,8 +151,14 @@ export function burnSubtitles(
     '\'',
   ].join('');
 
-  execSync(
-    `ffmpeg -y -i "${inputVideo}" -vf "${subtitleFilter}" -c:a copy "${outputVideo}"`,
-    { stdio: 'pipe' },
-  );
+  runCommand('ffmpeg', [
+    '-y',
+    '-i',
+    inputVideo,
+    '-vf',
+    subtitleFilter,
+    '-c:a',
+    'copy',
+    outputVideo,
+  ]);
 }

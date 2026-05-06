@@ -20,7 +20,7 @@
  * waveform — useful as a visual check with no transcription.
  */
 
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -38,6 +38,25 @@ interface Args {
   frames: number;
   silenceDb: number;
   silenceMin: number;
+}
+
+function runCommand(command: string, args: string[], inheritOutput = false): string {
+  const result = spawnSync(command, args, {
+    encoding: 'utf-8',
+    stdio: inheritOutput ? 'inherit' : 'pipe',
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+    const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+    const detail = stderr || stdout || `exit code ${result.status}`;
+    throw new Error(`${command} failed: ${detail}`);
+  }
+  const stdout = typeof result.stdout === 'string' ? result.stdout : '';
+  const stderr = typeof result.stderr === 'string' ? result.stderr : '';
+  return `${stdout}\n${stderr}`;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -90,16 +109,23 @@ function extractFilmstrip(
   const fps = frameCount / duration;
   const scale = `scale=${perFrameW}:${stripHeight}:force_original_aspect_ratio=decrease,pad=${perFrameW}:${stripHeight}:(ow-iw)/2:(oh-ih)/2:color=black`;
   const filter = `fps=${fps},${scale},tile=${frameCount}x1`;
-  const cmd = [
-    'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
-    '-ss', String(startSec),
-    '-i', `"${video}"`,
-    '-t', String(duration),
-    '-frames:v', '1',
-    '-vf', `"${filter}"`,
-    `"${outPath}"`,
-  ].join(' ');
-  execSync(cmd, { stdio: 'inherit' });
+  runCommand('ffmpeg', [
+    '-y',
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-ss',
+    String(startSec),
+    '-i',
+    video,
+    '-t',
+    String(duration),
+    '-frames:v',
+    '1',
+    '-vf',
+    filter,
+    outPath,
+  ], true);
 }
 
 function extractWaveform(
@@ -111,17 +137,23 @@ function extractWaveform(
   outPath: string,
 ): void {
   const duration = endSec - startSec;
-  const cmd = [
-    'ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
-    '-ss', String(startSec),
-    '-i', `"${video}"`,
-    '-t', String(duration),
+  runCommand('ffmpeg', [
+    '-y',
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-ss',
+    String(startSec),
+    '-i',
+    video,
+    '-t',
+    String(duration),
     '-filter_complex',
-    `"[0:a]aformat=channel_layouts=mono,showwavespic=s=${width}x${height}:colors=0x00ff88:split_channels=0"`,
-    '-frames:v', '1',
-    `"${outPath}"`,
-  ].join(' ');
-  execSync(cmd, { stdio: 'inherit' });
+    `[0:a]aformat=channel_layouts=mono,showwavespic=s=${width}x${height}:colors=0x00ff88:split_channels=0`,
+    '-frames:v',
+    '1',
+    outPath,
+  ], true);
 }
 
 interface SilenceSpan {
@@ -137,16 +169,21 @@ function detectSilences(
   silenceMin: number,
 ): SilenceSpan[] {
   const duration = endSec - startSec;
-  const cmd = [
-    'ffmpeg', '-hide_banner', '-nostats',
-    '-ss', String(startSec),
-    '-i', `"${video}"`,
-    '-t', String(duration),
-    '-af', `"silencedetect=noise=${silenceDb}dB:d=${silenceMin}"`,
-    '-f', 'null', '-',
-    '2>&1',
-  ].join(' ');
-  const out = execSync(cmd, { encoding: 'utf-8' });
+  const out = runCommand('ffmpeg', [
+    '-hide_banner',
+    '-nostats',
+    '-ss',
+    String(startSec),
+    '-i',
+    video,
+    '-t',
+    String(duration),
+    '-af',
+    `silencedetect=noise=${silenceDb}dB:d=${silenceMin}`,
+    '-f',
+    'null',
+    '-',
+  ]);
   const silences: SilenceSpan[] = [];
   const lines = out.split('\n');
   let pending: number | null = null;

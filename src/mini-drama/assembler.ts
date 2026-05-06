@@ -1,7 +1,7 @@
 import { readdir, mkdir } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
-import { existsSync, writeFileSync, unlinkSync, rmSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { existsSync, writeFileSync, unlinkSync, rmSync, copyFileSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import type { ShotScript } from '../series/types.js';
 
 export interface ShotTrim {
@@ -32,11 +32,31 @@ export interface AssemblyOptions {
   };
 }
 
+function runCommand(command: string, args: string[]): string {
+  const result = spawnSync(command, args, {
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+    const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+    const detail = stderr || stdout || `exit code ${result.status}`;
+    throw new Error(`${command} failed: ${detail}`);
+  }
+  return typeof result.stdout === 'string' ? result.stdout : '';
+}
+
 function getVideoDuration(path: string): number {
-  const out = execSync(
-    `ffprobe -v error -show_entries format=duration -of csv=p=0 "${path}"`,
-    { encoding: 'utf-8' },
-  ).trim();
+  const out = runCommand('ffprobe', [
+    '-v',
+    'error',
+    '-show_entries',
+    'format=duration',
+    '-of',
+    'csv=p=0',
+    path,
+  ]).trim();
   return parseFloat(out);
 }
 
@@ -54,17 +74,19 @@ function normalizeClip(
   trim?: ShotTrim,
 ): void {
   const filters: string[] = [];
-  const inputArgs: string[] = [];
+  const ffmpegArgs: string[] = ['-y'];
 
   if (trim?.trimStart && trim.trimStart > 0) {
-    inputArgs.push(`-ss ${trim.trimStart}`);
+    ffmpegArgs.push('-ss', String(trim.trimStart));
   }
+
+  ffmpegArgs.push('-i', inputPath);
 
   if (trim?.trimEnd && trim.trimEnd > 0) {
     const duration = getVideoDuration(inputPath);
     const endTime = duration - trim.trimEnd - (trim.trimStart ?? 0);
     if (endTime > 0) {
-      inputArgs.push(`-t ${endTime}`);
+      ffmpegArgs.push('-t', String(endTime));
     }
   }
 
@@ -72,16 +94,30 @@ function normalizeClip(
     filters.push('hflip');
   }
 
-  const filterArg = filters.length > 0 ? `-vf "${filters.join(',')}"` : '';
-  const inputStr = inputArgs.join(' ');
-
-  execSync(
-    `ffmpeg -y ${inputStr} -i "${inputPath}" ${filterArg} ` +
-    `-c:v libx264 -preset fast -crf 18 -r 24 ` +
-    `-c:a aac -ar 44100 -ac 2 -b:a 192k ` +
-    `"${outputPath}"`,
-    { stdio: 'pipe' },
+  if (filters.length > 0) {
+    ffmpegArgs.push('-vf', filters.join(','));
+  }
+  ffmpegArgs.push(
+    '-c:v',
+    'libx264',
+    '-preset',
+    'fast',
+    '-crf',
+    '18',
+    '-r',
+    '24',
+    '-c:a',
+    'aac',
+    '-ar',
+    '44100',
+    '-ac',
+    '2',
+    '-b:a',
+    '192k',
+    outputPath,
   );
+
+  runCommand('ffmpeg', ffmpegArgs);
 }
 
 function replaceDialogueInShot(
@@ -90,12 +126,25 @@ function replaceDialogueInShot(
   outputPath: string,
   nativeVolume: number,
 ): void {
-  execSync(
-    `ffmpeg -y -i "${videoPath}" -i "${dialoguePath}" ` +
-    `-filter_complex "[0:a]volume=${nativeVolume}[native];[1:a]volume=1.0[tts];[native][tts]amix=inputs=2:duration=first:dropout_transition=0.5[aout]" ` +
-    `-map 0:v -map "[aout]" -c:v copy -c:a aac -shortest "${outputPath}"`,
-    { stdio: 'pipe' },
-  );
+  runCommand('ffmpeg', [
+    '-y',
+    '-i',
+    videoPath,
+    '-i',
+    dialoguePath,
+    '-filter_complex',
+    `[0:a]volume=${nativeVolume}[native];[1:a]volume=1.0[tts];[native][tts]amix=inputs=2:duration=first:dropout_transition=0.5[aout]`,
+    '-map',
+    '0:v',
+    '-map',
+    '[aout]',
+    '-c:v',
+    'copy',
+    '-c:a',
+    'aac',
+    '-shortest',
+    outputPath,
+  ]);
 }
 
 export async function assembleEpisode(options: AssemblyOptions): Promise<string> {
@@ -174,10 +223,20 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
   writeFileSync(concatPath, lines, 'utf-8');
 
   const concatenatedPath = outputPath.replace(/\.mp4$/, '-raw.mp4');
-  execSync(
-    `ffmpeg -y -f concat -safe 0 -i "${concatPath}" -c copy -movflags +faststart "${concatenatedPath}"`,
-    { stdio: 'pipe' },
-  );
+  runCommand('ffmpeg', [
+    '-y',
+    '-f',
+    'concat',
+    '-safe',
+    '0',
+    '-i',
+    concatPath,
+    '-c',
+    'copy',
+    '-movflags',
+    '+faststart',
+    concatenatedPath,
+  ]);
 
   const concatDur = getVideoDuration(concatenatedPath);
   console.log(`  Concatenated ${processedFiles.length} clips -> ${concatDur.toFixed(1)}s`);
@@ -188,12 +247,26 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
   if (ambientBedPath && existsSync(ambientBedPath)) {
     const withAmbientPath = outputPath.replace(/\.mp4$/, '-with-ambient.mp4');
     // Loop the ambient clip to cover full video duration, mix under native audio
-    execSync(
-      `ffmpeg -y -i "${currentInput}" -stream_loop -1 -i "${ambientBedPath}" ` +
-      `-filter_complex "[1:a]volume=${ambientBedVolume}[ambient];[0:a][ambient]amix=inputs=2:duration=first:dropout_transition=2[aout]" ` +
-      `-map 0:v -map "[aout]" -c:v copy -c:a aac "${withAmbientPath}"`,
-      { stdio: 'pipe' },
-    );
+    runCommand('ffmpeg', [
+      '-y',
+      '-i',
+      currentInput,
+      '-stream_loop',
+      '-1',
+      '-i',
+      ambientBedPath,
+      '-filter_complex',
+      `[1:a]volume=${ambientBedVolume}[ambient];[0:a][ambient]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+      '-map',
+      '0:v',
+      '-map',
+      '[aout]',
+      '-c:v',
+      'copy',
+      '-c:a',
+      'aac',
+      withAmbientPath,
+    ]);
     console.log(`  Mixed in ambient bed at ${Math.round(ambientBedVolume * 100)}% volume (looped)`);
     currentInput = withAmbientPath;
   }
@@ -201,12 +274,24 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
   // ── Step 5: Mix in background music ──
   if (musicPath && existsSync(musicPath)) {
     const withMusicPath = outputPath.replace(/\.mp4$/, '-with-music.mp4');
-    execSync(
-      `ffmpeg -y -i "${currentInput}" -i "${musicPath}" ` +
-      `-filter_complex "[1:a]volume=${musicVolume}[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]" ` +
-      `-map 0:v -map "[aout]" -c:v copy -c:a aac "${withMusicPath}"`,
-      { stdio: 'pipe' },
-    );
+    runCommand('ffmpeg', [
+      '-y',
+      '-i',
+      currentInput,
+      '-i',
+      musicPath,
+      '-filter_complex',
+      `[1:a]volume=${musicVolume}[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+      '-map',
+      '0:v',
+      '-map',
+      '[aout]',
+      '-c:v',
+      'copy',
+      '-c:a',
+      'aac',
+      withMusicPath,
+    ]);
     console.log(`  Mixed in background music at ${Math.round(musicVolume * 100)}% volume`);
     currentInput = withMusicPath;
   }
@@ -227,10 +312,22 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
       `drawtext=fontfile='${fontPath}':text='${escapedText}':fontcolor=white:fontsize=92:x=(w-text_w)/2:y=(h-text_h)/2:alpha='if(lt(t,${overlayStart}),0,if(lt(t,${overlayStart + fadeInSec}),(t-${overlayStart})/${fadeInSec},1))'`,
     ].join(',');
 
-    execSync(
-      `ffmpeg -y -i "${currentInput}" -vf "${titleFilter}" -c:v libx264 -preset fast -crf 18 -c:a copy "${withTitlePath}"`,
-      { stdio: 'pipe' },
-    );
+    runCommand('ffmpeg', [
+      '-y',
+      '-i',
+      currentInput,
+      '-vf',
+      titleFilter,
+      '-c:v',
+      'libx264',
+      '-preset',
+      'fast',
+      '-crf',
+      '18',
+      '-c:a',
+      'copy',
+      withTitlePath,
+    ]);
     console.log(`  Faded in ending title "${endingTitleOverlay.text}" over final ${holdSec.toFixed(1)}s`);
     currentInput = withTitlePath;
   }
@@ -239,7 +336,7 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
   if (srtPath && existsSync(srtPath)) {
     // Save no-subtitles version as backup
     const noSubsPath = outputPath.replace(/\.mp4$/, '-nosubs.mp4');
-    execSync(`cp "${currentInput}" "${noSubsPath}"`, { stdio: 'pipe' });
+    copyFileSync(currentInput, noSubsPath);
 
     const escapedSrt = srtPath.replace(/'/g, "'\\''").replace(/:/g, '\\:');
     const subtitleFilter = [
@@ -258,15 +355,26 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
       `'`,
     ].join('');
 
-    execSync(
-      `ffmpeg -y -i "${currentInput}" -vf "${subtitleFilter}" ` +
-      `-c:v libx264 -preset fast -crf 18 -c:a copy "${outputPath}"`,
-      { stdio: 'pipe' },
-    );
+    runCommand('ffmpeg', [
+      '-y',
+      '-i',
+      currentInput,
+      '-vf',
+      subtitleFilter,
+      '-c:v',
+      'libx264',
+      '-preset',
+      'fast',
+      '-crf',
+      '18',
+      '-c:a',
+      'copy',
+      outputPath,
+    ]);
     console.log(`  Burned subtitles (backup at ${basename(noSubsPath)})`);
   } else {
     if (currentInput !== outputPath) {
-      execSync(`cp "${currentInput}" "${outputPath}"`, { stdio: 'pipe' });
+      copyFileSync(currentInput, outputPath);
     }
   }
 
@@ -285,8 +393,9 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
   } catch { /* best-effort */ }
 
   const finalDur = getVideoDuration(outputPath);
-  const finalSize = execSync(`ls -lh "${outputPath}"`, { encoding: 'utf-8' }).split(/\s+/)[4];
-  console.log(`  Final episode: ${outputPath} (${finalDur.toFixed(1)}s, ${finalSize})`);
+  const finalBytes = statSync(outputPath).size;
+  const finalSizeMb = (finalBytes / (1024 * 1024)).toFixed(1);
+  console.log(`  Final episode: ${outputPath} (${finalDur.toFixed(1)}s, ${finalSizeMb} MB)`);
   return outputPath;
 }
 

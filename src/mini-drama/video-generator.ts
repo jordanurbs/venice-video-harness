@@ -1,7 +1,7 @@
 import { writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { existsSync, readFileSync, renameSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import type { VeniceClient } from '../venice/client.js';
 import { VeniceRequestError } from '../venice/client.js';
 import type {
@@ -36,6 +36,21 @@ const VIDEO_COMPLETE_PATH = '/api/v1/video/complete';
 const POLL_INTERVAL_MS = 10_000;
 const MULTISHOT_RETRY_DELAY_MS = 15_000;
 
+function runCommand(command: string, args: string[]): string {
+  const result = spawnSync(command, args, {
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+    const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+    const detail = stderr || stdout || `exit code ${result.status}`;
+    throw new Error(`${command} failed: ${detail}`);
+  }
+  return typeof result.stdout === 'string' ? result.stdout : '';
+}
+
 interface QueueResponse {
   model: string;
   queue_id: string;
@@ -46,17 +61,28 @@ function sleep(ms: number): Promise<void> {
 }
 
 function extractLastFrame(videoPath: string, outputPath: string): void {
-  const durationStr = execSync(
-    `ffprobe -v error -show_entries format=duration -of csv=p=0 "${videoPath}"`,
-    { encoding: 'utf-8' },
-  ).trim();
+  const durationStr = runCommand('ffprobe', [
+    '-v',
+    'error',
+    '-show_entries',
+    'format=duration',
+    '-of',
+    'csv=p=0',
+    videoPath,
+  ]).trim();
   const duration = parseFloat(durationStr);
   const seekTo = Math.max(0, duration - 0.05);
 
-  execSync(
-    `ffmpeg -y -ss ${seekTo} -i "${videoPath}" -frames:v 1 "${outputPath}"`,
-    { stdio: 'pipe' },
-  );
+  runCommand('ffmpeg', [
+    '-y',
+    '-ss',
+    String(seekTo),
+    '-i',
+    videoPath,
+    '-frames:v',
+    '1',
+    outputPath,
+  ]);
 }
 
 function imageToDataUri(imagePath: string, mimeType = 'image/png'): string {
@@ -65,10 +91,15 @@ function imageToDataUri(imagePath: string, mimeType = 'image/png'): string {
 }
 
 function getVideoDuration(path: string): number {
-  const out = execSync(
-    `ffprobe -v error -show_entries format=duration -of csv=p=0 "${path}"`,
-    { encoding: 'utf-8' },
-  ).trim();
+  const out = runCommand('ffprobe', [
+    '-v',
+    'error',
+    '-show_entries',
+    'format=duration',
+    '-of',
+    'csv=p=0',
+    path,
+  ]).trim();
   return parseFloat(out);
 }
 
@@ -503,11 +534,30 @@ function splitRenderedUnitIntoShots(
       : Math.max(0.1, renderedDuration * (parseShotDuration(shot.duration) / plannedTotal));
 
     archiveExisting(outputPath);
-    execSync(
-      `ffmpeg -y -ss ${offset} -i "${unitOutputPath}" -t ${durationSec} ` +
-      `-c:v libx264 -preset fast -crf 18 -c:a aac -ar 44100 -ac 2 -b:a 192k "${outputPath}"`,
-      { stdio: 'pipe' },
-    );
+    runCommand('ffmpeg', [
+      '-y',
+      '-ss',
+      String(offset),
+      '-i',
+      unitOutputPath,
+      '-t',
+      String(durationSec),
+      '-c:v',
+      'libx264',
+      '-preset',
+      'fast',
+      '-crf',
+      '18',
+      '-c:a',
+      'aac',
+      '-ar',
+      '44100',
+      '-ac',
+      '2',
+      '-b:a',
+      '192k',
+      outputPath,
+    ]);
 
     segments.push({
       shotNumber,

@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import type { VeniceClient } from '../venice/client.js';
 import type { MultiEditModel } from '../venice/types.js';
 import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
@@ -9,6 +9,21 @@ import type { SeriesState, ShotScript, ShotEnvironment, MiniDramaCharacter } fro
 import { FEMALE_BASE_TRAITS, MALE_BASE_TRAITS, DAYTIME_ENVIRONMENTS } from '../series/types.js';
 import { getCharacterDir } from '../series/manager.js';
 import { recordEditProvenance } from '../venice/provenance.js';
+
+function runCommand(command: string, args: string[]): string {
+  const result = spawnSync(command, args, {
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+    const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+    const detail = stderr || stdout || `exit code ${result.status}`;
+    throw new Error(`${command} failed: ${detail}`);
+  }
+  return typeof result.stdout === 'string' ? result.stdout : '';
+}
 
 /**
  * Venice multi-edit always returns 1024x1024 regardless of input.
@@ -24,9 +39,18 @@ import { recordEditProvenance } from '../venice/provenance.js';
  * panel from scratch instead of multi-editing an existing one.
  */
 function getImageDimensions(filePath: string): [number, number] | null {
-  const info = execSync(`file "${filePath}"`).toString();
-  // PNG: "1024 x 1024", WebP: "768x1376"
-  const match = info.match(/(\d+)\s*x\s*(\d+)/);
+  const info = runCommand('ffprobe', [
+    '-v',
+    'error',
+    '-select_streams',
+    'v:0',
+    '-show_entries',
+    'stream=width,height',
+    '-of',
+    'csv=p=0:s=x',
+    filePath,
+  ]).trim();
+  const match = info.match(/^(\d+)x(\d+)$/);
   return match ? [Number(match[1]), Number(match[2])] : null;
 }
 
@@ -35,11 +59,15 @@ function getImageDimensions(filePath: string): [number, number] | null {
  * This ensures multi-edit gets proper PNG input and dimensions parse correctly.
  */
 async function ensureRealPng(filePath: string): Promise<void> {
-  const header = execSync(`file -b "${filePath}"`).toString().slice(0, 4);
-  if (header === 'RIFF') {
+  const raw = await readFile(filePath);
+  const isWebp =
+    raw.length >= 12 &&
+    raw.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    raw.subarray(8, 12).toString('ascii') === 'WEBP';
+  if (isWebp) {
     const tmpPath = filePath.replace(/\.png$/, '-webp-conv.png');
-    execSync(`ffmpeg -i "${filePath}" -y "${tmpPath}" 2>/dev/null`);
-    execSync(`mv "${tmpPath}" "${filePath}"`);
+    runCommand('ffmpeg', ['-i', filePath, '-y', tmpPath]);
+    await rename(tmpPath, filePath);
   }
 }
 
@@ -74,10 +102,15 @@ async function restoreAspectRatio(
   const cropY = Math.round((curH - cropH) / 2);
 
   const tmpPath = filePath.replace(/\.png$/, '-crop-tmp.png');
-  execSync(
-    `ffmpeg -i "${filePath}" -vf "crop=${cropW}:${cropH}:${cropX}:${cropY},scale=${targetWidth}:${targetHeight}:flags=lanczos" -y "${tmpPath}" 2>/dev/null`,
-  );
-  execSync(`mv "${tmpPath}" "${filePath}"`);
+  runCommand('ffmpeg', [
+    '-i',
+    filePath,
+    '-vf',
+    `crop=${cropW}:${cropH}:${cropX}:${cropY},scale=${targetWidth}:${targetHeight}:flags=lanczos`,
+    '-y',
+    tmpPath,
+  ]);
+  await rename(tmpPath, filePath);
   console.log(`  Restored aspect ratio: ${curW}x${curH} → ${targetWidth}x${targetHeight}`);
 }
 
