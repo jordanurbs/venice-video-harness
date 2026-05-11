@@ -277,6 +277,56 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: true, supportsReferenceImages: true, supportsSceneImages: true, supportsEndImage: true,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
+  // -- Kling O3 4K (added by Glass project; not in upstream registry sync 2026-03-18) --
+  {
+    id: 'kling-o3-4k-text-to-video', name: 'Kling O3 4K', type: 'text-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['4K', '1080p', '720p'], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'kling-o3-4k-image-to-video', name: 'Kling O3 4K', type: 'image-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['4K', '1080p', '720p'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'kling-o3-4k-reference-to-video', name: 'Kling O3 4K R2V', type: 'image-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['4K', '1080p', '720p'], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: true, supportsReferenceImages: true, supportsSceneImages: true, supportsEndImage: true,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  // -- HappyHorse 1.0 (added by Glass project; not in upstream registry sync 2026-03-18) --
+  {
+    id: 'happyhorse-1-0-text-to-video', name: 'HappyHorse 1.0', type: 'text-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['1080p', '720p'], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'happyhorse-1-0-image-to-video', name: 'HappyHorse 1.0', type: 'image-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['1080p', '720p'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'happyhorse-1-0-reference-to-video', name: 'HappyHorse 1.0 R2V', type: 'image-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['1080p', '720p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
   // -- Kling V3 --
   {
     id: 'kling-v3-pro-text-to-video', name: 'Kling V3 Pro', type: 'text-to-video',
