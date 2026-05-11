@@ -2,7 +2,7 @@
 
 import 'dotenv/config';
 import { Command } from 'commander';
-import { resolve, join } from 'node:path';
+import { resolve, join, basename } from 'node:path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile, copyFile, unlink } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
@@ -1832,6 +1832,143 @@ program
     await saveSeries(series);
 
     console.log(`\nFinal episode: ${outputPath}`);
+  });
+
+// ── export-fcpxml (EXT-14) ────────────────────────────────────────────
+// Builds an FCPXML 1.10 from the rendered shots + audio in an episode
+// directory. The standard layout assumed:
+//   <episodeDir>/scene-001/shot-NNN.mp4         (video segments)
+//   <episodeDir>/audio/dialogue-shot-NNN.mp3    (dialogue, lane -1)
+//   <episodeDir>/audio/sfx/<*>.mp3               (SFX, lane -2)
+//   <episodeDir>/audio/music.mp3                 (music, lane -3)
+// Anything missing is dropped silently from the export — the FCPXML still
+// imports cleanly, just with fewer connected clips.
+program
+  .command('export-fcpxml')
+  .description('Export an FCPXML 1.10 from the rendered shots + audio (EXT-14)')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
+  .option('--fps <fps>', 'Frames per second', '24')
+  .option('--width <px>', 'Sequence width', '1920')
+  .option('--height <px>', 'Sequence height', '1080')
+  .action(async (opts: {
+    project: string; episode: number; fps: string; width: string; height: string;
+  }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+    const script = await loadEpisodeScript(series, opts.episode);
+    if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
+
+    const episodeDir = getEpisodeDir(series, opts.episode);
+    const sceneDir = join(episodeDir, 'scene-001');
+    const audioDir = join(episodeDir, 'audio');
+    const sfxDir = join(audioDir, 'sfx');
+    const videoFiles = await collectShotVideos(sceneDir);
+    if (videoFiles.length === 0) {
+      console.error('No video clips found. Run generate-videos first.');
+      process.exit(1);
+    }
+
+    // Build segment list with cumulative durations.
+    const { exportFcpxml } = await import('./fcpxml-export.js');
+    const { spawnSync: spawnSyncLocal } = await import('node:child_process');
+    function probeDur(path: string): number {
+      const r = spawnSyncLocal('ffprobe', [
+        '-v','error','-show_entries','format=duration','-of','csv=p=0', path,
+      ], { encoding: 'utf-8' });
+      return parseFloat(String(r.stdout).trim());
+    }
+    let cursor = 0;
+    const segments: Array<{ path: string; label: string; durSec: number; startSec: number }> = [];
+    for (const path of videoFiles) {
+      const dur = probeDur(path);
+      const filename = basename(path, '.mp4');
+      segments.push({ path, label: filename, durSec: dur, startSec: cursor });
+      cursor += dur;
+    }
+    const masterDur = cursor;
+
+    // Build placement map keyed by shot id, mirroring EXT-8 conventions.
+    const placementMap: Record<string, { startSec: number; endSec: number }> = {};
+    for (const seg of segments) {
+      const m = seg.label.match(/^shot-(\d+)([a-zA-Z]*)/);
+      if (!m) continue;
+      const key = String(m[1]).padStart(3, '0') + m[2];
+      placementMap[key] = { startSec: seg.startSec, endSec: seg.startSec + seg.durSec };
+    }
+
+    // Dialogue: one per shot. Use the canonical zero-padded key (EXT-8).
+    const audio: Array<{
+      path: string; label: string; startSec: number; audioDur: number;
+      lane: -1 | -2 | -3; role: 'dialogue.dialogue' | 'effects.effects' | 'music.music';
+    }> = [];
+    if (existsSync(audioDir)) {
+      for (const shot of script.shots) {
+        const key = String(shot.shotNumber).padStart(3, '0') + ((shot as { shotIdSuffix?: string }).shotIdSuffix ?? '');
+        const place = placementMap[key];
+        if (!place) continue;
+        const path = join(audioDir, `dialogue-shot-${key}.mp3`);
+        if (!existsSync(path)) continue;
+        const dur = probeDur(path);
+        audio.push({
+          path, label: `${key} ${shot.dialogue?.character ?? 'NARRATOR'}`,
+          startSec: place.startSec + 0.2,
+          audioDur: dur,
+          lane: -1,
+          role: 'dialogue.dialogue',
+        });
+      }
+      // SFX (if dir exists): laid out at the start of their parent shot.
+      if (existsSync(sfxDir)) {
+        const sfxFiles = readdirSync(sfxDir).filter((f: string) => f.endsWith('.mp3'));
+        for (const f of sfxFiles) {
+          const m = f.match(/shot-(\d+)([a-zA-Z]*)/);
+          if (!m) continue;
+          const key = String(m[1]).padStart(3, '0') + m[2];
+          const place = placementMap[key];
+          if (!place) continue;
+          const fullPath = join(sfxDir, f);
+          audio.push({
+            path: fullPath, label: f.replace(/\.mp3$/, ''),
+            startSec: place.startSec,
+            audioDur: probeDur(fullPath),
+            lane: -2,
+            role: 'effects.effects',
+          });
+        }
+      }
+      const musicPath = join(audioDir, 'music.mp3');
+      if (existsSync(musicPath)) {
+        audio.push({
+          path: musicPath, label: 'music',
+          startSec: 0,
+          audioDur: Math.min(probeDur(musicPath), masterDur),
+          lane: -3,
+          role: 'music.music',
+        });
+      }
+    }
+
+    const epNum = String(opts.episode).padStart(3, '0');
+    const outPath = join(episodeDir, `episode-${epNum}.fcpxml`);
+    const finalPath = await exportFcpxml({
+      outputPath: outPath,
+      segments,
+      audio,
+      totalDurationSec: masterDur,
+      fps: parseInt(opts.fps, 10),
+      width: parseInt(opts.width, 10),
+      height: parseInt(opts.height, 10),
+      eventName: script.title,
+    });
+
+    console.log(`FCPXML: ${finalPath}`);
+    console.log(`  Segments: ${segments.length}`);
+    console.log(`  Connected clips: ${audio.length}`);
+    console.log(`    dialogue (lane -1): ${audio.filter(a => a.lane === -1).length}`);
+    console.log(`    SFX (lane -2):      ${audio.filter(a => a.lane === -2).length}`);
+    console.log(`    music (lane -3):    ${audio.filter(a => a.lane === -3).length}`);
+    console.log(`\nIn FCP X: File > Import > XML… and select this file.`);
   });
 
 // ── produce-episode ───────────────────────────────────────────────────
