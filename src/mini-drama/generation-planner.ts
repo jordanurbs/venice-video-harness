@@ -55,6 +55,28 @@ function isIdentitySensitive(shot: ShotScript): boolean {
   return shot.type === 'close-up' || shot.type === 'reaction';
 }
 
+/**
+ * EXT-7 + EXT-11: a shot must render as a single Wan 2.7 lip-sync clip when
+ * it has dialogue from a non-narrator with a visible face AND the motion is
+ * not high. Multi-shot bundling must break at any such shot — bundling a
+ * lip-sync shot into a Seedance multi-shot unit loses both the lip-sync and
+ * the per-shot model routing.
+ *
+ * High-motion dialogue stays on the R2V model for identity preservation
+ * (Wan 2.7 prioritizes motion over reference adherence; see EXT-11 notes).
+ */
+export function mustStayAsWanLipSync(shot: ShotScript): boolean {
+  if (!shot.dialogue) return false;
+  const speaker = shot.dialogue.character.toUpperCase();
+  if (speaker === 'NARRATOR' || speaker === 'V.O.' || speaker === 'VO') return false;
+  if (shot.motion === 'high') return false;
+  // If the script explicitly says the face isn't visible, lip-sync would be
+  // wasted. Default-true semantics: when faceVisible is undefined we assume
+  // a dialogue shot does show the speaker.
+  if (shot.faceVisible === false) return false;
+  return true;
+}
+
 function hasNewCharacters(previous: ShotScript | undefined, current: ShotScript): boolean {
   if (!previous) return false;
   const prev = new Set(previous.characters.map(name => name.toUpperCase()));
@@ -111,6 +133,15 @@ function chooseEndFrameStrategy(
   if (!nextShot) return 'natural';
   if (hasNewCharacters(lastShot, nextShot)) return 'natural';
   if (isTitleLikeInsert(nextShot)) return 'natural';
+  // EXT-9: for lip-sync shots, bookend the clip with the next shot's panel
+  // as the end keyframe. Wan 2.7 reference adherence is weaker than Seedance
+  // R2V's reference_image_urls — passing end_image_url provides natural cut
+  // continuity into the next shot AND anchors the character's identity at
+  // both ends of the clip. Independent of the transition because the cut
+  // continuity benefit applies even for hard cuts.
+  if (mustStayAsWanLipSync(lastShot)) {
+    return 'next-panel-target';
+  }
   return END_FRAME_TRANSITIONS.has(lastShot.transition.toUpperCase())
     ? 'next-panel-target'
     : 'natural';
@@ -161,6 +192,11 @@ function canUseMultiShotWindow(window: ShotScript[]): { ok: boolean; reasons: st
   }
   if (window.some(isEstablishingShot)) {
     return { ok: false, reasons: ['establishing/empty shot in window -- keep separate'] };
+  }
+  // EXT-7: a shot that needs Wan 2.7 lip-sync must render as a single clip.
+  // Bundling it into a Seedance multi-shot unit drops the lip-sync entirely.
+  if (window.some(mustStayAsWanLipSync)) {
+    return { ok: false, reasons: ['lip-sync dialogue shot in window — keep separate for Wan 2.7'] };
   }
 
   const totalDuration = window.reduce((sum, shot) => sum + parseShotDuration(shot.duration), 0);
