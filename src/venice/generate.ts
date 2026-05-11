@@ -14,6 +14,7 @@ import type {
   GenerateWithReferencesResult,
   CharacterReference,
 } from "./types.js";
+import { assertNotSilentRejectImage } from "./rejection.js";
 
 // ---- Constants ------------------------------------------------------------
 
@@ -70,6 +71,11 @@ export async function generateImage(
       return img as { b64_json: string; seed?: number };
     }),
   };
+
+  for (const img of normalized.images) {
+    const decoded = Buffer.from(img.b64_json, "base64");
+    assertNotSilentRejectImage(decoded, { model: body.model, prompt: body.prompt });
+  }
 
   return normalized;
 }
@@ -185,6 +191,9 @@ export async function generateWithReferences(
   const resultSeed = typeof firstImage === "object"
     ? (firstImage as { seed?: number }).seed
     : undefined;
+
+  const decoded = Buffer.from(b64, "base64");
+  assertNotSilentRejectImage(decoded, { model, prompt: augmentedPrompt });
 
   return { base64: b64, seed: resultSeed };
 }
