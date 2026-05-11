@@ -258,6 +258,13 @@ export interface ShotScript {
    * lightbulb moment, drop) needs audio emphasis at this shot.
    */
   musicHold?: 'sustain' | 'swell' | 'drop' | 'stinger';
+  /**
+   * EXT-13: optional suffix letter for inserted shots. When set, the
+   * canonical shot id becomes `shotNumber + shotIdSuffix` — for example,
+   * shotNumber 3 with shotIdSuffix "b" → "3b" → key "003b". Inserted
+   * shots use this so the order of the original shotNumbers is preserved.
+   */
+  shotIdSuffix?: string;
 }
 
 // ---------------------------------------------------------------------------
