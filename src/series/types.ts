@@ -256,12 +256,15 @@ export const VIDEO_NO_MUSIC_SUFFIX = 'No background music. Only generate dialogu
 export const MODELS_SUPPORTING_ELEMENTS = new Set([
   'kling-o3-standard-reference-to-video',
   'kling-o3-pro-reference-to-video',
+  'kling-o3-4k-reference-to-video',
 ]);
 
 export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   'kling-o3-standard-reference-to-video',
   'kling-o3-pro-reference-to-video',
+  'kling-o3-4k-reference-to-video',
   'seedance-2-0-reference-to-video',
+  'happyhorse-1-0-reference-to-video',
   'vidu-q3-image-to-video',
   'vidu-q3-text-to-video',
 ]);
@@ -269,6 +272,7 @@ export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
 export const MODELS_SUPPORTING_SCENE_IMAGES = new Set([
   'kling-o3-standard-reference-to-video',
   'kling-o3-pro-reference-to-video',
+  'kling-o3-4k-reference-to-video',
 ]);
 
 export const MODELS_SUPPORTING_END_IMAGE = new Set([
@@ -276,8 +280,10 @@ export const MODELS_SUPPORTING_END_IMAGE = new Set([
   'kling-v3-standard-image-to-video',
   'kling-o3-pro-image-to-video',
   'kling-o3-standard-image-to-video',
+  'kling-o3-4k-image-to-video',
   'kling-o3-pro-reference-to-video',
   'kling-o3-standard-reference-to-video',
+  'kling-o3-4k-reference-to-video',
   'kling-2.6-pro-image-to-video',
   'kling-2.5-turbo-pro-image-to-video',
   'pixverse-v5.6-transition',
