@@ -155,6 +155,9 @@ Preferred defaults (overridable per-project via `series.json` → `videoDefaults
 |------|--------------|-----------|
 | Character shots (1-2 characters) | `seedance-2-0-reference-to-video` | Default R2V — `reference_image_urls` with `@Image` tags, up to 15s, native stereo audio |
 | Character shots (3+ characters) | `kling-o3-standard-reference-to-video` | Auto-fallback — structured `elements` + `reference_image_urls` for multi-character identity |
+| Character dialogue shot, low/medium motion | `wan-2-7-image-to-video` | EXT-1: synthesizes lip-sync from supplied `audio_url`; min 3s audio (use audio pre-flight pad). Inherits aspect from input image. |
+| Character dialogue shot, high motion | `seedance-2-0-reference-to-video` | Preserves identity across large motion; no lip-sync (mouth animates arbitrarily). See EXT-11. |
+| Multi-character dialogue shot | `wan-2-7-reference-to-video` | EXT-1: `per_reference_audio` — each `elements[].audio_url` drives a different speaker's mouth. Max 10s. |
 | Establishing / mood / action (no chars) | `seedance-2-0-image-to-video` | Epic cinematic quality, physics-aware, up to 15s, native audio |
 | Image Generation (face-bearing) | `seedream-v5-lite` | **Required** when the image contains a human face and the video target is Seedance 2.0 |
 | Image Generation (faceless) | `nano-banana-pro` | Atmosphere / establishing / scene refs — any family is fine. `gpt-image-2` is a high-quality alternative with sharper typography and stronger text rendering |

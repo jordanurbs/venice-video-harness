@@ -37,6 +37,14 @@ export interface VideoModelDefaults {
    * `fallback` in non-TTY environments.
    */
   seedanceCompatibility?: SeedanceCompatibilityMode;
+  /**
+   * EXT-1: Default lip-sync model for dialogue shots whose character is a
+   * non-narrator with a visible face. Today defaults to
+   * `wan-2-7-image-to-video`. The planner only routes to this model when
+   * `shot.motion !== 'high'` (motion classification lives in EXT-11). High-
+   * motion dialogue stays on the R2V model for identity preservation.
+   */
+  lipSyncModel?: string;
 }
 
 export interface ImageModelDefaults {
@@ -202,6 +210,15 @@ export const KLING_R2V_MODEL = 'kling-o3-standard-reference-to-video';
 export const KLING_MULTISHOT_MODEL = 'kling-o3-pro-image-to-video';
 
 /**
+ * EXT-1: default lip-sync model. Used by the planner for dialogue shots whose
+ * character is a non-narrator with a visible face and motion !== 'high'.
+ * Wan 2.7 i2v inherits the aspect ratio from the input image and synthesizes
+ * lip-sync from `audio_url`. R2V dialogue (high motion or multi-speaker) stays
+ * on Seedance for identity preservation — see EXT-11.
+ */
+export const DEFAULT_LIP_SYNC_MODEL = 'wan-2-7-image-to-video';
+
+/**
  * Default image models used when no face is present in the image.
  *
  * Seedance 2.0 only blocks FACE-BEARING images from non-seedream families,
@@ -281,6 +298,9 @@ export const MODELS_SUPPORTING_END_IMAGE = new Set([
   'kling-2.6-pro-image-to-video',
   'kling-2.5-turbo-pro-image-to-video',
   'pixverse-v5.6-transition',
+  // EXT-1: Wan 2.7 i2v supports `end_image_url` for keyframe bookending —
+  // helps anchor identity drift across low-motion lip-sync clips.
+  'wan-2-7-image-to-video',
 ]);
 
 export const MODELS_USING_IMAGE_TAGS = new Set([
@@ -294,6 +314,22 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   'wan-2.6-flash-image-to-video',
   'wan-2.5-preview-image-to-video',
   'wan-2.5-preview-text-to-video',
+  // EXT-1: Wan 2.7 lip-sync family
+  'wan-2-7-image-to-video',
+  'wan-2-7-text-to-video',
+  'wan-2-7-video-to-video',
+]);
+
+/**
+ * EXT-1: Models that accept per-reference `audio_url` inside `elements[]`.
+ *
+ * Wan 2.7 R2V is the only one today. Each `elements[].audio_url` drives a
+ * different speaker's lip-sync inside a single render — useful for
+ * multi-character speaking scenes. NOT interchangeable with the global
+ * `audio_url` field used by the i2v / t2v variants.
+ */
+export const MODELS_SUPPORTING_PER_REFERENCE_AUDIO = new Set([
+  'wan-2-7-reference-to-video',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -304,6 +340,17 @@ export interface VideoElement {
   frontalImageUrl?: string;
   referenceImageUrls?: string[];
   videoUrl?: string;
+  /**
+   * EXT-1: per-reference audio for Wan 2.7 R2V (`per_reference_audio: true`).
+   * When set, this element's character lip-syncs to the supplied audio while
+   * other characters in the same render stay silent. NOT used by models that
+   * lack `MODELS_SUPPORTING_PER_REFERENCE_AUDIO`.
+   *
+   * Pass as a data URL or a local file path — `audioPath` is preferred so
+   * the audio pre-flight pad can run.
+   */
+  audioUrl?: string;
+  audioPath?: string;
 }
 
 // ---------------------------------------------------------------------------

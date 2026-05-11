@@ -13,6 +13,7 @@ import {
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   DEFAULT_IMAGE_GENERATION_MODEL,
   DEFAULT_IMAGE_EDIT_MODEL,
+  DEFAULT_LIP_SYNC_MODEL,
 } from './types.js';
 
 const OUTPUT_BASE = resolve('output');
@@ -52,6 +53,7 @@ export function createSeries(
         editModel: DEFAULT_IMAGE_EDIT_MODEL,
       },
       seedanceCompatibility: 'prompt',
+      lipSyncModel: DEFAULT_LIP_SYNC_MODEL,
     },
     outputDir,
     createdAt: now,
