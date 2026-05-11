@@ -18,9 +18,11 @@ import {
   MODELS_SUPPORTING_SCENE_IMAGES,
   MODELS_SUPPORTING_END_IMAGE,
   MODELS_SUPPORTING_AUDIO_INPUT,
+  MODELS_SUPPORTING_PER_REFERENCE_AUDIO,
   MODELS_USING_IMAGE_TAGS,
   isSeedanceVideoModel,
 } from '../series/types.js';
+import { padAudioForModel } from '../venice/audio-preflight.js';
 import { getCharacterDir } from '../series/manager.js';
 import {
   buildKlingMultiShotPrompt,
@@ -168,7 +170,19 @@ interface RenderVideoOptions {
   referenceImagePaths?: string[];
   sceneImagePaths?: string[];
   negativePrompt?: string;
+  /**
+   * Pre-encoded data URL for `audio_url`. Used by callers that already
+   * encoded the audio themselves. Prefer `audioPath` for new callsites —
+   * it runs the Wan 2.7 audio pre-flight pad.
+   */
   audioUrl?: string;
+  /**
+   * EXT-1/EXT-10: Path to a dialogue audio file for `audio_url`.
+   * When supplied, the audio is probed against the model's
+   * `minAudioInputSec` and padded with trailing silence if needed.
+   * The resolved path is then encoded as a data URL into `audio_url`.
+   */
+  audioPath?: string;
   videoUrl?: string;
   aspectRatio?: string;
   /** Seedance compatibility strategy when images aren't seedream-originated. */
@@ -187,7 +201,7 @@ async function renderVideoFile(
 ): Promise<string> {
   const { prompt, anchorImagePath, outputPath, endFrameImagePath,
     elements, referenceImagePaths, sceneImagePaths,
-    negativePrompt, audioUrl, videoUrl } = options;
+    negativePrompt, audioUrl, audioPath, videoUrl } = options;
   await mkdir(dirname(outputPath), { recursive: true });
 
   // ── Seedance 2.0 pre-flight ─────────────────────────────────────────────
@@ -256,8 +270,35 @@ async function renderVideoFile(
     body.aspect_ratio = options.aspectRatio ?? '16:9';
   }
 
-  if (audioUrl && MODELS_SUPPORTING_AUDIO_INPUT.has(effectiveModel)) {
-    body.audio_url = audioUrl;
+  // EXT-1/EXT-10: audio_url attach with Wan 2.7 minimum-duration pre-flight.
+  // - `audioPath` (preferred for new callers) runs ffprobe + ffmpeg apad to
+  //   pad short dialogue to the model's minAudioInputSec before encoding.
+  // - `audioUrl` (legacy) is taken at face value; the silent-reject guard
+  //   on the rendered video will surface a downstream failure if the audio
+  //   was too short. Migrate callers to `audioPath` when possible.
+  // - `wan-2-7-reference-to-video` uses per_reference_audio inside elements
+  //   instead of a global audio_url — see element loop below.
+  if (MODELS_SUPPORTING_AUDIO_INPUT.has(effectiveModel)) {
+    if (audioPath) {
+      try {
+        const result = await padAudioForModel({ model: effectiveModel, audioPath });
+        if (result.padded) {
+          console.log(`  Padded ${audioPath} -> ${result.outputPath} (${result.durationSec.toFixed(2)}s) for ${effectiveModel}.`);
+        }
+        body.audio_url = fileToDataUri(result.outputPath, 'audio/mpeg') ?? audioUrl;
+      } catch (err) {
+        console.warn(`  Wan audio pre-flight failed (${(err as Error).message}). Falling back to raw audioUrl.`);
+        if (audioUrl) body.audio_url = audioUrl;
+      }
+    } else if (audioUrl) {
+      body.audio_url = audioUrl;
+    }
+  } else if (audioPath || audioUrl) {
+    // Model doesn't accept audio_url — drop quietly rather than 400.
+    // For per-reference-audio R2V models, the audio attaches per element below.
+    if (!MODELS_SUPPORTING_PER_REFERENCE_AUDIO.has(effectiveModel)) {
+      console.warn(`  Model ${effectiveModel} does not accept audio_url; dropping audio attach.`);
+    }
   }
 
   if (videoUrl) {
@@ -265,7 +306,8 @@ async function renderVideoFile(
   }
 
   if (elements && elements.length > 0 && MODELS_SUPPORTING_ELEMENTS.has(effectiveModel)) {
-    const apiElements = elements.map(el => {
+    const supportsPerRefAudio = MODELS_SUPPORTING_PER_REFERENCE_AUDIO.has(effectiveModel);
+    const apiElements = await Promise.all(elements.map(async el => {
       const out: Record<string, unknown> = {};
       if (el.frontalImageUrl) {
         out.frontal_image_url = el.frontalImageUrl.startsWith('data:')
@@ -278,8 +320,28 @@ async function renderVideoFile(
         );
       }
       if (el.videoUrl) out.video_url = el.videoUrl;
+      // EXT-1: per-reference audio for Wan 2.7 R2V — each element drives
+      // a different character's lip-sync. Run the same pad pre-flight here.
+      if (supportsPerRefAudio) {
+        if (el.audioPath) {
+          try {
+            const result = await padAudioForModel({ model: effectiveModel, audioPath: el.audioPath });
+            if (result.padded) {
+              console.log(`  [per-ref] Padded ${el.audioPath} -> ${result.outputPath} for ${effectiveModel}.`);
+            }
+            const uri = fileToDataUri(result.outputPath, 'audio/mpeg');
+            if (uri) out.audio_url = uri;
+            else if (el.audioUrl) out.audio_url = el.audioUrl;
+          } catch (err) {
+            console.warn(`  [per-ref] audio pre-flight failed (${(err as Error).message}); using raw audioUrl.`);
+            if (el.audioUrl) out.audio_url = el.audioUrl;
+          }
+        } else if (el.audioUrl) {
+          out.audio_url = el.audioUrl;
+        }
+      }
       return out;
-    });
+    }));
     body.elements = apiElements;
     console.log(`  Elements: ${apiElements.length} character/object reference(s)`);
   }

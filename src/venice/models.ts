@@ -31,6 +31,17 @@ export interface VideoModelSpec {
   supportsEndImage: boolean;
   /** Max duration in seconds */
   maxDurationSec: number;
+  /**
+   * Supports per-reference audio (Wan 2.7 R2V): each `elements[].audio_url`
+   * can drive a different speaker's lip-sync inside a single render.
+   */
+  perReferenceAudio?: boolean;
+  /**
+   * Minimum allowed duration (seconds) for `audio_url` input.
+   * Wan 2.7 rejects audio shorter than 3 seconds. Use the pre-flight
+   * helper in `src/venice/audio-preflight.ts` to pad shorter clips.
+   */
+  minAudioInputSec?: number;
   privacy: 'private' | 'anonymized';
   offline: boolean;
 }
@@ -57,6 +68,46 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  // -- Wan 2.7 (EXT-1: lip-sync via audio_url / per-reference audio) --
+  // Live API probed 2026-05-10. Notes:
+  //   - audio_url minimum duration is 3 seconds (returns HTTP 400 below).
+  //   - i2v inherits aspect ratio from the input image; passing aspect_ratio
+  //     yields "This model does not support aspect_ratio" — empty array.
+  //   - t2v supports aspect_ratio.
+  //   - R2V uses `per_reference_audio` via elements[].audio_url, not audio_url.
+  //   - Cost reference: ~$0.55 per 5s clip at 720p.
+  {
+    id: 'wan-2-7-image-to-video', name: 'Wan 2.7', type: 'image-to-video',
+    durations: ['5s', '10s', '15s'], resolutions: ['1080p', '720p'], aspectRatios: [],
+    audio: false, audioConfigurable: false, audioInput: true, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
+    maxDurationSec: 15, minAudioInputSec: 3,
+    privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'wan-2-7-text-to-video', name: 'Wan 2.7', type: 'text-to-video',
+    durations: ['5s', '10s', '15s'], resolutions: ['1080p', '720p'], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: false, audioConfigurable: false, audioInput: true, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, minAudioInputSec: 3,
+    privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'wan-2-7-reference-to-video', name: 'Wan 2.7 R2V', type: 'image-to-video',
+    durations: ['5s', '10s'], resolutions: ['1080p', '720p'], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: true, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, perReferenceAudio: true, minAudioInputSec: 3,
+    privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'wan-2-7-video-to-video', name: 'Wan 2.7 V2V', type: 'image-to-video',
+    durations: ['5s', '10s', '15s'], resolutions: ['1080p', '720p'], aspectRatios: [],
+    audio: false, audioConfigurable: false, audioInput: true, videoInput: true,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, minAudioInputSec: 3,
+    privacy: 'anonymized', offline: false,
   },
   // -- Wan 2.5 Preview --
   {
