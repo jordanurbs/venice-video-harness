@@ -1,6 +1,5 @@
-// EXT-15: timeline-export barrel.
-//
-// Single import point for all three exporters + shared types.
+// Timeline-export barrel. Single import point for all three exporters
+// (FCPXML 1.10, Resolve-tuned FCPXML, Premiere xmeml v5) and shared types.
 
 export type {
   TimelineSegment,

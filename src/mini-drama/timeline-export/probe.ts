@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// EXT-15: format-neutral helpers shared across all timeline exporters.
+// Format-neutral helpers shared across all timeline exporters.
 //
 // Pure utilities — no exporter-specific logic. The FCPXML, Premiere, and
 // DaVinci exporters all share these.

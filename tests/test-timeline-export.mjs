@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// EXT-15 smoke test for the three timeline exporters.
+// Smoke test for the three timeline exporters.
 //
 // Builds a tiny fixture (2 short mp4s + 1 short mp3 via ffmpeg lavfi),
 // runs each exporter, and asserts the output XML structure looks right.
@@ -122,4 +122,4 @@ if (failed > 0) {
   console.error(`\n${failed} assertion(s) failed.`);
   process.exit(1);
 }
-console.log('\nAll EXT-15 timeline-export assertions passed.');
+console.log('\nAll timeline-export assertions passed.');

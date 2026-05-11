@@ -177,7 +177,7 @@ interface RenderVideoOptions {
    */
   audioUrl?: string;
   /**
-   * EXT-1/EXT-10: Path to a dialogue audio file for `audio_url`.
+   * Path to a dialogue audio file for `audio_url`.
    * When supplied, the audio is probed against the model's
    * `minAudioInputSec` and padded with trailing silence if needed.
    * The resolved path is then encoded as a data URL into `audio_url`.
@@ -270,7 +270,7 @@ async function renderVideoFile(
     body.aspect_ratio = options.aspectRatio ?? '16:9';
   }
 
-  // EXT-1/EXT-10: audio_url attach with Wan 2.7 minimum-duration pre-flight.
+  // audio_url attach with Wan 2.7 minimum-duration pre-flight.
   // - `audioPath` (preferred for new callers) runs ffprobe + ffmpeg apad to
   //   pad short dialogue to the model's minAudioInputSec before encoding.
   // - `audioUrl` (legacy) is taken at face value; the silent-reject guard
@@ -320,7 +320,7 @@ async function renderVideoFile(
         );
       }
       if (el.videoUrl) out.video_url = el.videoUrl;
-      // EXT-1: per-reference audio for Wan 2.7 R2V — each element drives
+      // per-reference audio for Wan 2.7 R2V — each element drives
       // a different character's lip-sync. Run the same pad pre-flight here.
       if (supportsPerRefAudio) {
         if (el.audioPath) {

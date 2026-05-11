@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// EXT-15: Adobe Premiere Pro export via Final Cut Pro 7 XML (xmeml v5).
+// Adobe Premiere Pro export via Final Cut Pro 7 XML (xmeml v5).
 //
 // Premiere imports xmeml v5 natively via File > Import > XML… The format is
 // Apple's predecessor to FCPXML — different shape, same idea. Differences

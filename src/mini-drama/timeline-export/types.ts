@@ -1,16 +1,14 @@
 // ---------------------------------------------------------------------------
-// EXT-15: format-neutral types shared by every timeline exporter.
+// Format-neutral types shared by every timeline exporter.
 //
-// The four supported formats today (FCPXML 1.10, FCPXML for Resolve, Final
+// The three supported formats (FCPXML 1.10, Resolve-tuned FCPXML, Final
 // Cut Pro 7 xmeml v5 for Premiere) all consume the same input shape — an
 // ordered list of video segments and a flat list of audio clips, each
 // tagged with a lane and a role. The exporter functions translate this
 // neutral form into format-specific XML.
 //
-// History note: these types started life as FcpxmlSegment / FcpxmlAudioClip
-// / FcpxmlExportOptions inside src/mini-drama/fcpxml-export.ts. They moved
-// here verbatim when EXT-15 added Premiere + DaVinci support. The old type
-// names are re-exported from src/mini-drama/fcpxml-export.ts for back-compat.
+// Back-compat: `Fcpxml*` type aliases below mirror the previous names that
+// lived in `src/mini-drama/fcpxml-export.ts`.
 // ---------------------------------------------------------------------------
 
 /** One video clip placed on the primary storyline. */

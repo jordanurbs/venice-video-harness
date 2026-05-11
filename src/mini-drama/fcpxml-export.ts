@@ -1,6 +1,6 @@
-// EXT-14 / EXT-15: this module's contents moved to
-// src/mini-drama/timeline-export/. Keep this file as a stable re-export so
-// existing callers (including pre-merge PR consumers) don't break.
+// This module's implementation moved to src/mini-drama/timeline-export/.
+// The exports below stay here as a stable re-export surface so existing
+// callers don't break.
 
 export {
   exportFcpxml,

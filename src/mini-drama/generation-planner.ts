@@ -56,14 +56,14 @@ function isIdentitySensitive(shot: ShotScript): boolean {
 }
 
 /**
- * EXT-7 + EXT-11: a shot must render as a single Wan 2.7 lip-sync clip when
+ * a shot must render as a single Wan 2.7 lip-sync clip when
  * it has dialogue from a non-narrator with a visible face AND the motion is
  * not high. Multi-shot bundling must break at any such shot — bundling a
  * lip-sync shot into a Seedance multi-shot unit loses both the lip-sync and
  * the per-shot model routing.
  *
  * High-motion dialogue stays on the R2V model for identity preservation
- * (Wan 2.7 prioritizes motion over reference adherence; see EXT-11 notes).
+ * (Wan 2.7 prioritizes motion over reference adherence; see  notes).
  */
 export function mustStayAsWanLipSync(shot: ShotScript): boolean {
   if (!shot.dialogue) return false;
@@ -133,7 +133,7 @@ function chooseEndFrameStrategy(
   if (!nextShot) return 'natural';
   if (hasNewCharacters(lastShot, nextShot)) return 'natural';
   if (isTitleLikeInsert(nextShot)) return 'natural';
-  // EXT-9: for lip-sync shots, bookend the clip with the next shot's panel
+  // for lip-sync shots, bookend the clip with the next shot's panel
   // as the end keyframe. Wan 2.7 reference adherence is weaker than Seedance
   // R2V's reference_image_urls — passing end_image_url provides natural cut
   // continuity into the next shot AND anchors the character's identity at
@@ -193,7 +193,7 @@ function canUseMultiShotWindow(window: ShotScript[]): { ok: boolean; reasons: st
   if (window.some(isEstablishingShot)) {
     return { ok: false, reasons: ['establishing/empty shot in window -- keep separate'] };
   }
-  // EXT-7: a shot that needs Wan 2.7 lip-sync must render as a single clip.
+  // a shot that needs Wan 2.7 lip-sync must render as a single clip.
   // Bundling it into a Seedance multi-shot unit drops the lip-sync entirely.
   if (window.some(mustStayAsWanLipSync)) {
     return { ok: false, reasons: ['lip-sync dialogue shot in window — keep separate for Wan 2.7'] };
