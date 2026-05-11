@@ -8,3 +8,20 @@ dist/
 *.log
 *.png
 scripts/*.mjs
+
+# Local agent state — never check in
+agentdb.rvf
+agentdb.rvf.lock
+ruvector.db
+
+# Project-specific config files that live alongside a series under output/
+# but sometimes appear at the repo root. Per-project, not per-harness.
+voices.json
+
+# Per-project handoff notes that sometimes land at the repo root from
+# individual productions (e.g. Glass). They're inputs to harness work, not
+# part of the reusable harness surface. The harness's own roadmap lives in
+# HARNESS_IMPLEMENTATION_NOTES.md.
+HANDOFF.md
+HARNESS_HANDOFF.md
+HARNESS_EXTENSIONS_NOTE.md
