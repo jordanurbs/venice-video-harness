@@ -15,6 +15,7 @@ import type {
   VideoQuoteResponse,
 } from './types.js';
 import { getVideoModel, buildModelParams } from './models.js';
+import { assertNotSilentRejectVideo } from './rejection.js';
 
 const VIDEO_QUEUE_PATH = '/api/v1/video/queue';
 const VIDEO_RETRIEVE_PATH = '/api/v1/video/retrieve';
@@ -139,6 +140,12 @@ export interface PollVideoOptions {
   pollIntervalMs?: number;
   maxPollAttempts?: number;
   onProgress?: (status: VideoRetrieveStatus) => void;
+  /** Prompt text passed to VeniceRejectionError for context. */
+  prompt?: string;
+  /** Override the default silent-reject byte threshold for this poll. */
+  silentRejectThreshold?: number;
+  /** Skip the silent-reject check (e.g. for low-resolution or short clips). */
+  skipSilentRejectCheck?: boolean;
 }
 
 /**
@@ -155,6 +162,9 @@ export async function pollVideoResult(
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     maxPollAttempts = DEFAULT_MAX_POLL_ATTEMPTS,
     onProgress,
+    prompt,
+    silentRejectThreshold,
+    skipSilentRejectCheck,
   } = options;
 
   for (let attempt = 0; attempt < maxPollAttempts; attempt++) {
@@ -166,6 +176,13 @@ export async function pollVideoResult(
     );
 
     if (Buffer.isBuffer(response.value)) {
+      if (!skipSilentRejectCheck) {
+        assertNotSilentRejectVideo(response.value, {
+          model,
+          prompt,
+          threshold: silentRejectThreshold,
+        });
+      }
       return response.value;
     }
 
@@ -222,6 +239,7 @@ export async function generateVideo(
     pollIntervalMs,
     maxPollAttempts,
     onProgress,
+    prompt: options.prompt,
   });
 
   await writeFile(outputPath, videoBuffer);
