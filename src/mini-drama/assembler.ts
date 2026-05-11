@@ -13,6 +13,7 @@ import {
 import { loudnessNormalize, resolveAudioMix } from './audio-mix.js';
 import { renameSync } from 'node:fs';
 import type { AudioMixDefaults } from '../series/types.js';
+import { dialogueFileForShot, shotKey } from './shot-paths.js';
 
 export interface ShotTrim {
   shotNumber: number;
@@ -268,19 +269,33 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
     await mkdir(tmpDir, { recursive: true });
 
     processedFiles = [];
+    let missing = 0;
     for (const videoPath of normalizedFiles) {
       const shotName = basename(videoPath, '.mp4');
+      // EXT-8: use the canonical path builder so suffixed inserts like
+      // "3b" / "3c" map to dialogue-shot-003b.mp3 / 003c.mp3. Filenames
+      // emitted by the planner are already padded, but go through the
+      // builder anyway so the contract is enforced everywhere.
       const shotNum = shotName.replace('shot-', '');
-      const dialoguePath = join(dialogueDir, `dialogue-shot-${shotNum}.mp3`);
+      const dialoguePath = dialogueFileForShot(dialogueDir, shotNum);
 
       if (existsSync(dialoguePath)) {
         const processedPath = join(tmpDir, `${shotName}-voiced.mp4`);
         replaceDialogueInShot(videoPath, dialoguePath, processedPath, nativeAudioVolume);
         processedFiles.push(processedPath);
-        console.log(`    ${shotName}: dialogue replaced`);
+        console.log(`    ${shotName}: dialogue replaced (${shotKey(shotNum)})`);
       } else {
         processedFiles.push(videoPath);
+        // EXT-8: warn loudly on fall-through. The Glass v4 bug was silent
+        // because every `existsSync` returned false without a peep. A
+        // single console.warn here would have turned a missing-25-seconds
+        // silent failure into something someone noticed during the render.
+        console.warn(`    ${shotName}: no dialogue file at ${dialoguePath} — using native audio`);
+        missing += 1;
       }
+    }
+    if (missing > 0) {
+      console.warn(`  EXT-8: ${missing} shot(s) had no dialogue track. Verify intent — the placement loop falls through silently otherwise.`);
     }
   }
 
