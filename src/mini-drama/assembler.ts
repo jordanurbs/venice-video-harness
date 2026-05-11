@@ -10,6 +10,9 @@ import {
   applyMusicHoldAutomation,
   type PlacementMap,
 } from './music-cues.js';
+import { loudnessNormalize, resolveAudioMix } from './audio-mix.js';
+import { renameSync } from 'node:fs';
+import type { AudioMixDefaults } from '../series/types.js';
 
 export interface ShotTrim {
   shotNumber: number;
@@ -57,6 +60,15 @@ export interface AssemblyOptions {
     fadeInSec?: number;
     holdSec?: number;
   };
+  /**
+   * EXT-6: audio-mix defaults. When supplied, a final loudnorm pass runs
+   * over the assembled master targeting `lufsTarget` integrated LUFS and
+   * `truePeakDb` dBTP. Default targets: -16 LUFS / -1 dBTP.
+   *
+   * Set to `false` (not undefined) to disable the pass explicitly — used
+   * by tests that don't want a re-encode they have to clean up.
+   */
+  audioMix?: AudioMixDefaults | false;
 }
 
 function runCommand(command: string, args: string[]): string {
@@ -496,6 +508,32 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
     const tmpDialogue = join(dirname(outputPath), '.tmp-dialogue-mix');
     if (existsSync(tmpDialogue)) rmSync(tmpDialogue, { recursive: true, force: true });
   } catch { /* best-effort */ }
+
+  // ── Step 7: EXT-6 final loudness pass ──
+  // Targets -16 LUFS / -1 dBTP by default. Skipped when audioMix === false.
+  if (options.audioMix !== false) {
+    const mix = resolveAudioMix(options.audioMix);
+    const preLoudPath = outputPath.replace(/\.mp4$/, '-pre-loudnorm.mp4');
+    try {
+      renameSync(outputPath, preLoudPath);
+      await loudnessNormalize({
+        inputPath: preLoudPath,
+        outputPath,
+        audioMix: options.audioMix,
+        videoInput: true,
+      });
+      unlinkSync(preLoudPath);
+      console.log(`  Loudness normalized to ${mix.lufsTarget} LUFS / TP ${mix.truePeakDb} dBTP`);
+    } catch (err) {
+      // If loudnorm fails (e.g. ffmpeg lacks the filter on this system),
+      // restore the pre-loudnorm master rather than leaving a half-rename
+      // mess. Surface the error so the user knows to install a newer ffmpeg.
+      if (existsSync(preLoudPath) && !existsSync(outputPath)) {
+        renameSync(preLoudPath, outputPath);
+      }
+      console.warn(`  ⚠ Loudness pass failed: ${(err as Error).message}. Delivered un-normalized master.`);
+    }
+  }
 
   const finalDur = getVideoDuration(outputPath);
   const finalBytes = statSync(outputPath).size;
