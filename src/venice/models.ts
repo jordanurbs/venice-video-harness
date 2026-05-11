@@ -46,6 +46,38 @@ export interface VideoModelSpec {
   offline: boolean;
 }
 
+// ---- Image generation prompt-length budgets (EXT-3) -----------------------
+
+/**
+ * EXT-3: Per-image-model positive-prompt length caps.
+ *
+ * Venice silently rejects requests with overly long positive prompts on
+ * certain models (observed at ~1800-2200 chars on seedream-v5-lite; the
+ * mini-drama character-reference builder used to emit 2400+ char prompts).
+ *
+ * Default cap is intentionally conservative (300 chars). Callers should
+ * keep the most-important style cue + character anchor inline and move
+ * everything else to negative_prompt.
+ */
+export const DEFAULT_MAX_POSITIVE_PROMPT_CHARS = 300;
+
+export const MAX_POSITIVE_PROMPT_CHARS: Record<string, number> = {
+  'seedream-v5-lite': 300,
+  'seedream-v5-lite-edit': 300,
+  'nano-banana-pro': 500,
+  'nano-banana-pro-edit': 500,
+  'gpt-image-2': 600,
+  'gpt-image-2-edit': 600,
+};
+
+/**
+ * Look up the positive-prompt cap for an image-generation model.
+ * Falls back to DEFAULT_MAX_POSITIVE_PROMPT_CHARS when unspecified.
+ */
+export function getMaxPositivePromptChars(modelId: string): number {
+  return MAX_POSITIVE_PROMPT_CHARS[modelId] ?? DEFAULT_MAX_POSITIVE_PROMPT_CHARS;
+}
+
 export const VIDEO_MODELS: VideoModelSpec[] = [
   // -- Wan 2.6 --
   {
