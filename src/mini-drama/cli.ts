@@ -1062,6 +1062,123 @@ program
     console.log(`Original archived as: shot-${shotNum}-pre-fix.png`);
   });
 
+// ── insert-shot (EXT-13) ─────────────────────────────────────────────
+// Splices a new shot into an existing script with a suffix-letter id
+// (3 -> 3b -> 3c) so the order of the original numeric shotNumbers is
+// preserved. Writes the new script and prints the next steps for the
+// user to run.
+//
+// Doing this in one go would require re-rendering panels + videos +
+// re-deriving the assembly's filter graph + re-emitting the FCPXML.
+// Each of those is a separate existing command. Following the harness'
+// "natural-language interface; commands compose" pattern, this command
+// only does the script-editing work and tells the user what to run next.
+program
+  .command('insert-shot')
+  .description('Insert a new shot into an episode script with a suffix-letter id (EXT-13)')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
+  .requiredOption('--after <shotId>', 'Shot id (number or suffixed string) to insert after')
+  .requiredOption('--description <text>', 'Description for the new shot (drives panel + video prompt)')
+  .option('--type <type>', 'Shot type', 'action')
+  .option('--duration <duration>', 'Shot duration (e.g. 5s)', '5s')
+  .option('--motion <motion>', 'Motion intensity: low | medium | high', 'medium')
+  .option('--characters <names>', 'Character names (comma-separated)', '')
+  .option('--dialogue <line>', 'Dialogue line (omit for action/insert shots)')
+  .option('--speaker <name>', 'Dialogue speaker name')
+  .option('--transition <name>', 'Transition into the next shot', 'CUT')
+  .action(async (opts: {
+    project: string; episode: number; after: string; description: string;
+    type: string; duration: string; motion: string;
+    characters: string; dialogue?: string; speaker?: string; transition: string;
+  }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+    const script = await loadEpisodeScript(series, opts.episode);
+    if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
+
+    // Resolve the insertion anchor. `--after 3` and `--after "3b"` both work.
+    const afterNumeric = parseInt(opts.after, 10);
+    const afterSuffix = opts.after.slice(String(afterNumeric).length);
+    const anchorIdx = script.shots.findIndex(s =>
+      s.shotNumber === afterNumeric && (s.shotIdSuffix ?? '') === afterSuffix,
+    );
+    if (anchorIdx < 0) {
+      console.error(`Shot ${opts.after} not found in episode ${opts.episode}.`);
+      process.exit(1);
+    }
+
+    // Find the next free suffix letter for this shotNumber. The first
+    // insert after shot N gets suffix "b" (shot N stays unsuffixed = "a").
+    const usedSuffixes = new Set(
+      script.shots
+        .filter(s => s.shotNumber === afterNumeric)
+        .map(s => s.shotIdSuffix ?? ''),
+    );
+    let candidate = '';
+    for (const letter of 'bcdefghijklmnopqrstuvwxyz') {
+      if (!usedSuffixes.has(letter)) { candidate = letter; break; }
+    }
+    if (!candidate) {
+      console.error(`No free suffix letters left for shotNumber ${afterNumeric}.`);
+      process.exit(1);
+    }
+
+    const characters = opts.characters
+      ? opts.characters.split(',').map(s => s.trim()).filter(Boolean)
+      : [];
+    const dialogue = opts.dialogue
+      ? { character: opts.speaker ?? characters[0] ?? 'NARRATOR', line: opts.dialogue }
+      : null;
+
+    const motion = (opts.motion as 'low' | 'medium' | 'high');
+    const validMotions = new Set(['low', 'medium', 'high']);
+    if (!validMotions.has(motion)) {
+      console.error(`--motion must be one of: low | medium | high`);
+      process.exit(1);
+    }
+
+    const newShot = {
+      shotNumber: afterNumeric,
+      shotIdSuffix: candidate,
+      type: opts.type as 'establishing' | 'dialogue' | 'action' | 'reaction' | 'insert' | 'close-up',
+      duration: opts.duration,
+      videoModel: 'action' as const,
+      description: opts.description,
+      characters,
+      dialogue,
+      sfx: null,
+      cameraMovement: 'static',
+      transition: opts.transition,
+      motion,
+    };
+
+    // Archive the pre-insert script so we can rollback.
+    const episodeDir = getEpisodeDir(series, opts.episode);
+    const archivePath = join(episodeDir, `script-pre-insert-${Date.now()}.json`);
+    await writeFile(archivePath, JSON.stringify(script, null, 2), 'utf-8');
+
+    // Splice the new shot in directly after the anchor.
+    script.shots.splice(anchorIdx + 1, 0, newShot);
+    await saveEpisodeScript(series, script);
+
+    const newId = `${afterNumeric}${candidate}`;
+    console.log(`Inserted shot ${newId} after shot ${opts.after} in episode ${opts.episode}.`);
+    console.log(`  Archived previous script: ${basename(archivePath)}`);
+    console.log(`  Shots now: ${script.shots.length}`);
+    console.log(`\nNext steps:`);
+    console.log(`  1. Generate panel for the new shot:`);
+    console.log(`     storyboard-episode -p ${series.outputDir} -e ${opts.episode}`);
+    console.log(`     (existing panels are skipped unless --force; only the new shot will render)`);
+    console.log(`  2. Re-render the video for the new shot:`);
+    console.log(`     generate-videos -p ${series.outputDir} -e ${opts.episode}`);
+    console.log(`  3. Re-assemble the episode:`);
+    console.log(`     assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+    if (dialogue) {
+      console.log(`  4. (Dialogue shot) generate the TTS line for shot ${newId} before re-assembling.`);
+    }
+  });
+
 // ── approve-script ───────────────────────────────────────────────────
 program
   .command('approve-script')
