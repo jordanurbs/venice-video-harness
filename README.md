@@ -390,6 +390,47 @@ npx tsx scripts/render-overlay.ts \
 
 See [`.claude/skills/video-editing/SKILL.md`](.claude/skills/video-editing/SKILL.md) for the full philosophy, EDL format, and editing-specific anti-patterns.
 
+## Timeline Export (NLE round-trip)
+
+After an episode is rendered, the harness can export the assembled timeline as an XML file that imports into your editor of choice. Every video segment, dialogue clip, SFX clip, and music cue lands on its own track so you can fine-tune cuts, audio balance, and color in the NLE instead of editing the assembler's ffmpeg filter graph.
+
+```bash
+# Final Cut Pro X (FCPXML 1.10) — the original EXT-14 path
+mini-drama export-timeline -p output/<project> -e 1 --format fcpxml
+
+# Adobe Premiere Pro (Final Cut Pro 7 XML / xmeml v5)
+mini-drama export-timeline -p output/<project> -e 1 --format premiere
+
+# DaVinci Resolve (Resolve-tuned FCPXML 1.10)
+mini-drama export-timeline -p output/<project> -e 1 --format davinci
+```
+
+Output filename mirrors the format:
+
+| Format | File | Import path |
+|--------|------|-------------|
+| `fcpxml`   | `episode-NNN.fcpxml`         | FCP X → File → Import → XML… |
+| `premiere` | `episode-NNN.premiere.xml`   | Premiere → File → Import… |
+| `davinci`  | `episode-NNN.resolve.fcpxml` | Resolve → File → Import → Timeline… |
+
+Lane layout (same across formats):
+
+- Primary video track — every rendered shot in spine order, segment audio muted (-96 dB)
+- Lane −1 (dialogue) — one clip per shot from `audio/dialogue-shot-NNN.mp3`
+- Lane −2 (SFX) — one clip per `audio/sfx/*.mp3` matched to its shot
+- Lane −3 (music) — `audio/music.mp3` spanning the full sequence
+
+The `export-fcpxml` command from EXT-14 is kept as a thin alias of `export-timeline --format fcpxml` for back-compat.
+
+**NLE XML implementations vary by editor version.** If your editor refuses the import, or any clip lands on the wrong track or wrong timecode, please [open a GitHub Issue](https://github.com/jordanurbs/venice-video-harness/issues/new) with:
+
+- editor name + exact version
+- the format you exported (`fcpxml` / `premiere` / `davinci`)
+- the generated XML file attached (or relevant snippet)
+- what FCP X / Premiere / Resolve reported
+
+Bug reports are how we'll catch the gaps — the test fixture confirms structure, but it can't substitute for real NLE import paths.
+
 ## Commands, Agents, and Skills
 
 ### Workflow Commands (`.claude/commands/`)
