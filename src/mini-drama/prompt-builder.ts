@@ -168,6 +168,23 @@ export function resolveVideoModel(
     };
   }
 
+  // EXT-7 + EXT-11: dialogue shots whose speaker is a non-narrator visible
+  // character with low/medium motion route to Wan 2.7 i2v for lip-sync.
+  // High-motion dialogue stays on R2V because Wan 2.7 prioritizes motion
+  // over reference adherence (hair color shifts, shirt pattern simplifies,
+  // eyes change) when forced to handle big movement.
+  const lipSyncModel = series.videoDefaults.lipSyncModel;
+  if (lipSyncModel && shotWantsLipSync(shot) && shot.characters.length <= 1) {
+    return {
+      modelId: lipSyncModel,
+      upgraded: true,
+      reason: 'single-speaker dialogue, low/medium motion — Wan 2.7 lip-sync',
+      autoUseElements: false,
+      autoUseReferenceImages: false,
+      useImageTags: false,
+    };
+  }
+
   // 3+ characters with a flat-ref R2V model (e.g. Seedance) — fall back to
   // Kling O3 R2V which supports structured elements for better per-character
   // identity separation when reference image budget is tight.
@@ -194,6 +211,20 @@ export function resolveVideoModel(
     autoUseReferenceImages: MODELS_SUPPORTING_REFERENCE_IMAGES.has(consistencyModel),
     useImageTags: MODELS_USING_IMAGE_TAGS.has(consistencyModel),
   };
+}
+
+/**
+ * EXT-11: does this shot want lip-sync routing? A dialogue shot whose
+ * speaker is not the narrator and whose face is (or might be) visible,
+ * with motion not classified as 'high'.
+ */
+function shotWantsLipSync(shot: ShotScript): boolean {
+  if (!shot.dialogue) return false;
+  const speaker = shot.dialogue.character.toUpperCase();
+  if (speaker === 'NARRATOR' || speaker === 'V.O.' || speaker === 'VO') return false;
+  if (shot.motion === 'high') return false;
+  if (shot.faceVisible === false) return false;
+  return true;
 }
 
 export function buildImagePrompt(
