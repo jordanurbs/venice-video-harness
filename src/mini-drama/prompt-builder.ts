@@ -21,6 +21,7 @@ import {
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { parseShotDuration } from './generation-planner.js';
+import { getMaxPositivePromptChars } from '../venice/models.js';
 
 export interface MiniDramaImagePrompt {
   prompt: string;
@@ -551,21 +552,95 @@ export function buildKlingMultiShotPrompt(
   };
 }
 
+/**
+ * EXT-3: Build a character reference prompt within a per-model length cap.
+ *
+ * Returns just the positive prompt (string) for backwards compatibility.
+ * For the structured form that includes the recommended negative-prompt
+ * additions, use `buildCharacterReferencePromptParts`.
+ */
 export function buildCharacterReferencePrompt(
   char: MiniDramaCharacter,
   aesthetic: AestheticProfile,
   angle: 'front' | 'three-quarter' | 'profile' | 'full-body',
+  options?: { model?: string; maxChars?: number },
 ): string {
+  return buildCharacterReferencePromptParts(char, aesthetic, angle, options).positive;
+}
+
+/**
+ * EXT-3: Structured character-reference prompt that splits style and
+ * "no realism" cues into the negative prompt, keeping the positive prompt
+ * under the per-model cap.
+ *
+ * Discovered: above ~1800-2200 chars on seedream-v5-lite Venice silently
+ * rejects the request (panel returns < 30KB; see EXT-2). Moving STYLE
+ * REMINDER content to negative_prompt drops 60-80 chars and stops the
+ * silent rejections in production (Glass panel re-generation, v3 -> v4).
+ *
+ * The positive prompt keeps the most-important style cue + character
+ * anchor inline; everything else moves to negative_prompt.
+ */
+export function buildCharacterReferencePromptParts(
+  char: MiniDramaCharacter,
+  aesthetic: AestheticProfile,
+  angle: 'front' | 'three-quarter' | 'profile' | 'full-body',
+  options?: { model?: string; maxChars?: number },
+): { positive: string; negativeAdditions: string[] } {
   const baseTraits = char.baseTraits ?? (char.gender === 'female' ? FEMALE_BASE_TRAITS : MALE_BASE_TRAITS);
+  const cap = options?.maxChars
+    ?? getMaxPositivePromptChars(options?.model ?? 'seedream-v5-lite');
 
   const anglePrompts: Record<string, string> = {
-    'front': 'front-facing portrait, looking directly at camera, centered, studio lighting, neutral background',
-    'three-quarter': 'three-quarter view portrait, 45 degree angle, studio lighting, neutral background',
-    'profile': 'side profile portrait, 90 degree angle, studio lighting, neutral background',
-    'full-body': 'full body shot, head to toe, standing pose, studio lighting, neutral background',
+    'front': 'front portrait, looking at camera, centered, studio lighting, neutral background',
+    'three-quarter': 'three-quarter view, 45 degree angle, studio lighting, neutral background',
+    'profile': 'side profile, 90 degree angle, studio lighting, neutral background',
+    'full-body': 'full body, head to toe, standing pose, studio lighting, neutral background',
   };
 
-  const noLayout = 'single portrait only, no text, no labels, no annotations, no inset panels, no detail callouts, no multi-view layout';
-  const aestheticStr = buildAestheticString(aesthetic);
-  return `STYLE: ${aestheticStr}. ${anglePrompts[angle]}. ${char.fullDescription}. ${baseTraits}. ${noLayout}. ${char.wardrobe}. STYLE REMINDER: ${aesthetic.style}, ${aesthetic.filmStock}.`;
+  // Style is a single front-loaded cue; the rest (palette, lensCharacteristics,
+  // film stock) move to negativeAdditions as anti-realism guards.
+  const styleCue = aesthetic.style;
+
+  // Build prompt parts in priority order. We greedily append until the cap
+  // is hit; the tail is dropped and the consumer can choose to push the
+  // dropped pieces into the negative prompt.
+  const parts = [
+    `STYLE: ${styleCue}.`,
+    `${anglePrompts[angle]}.`,
+    `${char.fullDescription}.`,
+    `${baseTraits}.`,
+    `${char.wardrobe}.`,
+  ];
+  let positive = '';
+  for (const p of parts) {
+    const candidate = positive ? `${positive} ${p}` : p;
+    if (candidate.length > cap) break;
+    positive = candidate;
+  }
+  // If the very first part already exceeds the cap, hard-truncate.
+  if (!positive) {
+    positive = parts[0].slice(0, cap);
+  }
+
+  // Style-reminder content + photorealism guards belong on the negative side.
+  // They steer the model away from the wrong rendering family without eating
+  // positive-prompt budget.
+  const negativeAdditions = [
+    aesthetic.filmStock ? `not ${aesthetic.filmStock}` : null,
+    aesthetic.palette ? `not ${aesthetic.palette}` : null,
+    'photorealistic',
+    'photograph',
+    'photo',
+    '3D render',
+    'Pixar',
+    'no text',
+    'no labels',
+    'no annotations',
+    'no inset panels',
+    'no detail callouts',
+    'no multi-view layout',
+  ].filter((s): s is string => Boolean(s));
+
+  return { positive, negativeAdditions };
 }

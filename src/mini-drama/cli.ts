@@ -42,7 +42,7 @@ import { listVoices, filterVoices, auditionVoices } from '../venice/voices.js';
 import { generateDialogueForShots, generateSoundEffect, generateMusic } from '../venice/audio.js';
 import type { DialogueLine } from '../venice/audio.js';
 
-import { buildImagePrompt, buildCharacterReferencePrompt } from './prompt-builder.js';
+import { buildImagePrompt, buildCharacterReferencePromptParts } from './prompt-builder.js';
 import { generateEpisodeVideos } from './video-generator.js';
 import { generateSubtitles, saveSrt } from './subtitle-generator.js';
 import { fixPanel, refineWithReferences, refineStyleConsistency } from './panel-fixer.js';
@@ -300,12 +300,24 @@ program
       console.log(`Generating reference images for ${character.name}...`);
 
       for (let i = 0; i < angles.length; i++) {
-        const prompt = buildCharacterReferencePrompt(character, series.aesthetic, angles[i]);
+        // EXT-3: structured prompt keeps the positive prompt under the
+        // model's silent-reject ceiling and pushes style-reminder cues
+        // into negative_prompt.
+        const { positive: prompt, negativeAdditions } =
+          buildCharacterReferencePromptParts(character, series.aesthetic, angles[i], {
+            model: 'seedream-v5-lite',
+          });
+        const baseNegatives = [
+          'deformed', 'blurry', 'bad anatomy', 'low quality',
+          'multiple people', 'watermark',
+          'character reference sheet', 'comic panels', 'panel borders',
+        ];
+        const negativePrompt = [...baseNegatives, ...negativeAdditions].join(', ');
 
         try {
           const response = await generateImage(client, {
             prompt,
-            negative_prompt: 'deformed, blurry, bad anatomy, low quality, multiple people, text, watermark, character reference sheet, annotations, labels, inset panels, detail callouts, multi-view layout, comic panels, panel borders, photorealistic, photograph, photo',
+            negative_prompt: negativePrompt,
             resolution: '1K',
             aspect_ratio: '1:1',
             steps: 30,
