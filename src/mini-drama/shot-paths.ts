@@ -1,12 +1,11 @@
 // ---------------------------------------------------------------------------
-// EXT-8: canonical shot-id path builders.
+// Canonical shot-id path builders.
 //
-// The Glass v4 -> v5 bug: assembly scripts keyed file lookups by unpadded
+// Failure mode this prevents: assembly scripts keyed file lookups by unpadded
 // shot ids (`"3"`, `"3b"`, `"3c"`, `"4"`) while dialogue files on disk are
-// zero-padded (`dialogue-shot-003.mp3`, `dialogue-shot-003b.mp3`). All four
-// `existsSync` checks silently returned false, the for-loop continued past
-// every iteration, and the v4 master shipped with 25 seconds of Act 1
-// narration missing.
+// zero-padded (`dialogue-shot-003.mp3`, `dialogue-shot-003b.mp3`). Every
+// `existsSync` returned false silently, the for-loop continued past every
+// iteration, and the master shipped with the relevant narration missing.
 //
 // Fix: every harness path that depends on a shot id goes through this
 // module. Numeric ids are zero-padded to 3 digits; suffix letters
@@ -30,7 +29,7 @@ export type ShotId = number | string;
 export type PlacementMap = Record<string, { startSec: number; endSec: number }>;
 
 /**
- * EXT-8: canonical shot-id key. Numeric portions are zero-padded to 3
+ * canonical shot-id key. Numeric portions are zero-padded to 3
  * digits; suffix letters ("b", "c", ...) are preserved as-is.
  *
  *   shotKey(3)       -> "003"
@@ -61,7 +60,7 @@ export function videoFileForShot(videoDir: string, id: ShotId): string {
 }
 
 /**
- * EXT-8: place a list of narration cues into the timeline by shot id,
+ * place a list of narration cues into the timeline by shot id,
  * not by master timestamp. Returns the resolved placement records and an
  * array of warnings — when any cue can't be placed (file missing, shot id
  * not in the placement map), the warning is collected so the assembler
@@ -126,10 +125,11 @@ export function placeNarrationCues(opts: {
 }
 
 /**
- * EXT-8: sanity assertion. After placing narration cues, callers should
- * verify that placements within a contiguous region have distinct startSec
- * values — collapsing placements would have caught the Glass v4 silent bug
- * (4 narrator beats collapsed to 0 actual placements).
+ * Sanity assertion. After placing narration cues, callers should verify
+ * that placements within a contiguous region have distinct startSec values.
+ * Collapsing placements (e.g. N narrator beats collapsing to 0 actual
+ * placements) typically indicates a fall-through in the placement loop —
+ * see the module-level docstring.
  *
  * Returns the array of *suspect* groupings (key = startSec rounded to 2dp,
  * value = colliding cue keys) so the caller can decide whether to warn,

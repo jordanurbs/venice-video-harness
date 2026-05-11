@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// EXT-8 smoke test for src/mini-drama/shot-paths.ts.
+// Smoke test for src/mini-drama/shot-paths.ts.
 // Run with `node tests/test-shot-paths.mjs` after `npm run build`.
 
 import {
@@ -66,4 +66,4 @@ if (failed > 0) {
   console.error(`\n${failed} assertion(s) failed.`);
   process.exit(1);
 }
-console.log('\nAll EXT-8 assertions passed.');
+console.log('\nAll assertions passed.');

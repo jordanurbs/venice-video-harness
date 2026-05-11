@@ -300,7 +300,7 @@ program
       console.log(`Generating reference images for ${character.name}...`);
 
       for (let i = 0; i < angles.length; i++) {
-        // EXT-3: structured prompt keeps the positive prompt under the
+        // structured prompt keeps the positive prompt under the
         // model's silent-reject ceiling and pushes style-reminder cues
         // into negative_prompt.
         const { positive: prompt, negativeAdditions } =
@@ -1062,7 +1062,7 @@ program
     console.log(`Original archived as: shot-${shotNum}-pre-fix.png`);
   });
 
-// ── insert-shot (EXT-13) ─────────────────────────────────────────────
+// ── insert-shot ─────────────────────────────────────────────
 // Splices a new shot into an existing script with a suffix-letter id
 // (3 -> 3b -> 3c) so the order of the original numeric shotNumbers is
 // preserved. Writes the new script and prints the next steps for the
@@ -1075,7 +1075,7 @@ program
 // only does the script-editing work and tells the user what to run next.
 program
   .command('insert-shot')
-  .description('Insert a new shot into an episode script with a suffix-letter id (EXT-13)')
+  .description('Insert a new shot into an episode script with a suffix-letter id')
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .requiredOption('--after <shotId>', 'Shot id (number or suffixed string) to insert after')
@@ -1951,10 +1951,10 @@ program
     console.log(`\nFinal episode: ${outputPath}`);
   });
 
-// ── export-timeline (EXT-14 + EXT-15) ─────────────────────────────────
+// ── export-timeline ─────────────────────────────────
 // Builds an XML timeline from the rendered shots + audio in an episode
 // directory. Output format selected via --format:
-//   fcpxml   — Final Cut Pro X (FCPXML 1.10), the original EXT-14 path
+//   fcpxml   — Final Cut Pro X (FCPXML 1.10), the original  path
 //   premiere — Adobe Premiere Pro (xmeml v5)
 //   davinci  — DaVinci Resolve (tuned FCPXML 1.10; drops colorSpace,
 //              raw file:// paths, mono/stereo srcCh hint)
@@ -2019,7 +2019,7 @@ async function runTimelineExport(opts: {
   }
   const masterDur = cursor;
 
-  // Placement map keyed by shot id (EXT-8 zero-padded form).
+  // Placement map keyed by shot id ( zero-padded form).
   const placementMap: Record<string, { startSec: number; endSec: number }> = {};
   for (const seg of segments) {
     const m = seg.label.match(/^shot-(\d+)([a-zA-Z]*)/);
@@ -2107,7 +2107,7 @@ async function runTimelineExport(opts: {
 
 program
   .command('export-timeline')
-  .description('Export an XML timeline for FCP X / Premiere / DaVinci Resolve (EXT-14 + EXT-15)')
+  .description('Export an XML timeline for FCP X / Premiere / DaVinci Resolve')
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--format <fmt>', 'fcpxml | premiere | davinci', 'fcpxml')
@@ -2126,7 +2126,7 @@ program
     await runTimelineExport({ ...opts, format: opts.format as ExportFormat });
   });
 
-// Back-compat alias kept so anyone scripted against EXT-14's command name
+// Back-compat alias kept so anyone scripted against 's command name
 // still works. Forwards to runTimelineExport with format=fcpxml.
 program
   .command('export-fcpxml')

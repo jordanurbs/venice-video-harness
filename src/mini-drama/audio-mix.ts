@@ -1,13 +1,13 @@
 // ---------------------------------------------------------------------------
-// EXT-5 + EXT-6: shared audio-mix helpers.
+// Shared audio-mix helpers.
 //
-// EXT-5 — trim every raw SFX clip to a max duration and apply a short fade-
-// out so fire crackle doesn't bleed across cuts and panic shouts don't
-// overlap dialogue.
+// SFX trim + fade — trims every raw SFX clip to a max duration and applies
+// a short fade-out, so fire crackle doesn't bleed across cuts and panic
+// shouts don't overlap dialogue.
 //
-// EXT-6 — final loudness normalization. Default targets are -16 LUFS
-// integrated, true-peak ≤ -1 dBTP. Applied as the last step of the final
-// encode so all upstream gain decisions are consistent.
+// Loudness normalization — final pass targeting -16 LUFS integrated /
+// true-peak ≤ -1 dBTP. Applied as the last step of the final encode so all
+// upstream gain decisions are consistent.
 //
 // The assembler module consumes these via its `audioMix` options. Standalone
 // scripts can call the helpers directly.
@@ -51,7 +51,7 @@ export interface SfxTrimOptions {
 }
 
 /**
- * EXT-5: trim a single SFX clip and apply a fade-out.
+ * Trim a single SFX clip and apply a fade-out.
  *
  * Raw SFX clips from elevenlabs-sound-effects-v2 are 3-6 seconds long.
  * Without trimming, fire crackle bleeds across cuts and panic shouts overlap
@@ -82,7 +82,7 @@ export async function trimAndFadeSfx(opts: {
 }
 
 /**
- * Apply EXT-5 trim+fade to every SFX clip in a directory.
+ * Apply trim+fade to every SFX clip in a directory.
  *
  * - The output directory mirrors the input layout.
  * - Per-clip overrides can be supplied via the `perFile` map keyed on the
@@ -117,9 +117,8 @@ export async function trimAndFadeSfxBatch(opts: {
 }
 
 /**
- * EXT-6: final loudness normalization to a target integrated LUFS and
- * true-peak ceiling. Uses ffmpeg's `loudnorm` filter, which the EBU R128
- * implementation underneath.
+ * Final loudness normalization to a target integrated LUFS and true-peak
+ * ceiling. Uses ffmpeg's `loudnorm` filter (EBU R128 implementation).
  *
  * Two-pass loudnorm is more accurate but the single-pass form is fine for
  * a final delivery encode — the input is already at a reasonable level

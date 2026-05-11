@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// EXT-14: FCPXML 1.10 export (Final Cut Pro X).
+// FCPXML 1.10 export (Final Cut Pro X).
 //
 // Emits an FCPXML 1.10 that imports cleanly into FCP X 10.7+ with:
 //   - one <format> declaration sized to the series' aspect ratio + fps
@@ -18,8 +18,6 @@
 //     -3 music (music.music).
 //   - time format: rational `<frames>/<fps>s` (e.g. 4345/24s = 181.04s @24fps).
 //     Snap to frame boundary.
-//
-// Working reference: scripts/glass-export-fcpxml-v6.mjs.
 // ---------------------------------------------------------------------------
 
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -50,7 +48,7 @@ interface AssetRecord {
  *
  * The function is pure orchestration — segment timing and audio placement
  * decisions must already be made by the caller. The standard placement
- * pattern (shot-anchored offsets from EXT-8 + music cues from EXT-4) builds
+ * pattern (shot-anchored offsets from  + music cues from ) builds
  * the inputs naturally.
  */
 export async function exportFcpxml(opts: TimelineExportOptions): Promise<string> {

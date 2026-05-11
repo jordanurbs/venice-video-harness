@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// EXT-4 + EXT-12: per-act music cues with ffmpeg crossfades.
+// Per-act music cues with ffmpeg crossfades.
 //
 // Replaces the assembler's single-static-bed model with an ordered list of
 // cues, each anchored to a shot id. Cues crossfade at their configured fade
@@ -167,7 +167,7 @@ export async function renderMusicCuesTrack(opts: {
 }
 
 /**
- * EXT-12: derive a per-shot volume curve for music automation.
+ * derive a per-shot volume curve for music automation.
  *
  * Combines `shot.musicHold` with the containing cue's `musicHold` and
  * returns an ffmpeg `volume=` expression suitable for layering over the

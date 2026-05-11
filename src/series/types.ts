@@ -38,11 +38,10 @@ export interface VideoModelDefaults {
    */
   seedanceCompatibility?: SeedanceCompatibilityMode;
   /**
-   * EXT-1: Default lip-sync model for dialogue shots whose character is a
-   * non-narrator with a visible face. Today defaults to
-   * `wan-2-7-image-to-video`. The planner only routes to this model when
-   * `shot.motion !== 'high'` (motion classification lives in EXT-11). High-
-   * motion dialogue stays on the R2V model for identity preservation.
+   * Default lip-sync model for dialogue shots whose character is a
+   * non-narrator with a visible face. Defaults to `wan-2-7-image-to-video`.
+   * The planner only routes to this model when `shot.motion !== 'high'`;
+   * high-motion dialogue stays on the R2V model for identity preservation.
    */
   lipSyncModel?: string;
 }
@@ -98,24 +97,23 @@ export interface EpisodeScript {
   status?: 'draft' | 'approved';
   shots: ShotScript[];
   /**
-   * EXT-4: optional per-act music cues. When set, the assembler renders
-   * each cue and ffmpeg-crossfades between adjacent cues at their fade
-   * points. The single static music-bed path on the assembler options is
-   * kept for back-compat — when both are present, cues win.
+   * Optional per-act music cues. When set, the assembler renders each cue
+   * and ffmpeg-crossfades between adjacent cues at their fade points. The
+   * single static music-bed path on the assembler options is kept for
+   * back-compat — when both are present, cues win.
    */
   musicCues?: MusicCueSpec[];
   /**
-   * EXT-6: audio-mix defaults for this episode. Overrides the assembler's
-   * built-in defaults. Optional — sensible -16 LUFS targeting is applied
-   * when omitted.
+   * Audio-mix defaults for this episode. Overrides the assembler's built-in
+   * defaults. Optional — sensible -16 LUFS targeting is applied when omitted.
    */
   audioMix?: AudioMixDefaults;
 }
 
 /**
- * EXT-4: per-act music cue. References shot ids by **string** so that
- * inserts like "3b" / "3c" can be addressed without coercion bugs (see EXT-8).
- * The assembler converts shot-id → start/end seconds via the placementMap
+ * Per-act music cue. References shot ids by **string** so that suffixed
+ * inserts like "3b" / "3c" can be addressed without coercion bugs. The
+ * assembler converts shot-id → start/end seconds via the placementMap
  * built during segment iteration.
  */
 export interface MusicCueSpec {
@@ -138,7 +136,7 @@ export interface MusicCueSpec {
   /** Fade-out in seconds. Defaults to 1.5. */
   fadeOut?: number;
   /**
-   * EXT-12: how this music cue behaves over the underlying score.
+   * How this music cue behaves over the underlying score:
    *   - 'sustain' — flat bed (default)
    *   - 'swell'   — ramp +4 dB across the cue
    *   - 'drop'    — duck to -inf for the cue's range
@@ -155,7 +153,7 @@ export interface MusicCueSpec {
 }
 
 /**
- * EXT-5 + EXT-6: episode-level audio-mix defaults.
+ * Episode-level audio-mix defaults.
  */
 export interface AudioMixDefaults {
   /** Cap any SFX clip to this many seconds. Defaults to 2.0. */
@@ -217,8 +215,8 @@ export interface ShotScript {
   mustStaySingle?: boolean;
   continuityPriority?: 'identity' | 'continuity' | 'balanced';
   /**
-   * EXT-11: per-shot motion intensity. Drives planner routing between
-   *   - Wan 2.7 i2v (lip-sync) for low/medium motion dialogue shots, and
+   * Per-shot motion intensity. Drives planner routing between:
+   *   - Wan 2.7 i2v (lip-sync) for low/medium-motion dialogue shots, and
    *   - Seedance R2V (identity preservation, no lip-sync) for high motion.
    *
    * Defaults to `'medium'` when unset. Camera prompt suggestions:
@@ -228,10 +226,9 @@ export interface ShotScript {
    */
   motion?: 'low' | 'medium' | 'high';
   /**
-   * EXT-9: whether the character's face is visible in the shot.
-   * Used by the planner to decide if lip-sync makes sense. When false,
-   * dialogue-bearing shots can stay on Seedance because there's no mouth
-   * to animate.
+   * Whether the character's face is visible in the shot. Used by the
+   * planner to decide if lip-sync makes sense. When false, dialogue-bearing
+   * shots can stay on Seedance because there's no mouth to animate.
    */
   faceVisible?: boolean;
   titleOverlay?: {
@@ -253,16 +250,16 @@ export interface ShotScript {
   /** Video URL to use as reference input for models that support it. */
   videoUrl?: string;
   /**
-   * EXT-12: per-shot music-cue automation. Layered on top of the
-   * containing `MusicCueSpec.musicHold`. Set when a story beat (reveal,
-   * lightbulb moment, drop) needs audio emphasis at this shot.
+   * Per-shot music-cue automation. Layered on top of the containing
+   * `MusicCueSpec.musicHold`. Set when a story beat (reveal, lightbulb
+   * moment, drop) needs audio emphasis at this shot.
    */
   musicHold?: 'sustain' | 'swell' | 'drop' | 'stinger';
   /**
-   * EXT-13: optional suffix letter for inserted shots. When set, the
-   * canonical shot id becomes `shotNumber + shotIdSuffix` — for example,
-   * shotNumber 3 with shotIdSuffix "b" → "3b" → key "003b". Inserted
-   * shots use this so the order of the original shotNumbers is preserved.
+   * Optional suffix letter for inserted shots. When set, the canonical
+   * shot id becomes `shotNumber + shotIdSuffix` — for example, shotNumber 3
+   * with shotIdSuffix "b" → "3b" → key "003b". Inserted shots use this so
+   * the order of the original shotNumbers is preserved.
    */
   shotIdSuffix?: string;
 }
@@ -316,11 +313,11 @@ export const KLING_R2V_MODEL = 'kling-o3-standard-reference-to-video';
 export const KLING_MULTISHOT_MODEL = 'kling-o3-pro-image-to-video';
 
 /**
- * EXT-1: default lip-sync model. Used by the planner for dialogue shots whose
+ * Default lip-sync model. Used by the planner for dialogue shots whose
  * character is a non-narrator with a visible face and motion !== 'high'.
- * Wan 2.7 i2v inherits the aspect ratio from the input image and synthesizes
- * lip-sync from `audio_url`. R2V dialogue (high motion or multi-speaker) stays
- * on Seedance for identity preservation — see EXT-11.
+ * Wan 2.7 i2v inherits the aspect ratio from the input image and
+ * synthesizes lip-sync from `audio_url`. R2V dialogue (high motion or
+ * multi-speaker) stays on Seedance for identity preservation.
  */
 export const DEFAULT_LIP_SYNC_MODEL = 'wan-2-7-image-to-video';
 
@@ -410,8 +407,8 @@ export const MODELS_SUPPORTING_END_IMAGE = new Set([
   'kling-2.6-pro-image-to-video',
   'kling-2.5-turbo-pro-image-to-video',
   'pixverse-v5.6-transition',
-  // EXT-1: Wan 2.7 i2v supports `end_image_url` for keyframe bookending —
-  // helps anchor identity drift across low-motion lip-sync clips.
+  // Wan 2.7 i2v supports `end_image_url` for keyframe bookending — helps
+  // anchor identity drift across low-motion lip-sync clips.
   'wan-2-7-image-to-video',
 ]);
 
@@ -426,14 +423,14 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   'wan-2.6-flash-image-to-video',
   'wan-2.5-preview-image-to-video',
   'wan-2.5-preview-text-to-video',
-  // EXT-1: Wan 2.7 lip-sync family
+  // Wan 2.7 lip-sync family
   'wan-2-7-image-to-video',
   'wan-2-7-text-to-video',
   'wan-2-7-video-to-video',
 ]);
 
 /**
- * EXT-1: Models that accept per-reference `audio_url` inside `elements[]`.
+ * Models that accept per-reference `audio_url` inside `elements[]`.
  *
  * Wan 2.7 R2V is the only one today. Each `elements[].audio_url` drives a
  * different speaker's lip-sync inside a single render — useful for
@@ -453,10 +450,10 @@ export interface VideoElement {
   referenceImageUrls?: string[];
   videoUrl?: string;
   /**
-   * EXT-1: per-reference audio for Wan 2.7 R2V (`per_reference_audio: true`).
-   * When set, this element's character lip-syncs to the supplied audio while
-   * other characters in the same render stay silent. NOT used by models that
-   * lack `MODELS_SUPPORTING_PER_REFERENCE_AUDIO`.
+   * Per-reference audio for Wan 2.7 R2V (`per_reference_audio: true`).
+   * When set, this element's character lip-syncs to the supplied audio
+   * while other characters in the same render stay silent. NOT used by
+   * models that lack `MODELS_SUPPORTING_PER_REFERENCE_AUDIO`.
    *
    * Pass as a data URL or a local file path — `audioPath` is preferred so
    * the audio pre-flight pad can run.

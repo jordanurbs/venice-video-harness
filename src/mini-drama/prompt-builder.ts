@@ -168,7 +168,7 @@ export function resolveVideoModel(
     };
   }
 
-  // EXT-7 + EXT-11: dialogue shots whose speaker is a non-narrator visible
+  // dialogue shots whose speaker is a non-narrator visible
   // character with low/medium motion route to Wan 2.7 i2v for lip-sync.
   // High-motion dialogue stays on R2V because Wan 2.7 prioritizes motion
   // over reference adherence (hair color shifts, shirt pattern simplifies,
@@ -214,7 +214,7 @@ export function resolveVideoModel(
 }
 
 /**
- * EXT-11: does this shot want lip-sync routing? A dialogue shot whose
+ * does this shot want lip-sync routing? A dialogue shot whose
  * speaker is not the narrator and whose face is (or might be) visible,
  * with motion not classified as 'high'.
  */
@@ -584,7 +584,7 @@ export function buildKlingMultiShotPrompt(
 }
 
 /**
- * EXT-3: Build a character reference prompt within a per-model length cap.
+ * Build a character reference prompt within a per-model length cap.
  *
  * Returns just the positive prompt (string) for backwards compatibility.
  * For the structured form that includes the recommended negative-prompt
@@ -600,12 +600,12 @@ export function buildCharacterReferencePrompt(
 }
 
 /**
- * EXT-3: Structured character-reference prompt that splits style and
+ * Structured character-reference prompt that splits style and
  * "no realism" cues into the negative prompt, keeping the positive prompt
  * under the per-model cap.
  *
  * Discovered: above ~1800-2200 chars on seedream-v5-lite Venice silently
- * rejects the request (panel returns < 30KB; see EXT-2). Moving STYLE
+ * rejects the request (panel returns < 30KB; see ). Moving STYLE
  * REMINDER content to negative_prompt drops 60-80 chars and stops the
  * silent rejections in production (Glass panel re-generation, v3 -> v4).
  *
