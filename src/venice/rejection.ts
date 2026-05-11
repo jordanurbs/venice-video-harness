@@ -11,7 +11,7 @@
 //   - `assertNotSilentReject{Image,Video}` helpers that throw before writing
 //     placeholder bytes to disk.
 //
-// Threshold reference values (from EXT-2):
+// Threshold reference values (from ):
 //   image: < 30_000 bytes at 1K  -> silent reject
 //   video: < 100_000 bytes at 720p/5s -> silent reject
 // ---------------------------------------------------------------------------

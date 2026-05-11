@@ -16,8 +16,6 @@
 // leading silence wastes the most-interesting visual portion on a held pose
 // before the mouth moves. Trailing silence lets the model finish speech and
 // idle (blinks, micro-motion) naturally.
-//
-// Reference implementation: scripts/glass-pad-short-dialogue.mjs.
 // ---------------------------------------------------------------------------
 
 import { execFile } from 'node:child_process';

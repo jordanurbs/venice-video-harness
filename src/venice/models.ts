@@ -46,10 +46,10 @@ export interface VideoModelSpec {
   offline: boolean;
 }
 
-// ---- Image generation prompt-length budgets (EXT-3) -----------------------
+// ---- Image generation prompt-length budgets () -----------------------
 
 /**
- * EXT-3: Per-image-model positive-prompt length caps.
+ * Per-image-model positive-prompt length caps.
  *
  * Venice silently rejects requests with overly long positive prompts on
  * certain models (observed at ~1800-2200 chars on seedream-v5-lite; the
@@ -101,7 +101,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
-  // -- Wan 2.7 (EXT-1: lip-sync via audio_url / per-reference audio) --
+  // -- Wan 2.7 (lip-sync via audio_url / per-reference audio) --
   // Live API probed 2026-05-10. Notes:
   //   - audio_url minimum duration is 3 seconds (returns HTTP 400 below).
   //   - i2v inherits aspect ratio from the input image; passing aspect_ratio
@@ -360,7 +360,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: true, supportsReferenceImages: true, supportsSceneImages: true, supportsEndImage: true,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
-  // -- Kling O3 4K (added by Glass project; not in upstream registry sync 2026-03-18) --
+  // -- Kling O3 4K (not in registry sync 2026-03-18 — added by hand) --
   {
     id: 'kling-o3-4k-text-to-video', name: 'Kling O3 4K', type: 'text-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
@@ -385,7 +385,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: true, supportsReferenceImages: true, supportsSceneImages: true, supportsEndImage: true,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
-  // -- HappyHorse 1.0 (added by Glass project; not in upstream registry sync 2026-03-18) --
+  // -- HappyHorse 1.0 (not in registry sync 2026-03-18 — added by hand) --
   {
     id: 'happyhorse-1-0-text-to-video', name: 'HappyHorse 1.0', type: 'text-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],

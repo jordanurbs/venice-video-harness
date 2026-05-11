@@ -29,7 +29,7 @@ export interface AssemblyOptions {
   musicPath?: string;
   musicVolume?: number;
   /**
-   * EXT-4: ordered list of per-act music cues. When supplied (and non-empty),
+   * ordered list of per-act music cues. When supplied (and non-empty),
    * the assembler renders them with crossfades and uses the resulting track
    * as the music bed in place of `musicPath`. The legacy single-bed path is
    * preserved for back-compat.
@@ -37,14 +37,14 @@ export interface AssemblyOptions {
   musicCues?: MusicCueSpec[];
   /**
    * Optional shot-id placement map (string keys, zero-padded for numeric
-   * ids per EXT-8). When omitted, the assembler derives it from the
+   * ids per ). When omitted, the assembler derives it from the
    * normalized clip durations using each clip's filename as the shot id.
    * Caller can pass an explicit map when the clip order doesn't match the
    * shot ids (e.g. multi-shot bundles).
    */
   placementMap?: PlacementMap;
   /**
-   * EXT-12: shot list used to derive musicHold automation. When omitted,
+   * shot list used to derive musicHold automation. When omitted,
    * automation is skipped.
    */
   shots?: ShotScript[];
@@ -62,7 +62,7 @@ export interface AssemblyOptions {
     holdSec?: number;
   };
   /**
-   * EXT-6: audio-mix defaults. When supplied, a final loudnorm pass runs
+   * audio-mix defaults. When supplied, a final loudnorm pass runs
    * over the assembled master targeting `lufsTarget` integrated LUFS and
    * `truePeakDb` dBTP. Default targets: -16 LUFS / -1 dBTP.
    *
@@ -101,9 +101,9 @@ function getVideoDuration(path: string): number {
 }
 
 /**
- * EXT-4 fallback: derive a placement map from the post-normalization clip
+ *  fallback: derive a placement map from the post-normalization clip
  * list when the caller didn't supply an explicit one. Each clip is expected
- * to be named `shot-NNN.mp4` or `shot-NNNb.mp4` per EXT-8 conventions.
+ * to be named `shot-NNN.mp4` or `shot-NNNb.mp4` per  conventions.
  *
  * If the filename can't be parsed as a shot id, the clip is given an
  * auto-incremented numeric key so the assembler still emits *something*
@@ -272,7 +272,7 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
     let missing = 0;
     for (const videoPath of normalizedFiles) {
       const shotName = basename(videoPath, '.mp4');
-      // EXT-8: use the canonical path builder so suffixed inserts like
+      // use the canonical path builder so suffixed inserts like
       // "3b" / "3c" map to dialogue-shot-003b.mp3 / 003c.mp3. Filenames
       // emitted by the planner are already padded, but go through the
       // builder anyway so the contract is enforced everywhere.
@@ -286,16 +286,16 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
         console.log(`    ${shotName}: dialogue replaced (${shotKey(shotNum)})`);
       } else {
         processedFiles.push(videoPath);
-        // EXT-8: warn loudly on fall-through. The Glass v4 bug was silent
-        // because every `existsSync` returned false without a peep. A
-        // single console.warn here would have turned a missing-25-seconds
-        // silent failure into something someone noticed during the render.
+        // Warn loudly on fall-through. Without this, every `existsSync`
+        // returning false silently lets the master ship with the
+        // corresponding narration missing — a class of silent-failure bug
+        // that's only caught by a human reviewing the rendered audio.
         console.warn(`    ${shotName}: no dialogue file at ${dialoguePath} — using native audio`);
         missing += 1;
       }
     }
     if (missing > 0) {
-      console.warn(`  EXT-8: ${missing} shot(s) had no dialogue track. Verify intent — the placement loop falls through silently otherwise.`);
+      console.warn(`  ${missing} shot(s) had no dialogue track. Verify intent — the placement loop falls through silently otherwise.`);
     }
   }
 
@@ -325,7 +325,7 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
 
   let currentInput = concatenatedPath;
 
-  // ── Step 3.5: Build the per-act music bed (EXT-4 / EXT-12) ──
+  // ── Step 3.5: Build the per-act music bed ( / ) ──
   // When `musicCues` are supplied, render an ordered ffmpeg crossfade track
   // and use it as the music bed in place of `musicPath`. The legacy single-
   // bed path is preserved when no cues are supplied. musicHold automation is
@@ -396,7 +396,7 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
   }
 
   // ── Step 5: Mix in background music ──
-  // Per EXT-4, when music cues were used, their per-cue gain (-22 dB by
+  // Per , when music cues were used, their per-cue gain (-22 dB by
   // default) is already baked into `effectiveMusicPath`. Skip the extra
   // `volume=musicVolume` multiplier in that case to avoid double-attenuating.
   if (effectiveMusicPath && existsSync(effectiveMusicPath)) {
@@ -524,7 +524,7 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
     if (existsSync(tmpDialogue)) rmSync(tmpDialogue, { recursive: true, force: true });
   } catch { /* best-effort */ }
 
-  // ── Step 7: EXT-6 final loudness pass ──
+  // ── Step 7:  final loudness pass ──
   // Targets -16 LUFS / -1 dBTP by default. Skipped when audioMix === false.
   if (options.audioMix !== false) {
     const mix = resolveAudioMix(options.audioMix);

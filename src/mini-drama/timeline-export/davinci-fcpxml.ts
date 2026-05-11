@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// EXT-15: DaVinci Resolve-tuned FCPXML 1.10 export.
+// DaVinci Resolve-tuned FCPXML 1.10 export.
 //
 // Resolve imports the FCPXML 1.10 emitted by ./fcpxml.ts today, but the
 // import is lossy in three known ways:
@@ -22,8 +22,6 @@
 // as the FCP X path. A future PR can fork further if Resolve ships new
 // import gates we discover during testing.
 //
-// Test plan: pair this with `tests/test-timeline-export.mjs` and the live
-// DaVinci import on the Glass episode-001 v6 output before merging.
 // ---------------------------------------------------------------------------
 
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -115,12 +113,12 @@ export async function exportDavinciFcpxml(opts: TimelineExportOptions): Promise<
   lines.push(`<!DOCTYPE fcpxml>`);
   lines.push(`<fcpxml version="1.10">`);
   lines.push(`  <resources>`);
-  // EXT-15 difference (1): drop colorSpace attribute — Resolve infers it
+  //  difference (1): drop colorSpace attribute — Resolve infers it
   // from the source media and avoids the false "missing LUT" warning.
   lines.push(`    <format id="${FORMAT_ID}" name="FFVideoFormat${width}x${height}p${fps}" frameDuration="1/${fps}s" width="${width}" height="${height}"/>`);
 
   for (const a of assetById.values()) {
-    // EXT-15 difference (3): raw file:// path, no URI-encoding.
+    //  difference (3): raw file:// path, no URI-encoding.
     const uri = pathToResolveFileUri(a.path);
     const hasVideo = a.hasVideo ? '1' : '0';
     const formatAttr = a.hasVideo ? ` format="${FORMAT_ID}"` : '';
@@ -152,7 +150,7 @@ export async function exportDavinciFcpxml(opts: TimelineExportOptions): Promise<
     for (const ch of children) {
       const chAsset = (ch as TimelineAudioClip & { _asset: AssetRecord })._asset;
       const localOffset = ch.startSec - s.startSec;
-      // EXT-15 difference (2): emit <audio-channel-source> hinting at the
+      //  difference (2): emit <audio-channel-source> hinting at the
       // actual channel count Resolve should mount the track as. Mono
       // dialogue (channels=1) imports as a mono Resolve track; stereo
       // music (channels=2) imports as stereo. FCP X ignores this attribute.
