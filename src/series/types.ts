@@ -97,6 +97,81 @@ export interface EpisodeScript {
   totalDuration: string;
   status?: 'draft' | 'approved';
   shots: ShotScript[];
+  /**
+   * EXT-4: optional per-act music cues. When set, the assembler renders
+   * each cue and ffmpeg-crossfades between adjacent cues at their fade
+   * points. The single static music-bed path on the assembler options is
+   * kept for back-compat — when both are present, cues win.
+   */
+  musicCues?: MusicCueSpec[];
+  /**
+   * EXT-6: audio-mix defaults for this episode. Overrides the assembler's
+   * built-in defaults. Optional — sensible -16 LUFS targeting is applied
+   * when omitted.
+   */
+  audioMix?: AudioMixDefaults;
+}
+
+/**
+ * EXT-4: per-act music cue. References shot ids by **string** so that
+ * inserts like "3b" / "3c" can be addressed without coercion bugs (see EXT-8).
+ * The assembler converts shot-id → start/end seconds via the placementMap
+ * built during segment iteration.
+ */
+export interface MusicCueSpec {
+  /**
+   * Shot id at which this cue starts. Numeric shot numbers (e.g. `6`) or
+   * the suffixed string form (`"3b"`) are both accepted; the assembler
+   * normalizes via the same path builder it uses for dialogue placement.
+   */
+  startShot: number | string;
+  /** Shot id at which this cue ends (inclusive). */
+  endShot: number | string;
+  /** Prompt for the music generation model. */
+  prompt: string;
+  /** Music model id. Defaults to `elevenlabs-music`. */
+  model?: string;
+  /** Output gain in dB. Defaults to -22. */
+  gain?: number;
+  /** Fade-in in seconds. Defaults to 1.0. */
+  fadeIn?: number;
+  /** Fade-out in seconds. Defaults to 1.5. */
+  fadeOut?: number;
+  /**
+   * EXT-12: how this music cue behaves over the underlying score.
+   *   - 'sustain' — flat bed (default)
+   *   - 'swell'   — ramp +4 dB across the cue
+   *   - 'drop'    — duck to -inf for the cue's range
+   *   - 'stinger' — 0.4s pulse +6 dB then return to bed
+   * Per-shot `shot.musicHold` automation is layered on top of this.
+   */
+  musicHold?: 'sustain' | 'swell' | 'drop' | 'stinger';
+  /**
+   * Optional pre-rendered audio file. When set, the assembler skips the
+   * generation step and uses this directly. Useful for music beds that
+   * were rendered by other harnesses or hand-edited.
+   */
+  audioPath?: string;
+}
+
+/**
+ * EXT-5 + EXT-6: episode-level audio-mix defaults.
+ */
+export interface AudioMixDefaults {
+  /** Cap any SFX clip to this many seconds. Defaults to 2.0. */
+  sfxMaxDurationSec?: number;
+  /** Fade-out applied after the SFX trim. Defaults to 0.3. */
+  sfxFadeOutSec?: number;
+  /** Dialogue track gain in dB. Defaults to 0. */
+  dialogueGainDb?: number;
+  /** Music bed gain in dB. Defaults to -22. */
+  musicGainDb?: number;
+  /** SFX track gain in dB. Defaults to -16. */
+  sfxGainDb?: number;
+  /** Final-pass integrated loudness target. Defaults to -16 LUFS. */
+  lufsTarget?: number;
+  /** Final-pass true peak target. Defaults to -1 dBTP. */
+  truePeakDb?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +252,12 @@ export interface ShotScript {
   audioUrl?: string;
   /** Video URL to use as reference input for models that support it. */
   videoUrl?: string;
+  /**
+   * EXT-12: per-shot music-cue automation. Layered on top of the
+   * containing `MusicCueSpec.musicHold`. Set when a story beat (reveal,
+   * lightbulb moment, drop) needs audio emphasis at this shot.
+   */
+  musicHold?: 'sustain' | 'swell' | 'drop' | 'stinger';
 }
 
 // ---------------------------------------------------------------------------

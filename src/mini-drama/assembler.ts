@@ -2,7 +2,14 @@ import { readdir, mkdir } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
 import { existsSync, writeFileSync, unlinkSync, rmSync, copyFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import type { ShotScript } from '../series/types.js';
+import type { ShotScript, MusicCueSpec } from '../series/types.js';
+import {
+  renderMusicCuesTrack,
+  resolveMusicCues,
+  buildMusicHoldExpr,
+  applyMusicHoldAutomation,
+  type PlacementMap,
+} from './music-cues.js';
 
 export interface ShotTrim {
   shotNumber: number;
@@ -17,6 +24,26 @@ export interface AssemblyOptions {
   srtPath?: string;
   musicPath?: string;
   musicVolume?: number;
+  /**
+   * EXT-4: ordered list of per-act music cues. When supplied (and non-empty),
+   * the assembler renders them with crossfades and uses the resulting track
+   * as the music bed in place of `musicPath`. The legacy single-bed path is
+   * preserved for back-compat.
+   */
+  musicCues?: MusicCueSpec[];
+  /**
+   * Optional shot-id placement map (string keys, zero-padded for numeric
+   * ids per EXT-8). When omitted, the assembler derives it from the
+   * normalized clip durations using each clip's filename as the shot id.
+   * Caller can pass an explicit map when the clip order doesn't match the
+   * shot ids (e.g. multi-shot bundles).
+   */
+  placementMap?: PlacementMap;
+  /**
+   * EXT-12: shot list used to derive musicHold automation. When omitted,
+   * automation is skipped.
+   */
+  shots?: ShotScript[];
   /** Continuous ambient bed (e.g. rain loop) mixed under all clips for audio continuity */
   ambientBedPath?: string;
   ambientBedVolume?: number;
@@ -58,6 +85,34 @@ function getVideoDuration(path: string): number {
     path,
   ]).trim();
   return parseFloat(out);
+}
+
+/**
+ * EXT-4 fallback: derive a placement map from the post-normalization clip
+ * list when the caller didn't supply an explicit one. Each clip is expected
+ * to be named `shot-NNN.mp4` or `shot-NNNb.mp4` per EXT-8 conventions.
+ *
+ * If the filename can't be parsed as a shot id, the clip is given an
+ * auto-incremented numeric key so the assembler still emits *something*
+ * rather than skipping a cue silently.
+ */
+function derivePlacementMapFromClips(clipPaths: string[]): PlacementMap {
+  const map: PlacementMap = {};
+  let cursor = 0;
+  for (let i = 0; i < clipPaths.length; i++) {
+    const filename = basename(clipPaths[i], '.mp4');
+    const dur = getVideoDuration(clipPaths[i]);
+    let key: string;
+    const match = filename.match(/^shot-(\d+)([a-zA-Z]*)/);
+    if (match) {
+      key = String(match[1]).padStart(3, '0') + match[2];
+    } else {
+      key = String(i + 1).padStart(3, '0');
+    }
+    map[key] = { startSec: cursor, endSec: cursor + dur };
+    cursor += dur;
+  }
+  return map;
 }
 
 /**
@@ -243,6 +298,48 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
 
   let currentInput = concatenatedPath;
 
+  // ── Step 3.5: Build the per-act music bed (EXT-4 / EXT-12) ──
+  // When `musicCues` are supplied, render an ordered ffmpeg crossfade track
+  // and use it as the music bed in place of `musicPath`. The legacy single-
+  // bed path is preserved when no cues are supplied. musicHold automation is
+  // layered on top via a `volume=` expression so cue audio doesn't have to
+  // be re-rendered when only the automation changes.
+  let effectiveMusicPath = musicPath;
+  if (options.musicCues && options.musicCues.length > 0) {
+    const placementMap = options.placementMap ?? derivePlacementMapFromClips(processedFiles);
+    const resolved = resolveMusicCues(
+      options.musicCues,
+      placementMap,
+      cue => cue.audioPath,
+    );
+    if (resolved.length > 0) {
+      const cuesTrackPath = outputPath.replace(/\.mp4$/, '-music-cues.mp3');
+      await renderMusicCuesTrack({
+        cues: resolved,
+        outputPath: cuesTrackPath,
+        totalDurationSec: concatDur,
+      });
+      let bedPath: string = cuesTrackPath;
+      if (options.shots) {
+        const holdExpr = buildMusicHoldExpr(options.shots, placementMap);
+        if (holdExpr) {
+          const automatedPath = outputPath.replace(/\.mp4$/, '-music-cues-auto.mp3');
+          await applyMusicHoldAutomation({
+            inputPath: cuesTrackPath,
+            outputPath: automatedPath,
+            volumeExpr: holdExpr,
+          });
+          bedPath = automatedPath;
+          console.log(`  Applied musicHold automation (${holdExpr.length} chars)`);
+        }
+      }
+      effectiveMusicPath = bedPath;
+      console.log(`  Music cues: ${resolved.length} segment(s) crossfaded -> ${basename(bedPath)}`);
+    } else {
+      console.warn('  Music cues: no cues resolved against placement map; falling back to musicPath.');
+    }
+  }
+
   // ── Step 4: Mix in ambient bed (looped to duration) ──
   if (ambientBedPath && existsSync(ambientBedPath)) {
     const withAmbientPath = outputPath.replace(/\.mp4$/, '-with-ambient.mp4');
@@ -272,16 +369,23 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
   }
 
   // ── Step 5: Mix in background music ──
-  if (musicPath && existsSync(musicPath)) {
+  // Per EXT-4, when music cues were used, their per-cue gain (-22 dB by
+  // default) is already baked into `effectiveMusicPath`. Skip the extra
+  // `volume=musicVolume` multiplier in that case to avoid double-attenuating.
+  if (effectiveMusicPath && existsSync(effectiveMusicPath)) {
     const withMusicPath = outputPath.replace(/\.mp4$/, '-with-music.mp4');
+    const cuesBaked = effectiveMusicPath !== musicPath;
+    const musicFilter = cuesBaked
+      ? `[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]`
+      : `[1:a]volume=${musicVolume}[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]`;
     runCommand('ffmpeg', [
       '-y',
       '-i',
       currentInput,
       '-i',
-      musicPath,
+      effectiveMusicPath,
       '-filter_complex',
-      `[1:a]volume=${musicVolume}[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+      musicFilter,
       '-map',
       '0:v',
       '-map',
@@ -292,7 +396,8 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
       'aac',
       withMusicPath,
     ]);
-    console.log(`  Mixed in background music at ${Math.round(musicVolume * 100)}% volume`);
+    const label = cuesBaked ? 'cues-baked' : `${Math.round(musicVolume * 100)}% volume`;
+    console.log(`  Mixed in background music (${label})`);
     currentInput = withMusicPath;
   }
 
