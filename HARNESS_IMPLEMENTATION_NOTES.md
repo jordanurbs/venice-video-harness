@@ -6,7 +6,29 @@ This document is checked in so a future maintainer (or a future Claude session) 
 
 ---
 
-## PR map (all open as of 2026-05-11)
+## Status (as of 2026-05-11, second session)
+
+All EXT roadmap PRs **merged to `main`**. `gh pr list --state open` is clean.
+
+| Item | Status |
+|------|--------|
+| PR #1 baseline (Kling O3 4K + HappyHorse) | Merged |
+| PR #2 EXT-2 silent-rejection guard | Merged |
+| PR #3 EXT-1 + EXT-10 Wan 2.7 lip-sync | Merged |
+| PR #4 EXT-3 prompt cap | Merged |
+| PR #12 EXT-7 + EXT-9 + EXT-11 motion routing | Merged (re-opened #5 after rebase) |
+| PR #6 EXT-4 + EXT-12 music cues | Merged |
+| PR #13 EXT-5 + EXT-6 audio mix defaults | Merged (re-opened #7 after rebase) |
+| PR #8 EXT-8 shot-anchored audio | Merged (after conflict resolve) |
+| PR #9 EXT-13 insert-shot CLI | Merged (after conflict resolve) |
+| PR #10 EXT-14 FCPXML 1.10 export | Merged |
+| PR #11 docs companion | Merged |
+
+EXT-15 (Premiere xmeml + DaVinci-tuned FCPXML) is the next PR in flight on branch `feat/timeline-export-premiere-davinci`.
+
+---
+
+## PR map (historical — all merged)
 
 | # | EXT | Branch | Targets | Status |
 |---|-----|--------|---------|--------|
@@ -57,6 +79,13 @@ There's no test framework configured. EXT-8 has a smoke test at `tests/test-shot
 
 ### Sync from upstream
 The `last-synced` comment at the top of `src/venice/models.ts` is still `2026-03-18`. The Wan 2.7 entries were added by hand using live-API probing — the next full registry sync should keep them.
+
+### EXT-15: Premiere xmeml + DaVinci-tuned FCPXML (landed)
+`src/mini-drama/fcpxml-export.ts` refactored into a `timeline-export/` directory split into types / probe / fcpxml / premiere-xmeml / davinci-fcpxml. The old path is a 2-line re-export for back-compat. New CLI command `export-timeline --format <fcpxml|premiere|davinci>` (defaults to `fcpxml`). `export-fcpxml` becomes an alias.
+
+Premiere xmeml v5 path: tested via `tests/test-timeline-export.mjs` (17 assertions) but **not yet live-tested in Premiere itself**. Mark as "needs Premiere import smoke" before users rely on it.
+
+DaVinci-tuned FCPXML path: drops `colorSpace` attribute, emits `srcCh` audio hints, and uses raw file:// paths (no URI encoding). Live-tested on Glass v6 — see PR body for results.
 
 ---
 
