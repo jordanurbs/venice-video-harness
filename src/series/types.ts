@@ -141,6 +141,24 @@ export interface ShotScript {
   allowMultiShot?: boolean;
   mustStaySingle?: boolean;
   continuityPriority?: 'identity' | 'continuity' | 'balanced';
+  /**
+   * EXT-11: per-shot motion intensity. Drives planner routing between
+   *   - Wan 2.7 i2v (lip-sync) for low/medium motion dialogue shots, and
+   *   - Seedance R2V (identity preservation, no lip-sync) for high motion.
+   *
+   * Defaults to `'medium'` when unset. Camera prompt suggestions:
+   *   - 'low'    -> slow push-in, subtle parallax, still hold
+   *   - 'medium' -> gentle tracking, lateral pan
+   *   - 'high'   -> tracking action, dynamic camera, whip pan
+   */
+  motion?: 'low' | 'medium' | 'high';
+  /**
+   * EXT-9: whether the character's face is visible in the shot.
+   * Used by the planner to decide if lip-sync makes sense. When false,
+   * dialogue-bearing shots can stay on Seedance because there's no mouth
+   * to animate.
+   */
+  faceVisible?: boolean;
   titleOverlay?: {
     text: string;
     fadeInSec?: number;
