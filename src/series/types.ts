@@ -44,6 +44,21 @@ export interface VideoModelDefaults {
    * high-motion dialogue stays on the R2V model for identity preservation.
    */
   lipSyncModel?: string;
+  /**
+   * Auto-keyframe Wan 2.7 i2v from a Seedance R2V render instead of the
+   * panel image. Wan 2.7 has no `reference_image_urls` capability; its
+   * only identity anchor is the single `image_url` keyframe. A panel-derived
+   * keyframe drifts mid-clip because the panel was generated without strong
+   * character anchoring. When this flag is true (the default), every shot
+   * routed to the lip-sync model first renders a quick Seedance R2V pass
+   * (no audio, all character refs), extracts frame 1, and uses that frame
+   * as the Wan 2.7 keyframe — locking identity from frame 0 + adding
+   * lip-sync from the dialogue MP3. Doubles per-shot cost (~$0.85 total).
+   * Skip per-shot with `ShotScript.disableSeedanceKeyframe = true`.
+   *
+   * See CLAUDE.md rule 32 for the underlying motivation.
+   */
+  seedanceKeyframeForWan?: boolean;
 }
 
 export interface ImageModelDefaults {
@@ -250,6 +265,15 @@ export interface ShotScript {
   /** Video URL to use as reference input for models that support it. */
   videoUrl?: string;
   /**
+   * When true, skip the automatic Seedance R2V → Wan 2.7 keyframe pipeline
+   * for this shot even if it routes to the lip-sync model. Use when you
+   * have a specific reason to prefer the panel as the Wan 2.7 keyframe
+   * (e.g. you've manually retouched the panel for this shot). Default
+   * undefined → the series-level `videoDefaults.seedanceKeyframeForWan`
+   * (default `true`) decides.
+   */
+  disableSeedanceKeyframe?: boolean;
+  /**
    * Per-shot music-cue automation. Layered on top of the containing
    * `MusicCueSpec.musicHold`. Set when a story beat (reveal, lightbulb
    * moment, drop) needs audio emphasis at this shot.
@@ -292,6 +316,15 @@ export interface GenerationUnit {
   fallbackToSingles: boolean;
   renderedDurationSec?: number;
   segments?: GenerationUnitSegment[];
+  /**
+   * When true, render the keyframe via Seedance R2V first and use it as the
+   * Wan 2.7 `image_url`. Set by the planner when the unit routes to the
+   * lip-sync model on a single-character dialogue shot. See CLAUDE.md
+   * rule 32.
+   */
+  useSeedanceKeyframe?: boolean;
+  /** Model used for the Seedance keyframe stage when `useSeedanceKeyframe`. */
+  keyframeModel?: string;
 }
 
 export interface GenerationPlan {
