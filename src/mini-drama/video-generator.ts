@@ -21,8 +21,10 @@ import {
   MODELS_SUPPORTING_PER_REFERENCE_AUDIO,
   MODELS_USING_IMAGE_TAGS,
   isSeedanceVideoModel,
+  DEFAULT_CHARACTER_CONSISTENCY_MODEL,
 } from '../series/types.js';
 import { padAudioForModel } from '../venice/audio-preflight.js';
+import { generateSpeech } from '../venice/audio.js';
 import { getCharacterDir } from '../series/manager.js';
 import {
   buildKlingMultiShotPrompt,
@@ -31,6 +33,7 @@ import {
 } from './prompt-builder.js';
 import { parseShotDuration } from './generation-planner.js';
 import { ensureSeedanceCompatibility } from '../venice/seedance-preflight.js';
+import { dialogueFileForShot, shotKey } from './shot-paths.js';
 
 const VIDEO_QUEUE_PATH = '/api/v1/video/queue';
 const VIDEO_RETRIEVE_PATH = '/api/v1/video/retrieve';
@@ -85,6 +88,175 @@ function extractLastFrame(videoPath: string, outputPath: string): void {
     '1',
     outputPath,
   ]);
+}
+
+function extractFirstFrame(videoPath: string, outputPath: string): void {
+  runCommand('ffmpeg', [
+    '-y',
+    '-i',
+    videoPath,
+    '-frames:v',
+    '1',
+    '-q:v',
+    '2',
+    outputPath,
+  ]);
+}
+
+function resolveDialogueShotId(shot: ShotScript): string | number {
+  return shot.shotIdSuffix ? `${shot.shotNumber}${shot.shotIdSuffix}` : shot.shotNumber;
+}
+
+/**
+ * Resolves the path to the dialogue MP3 for a shot, generating it inline
+ * via Venice TTS if the shot has a locked voice and the file does not yet
+ * exist. Returns undefined when the shot has no usable voice and no
+ * pre-existing audio — the caller should fall back to letting Wan 2.7
+ * synthesize audio from the prompt's dialogue block.
+ */
+async function ensureDialogueAudio(
+  client: VeniceClient,
+  series: SeriesState,
+  shot: ShotScript,
+  audioDir: string,
+): Promise<string | undefined> {
+  if (!shot.dialogue) return undefined;
+  const shotId = resolveDialogueShotId(shot);
+  const target = dialogueFileForShot(audioDir, shotId);
+  if (existsSync(target)) return target;
+
+  const character = series.characters.find(
+    c => c.name.toUpperCase() === shot.dialogue!.character.toUpperCase(),
+  );
+  if (!character?.voiceId) {
+    console.warn(
+      `  No locked voice for ${shot.dialogue.character}; skipping inline TTS — Wan 2.7 will synthesize from the prompt.`,
+    );
+    return undefined;
+  }
+
+  await mkdir(audioDir, { recursive: true });
+  console.log(
+    `  Inline TTS: shot ${shotKey(shotId)} [${character.name}, voice=${character.voiceName ?? character.voiceId}]`,
+  );
+  try {
+    await generateSpeech(
+      client,
+      {
+        voiceId: character.voiceId,
+        text: shot.dialogue.line,
+        prompt: character.voiceDescription,
+      },
+      target,
+    );
+    return target;
+  } catch (err) {
+    console.warn(`  Inline TTS failed (${(err as Error).message}); falling back to model-synthesized audio.`);
+    return undefined;
+  }
+}
+
+interface SeedanceKeyframeArtifacts {
+  keyframePngPath: string;
+  stageAVideoPath: string;
+  dialogueAudioPath?: string;
+  referenceImagePaths: string[];
+}
+
+/**
+ * Stage A + Stage B of CLAUDE.md rule 32: render a Seedance R2V identity-
+ * lock pass (no audio, all character refs) and extract frame 1 as a PNG.
+ * Returns paths for both the intermediate video and the keyframe so the
+ * caller can wire them into the Wan 2.7 i2v stage and the saved metadata.
+ *
+ * Throws on any failure; the caller is responsible for falling back to
+ * the panel-anchored single-pass render.
+ */
+async function renderSeedanceKeyframe(
+  client: VeniceClient,
+  series: SeriesState,
+  shot: ShotScript,
+  sceneDir: string,
+  outputVideoPath: string,
+  previousShot: ShotScript | undefined,
+): Promise<SeedanceKeyframeArtifacts> {
+  const stageAVideoPath = outputVideoPath.replace(/\.mp4$/, '-r2v-keyframe.mp4');
+  const keyframePngPath = outputVideoPath.replace(/\.mp4$/, '-r2v-keyframe.png');
+
+  if (existsSync(keyframePngPath) && existsSync(stageAVideoPath)) {
+    console.log(`  Stage A: reusing existing keyframe ${keyframePngPath}`);
+    const refs = collectReferenceImagePathsForShot(series, shot);
+    return {
+      keyframePngPath,
+      stageAVideoPath,
+      referenceImagePaths: refs,
+    };
+  }
+
+  // Re-route the shot to Seedance R2V by cloning it with no dialogue and
+  // forcing motion to 'high' (the planner skips Wan 2.7 routing on both
+  // signals). This re-uses the entire prompt-builder pipeline including
+  // the Seedance compatibility pre-flight and image-tag handling.
+  const stageAShot: ShotScript = {
+    ...shot,
+    dialogue: null,
+    motion: 'high',
+    useReferenceImages: true,
+  };
+  const stageAPrompt = buildVideoPrompt(stageAShot, series, previousShot);
+  // Wan 2.7's audio + R2V's audio metadata don't mix — force off explicitly.
+  stageAPrompt.audio = false;
+
+  if (!isSeedanceVideoModel(stageAPrompt.model)) {
+    // Defensive: if the series's character consistency model isn't a Seedance
+    // family member, we still skip lip-sync at this stage but warn the user
+    // since the keyframe may inherit drift from the chosen model.
+    console.warn(
+      `  Stage A: characterConsistencyModel=${stageAPrompt.model} is not Seedance — keyframe will inherit that model's identity behavior.`,
+    );
+  }
+
+  const panelPath = getShotPanelPath(sceneDir, shot.shotNumber);
+  const { elements, referenceImagePaths } = resolveCharacterElements(series, stageAShot, stageAPrompt);
+
+  console.log(`  Stage A/3: ${stageAPrompt.model} keyframe render (identity lock, no audio)`);
+  await renderVideoFile(client, {
+    prompt: stageAPrompt,
+    anchorImagePath: panelPath,
+    outputPath: stageAVideoPath,
+    elements,
+    referenceImagePaths,
+    aspectRatio: series.storyboardAspectRatio ?? '16:9',
+    seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
+  });
+
+  console.log(`  Stage B/3: extracting first frame -> ${keyframePngPath}`);
+  extractFirstFrame(stageAVideoPath, keyframePngPath);
+  if (!existsSync(keyframePngPath)) {
+    throw new Error(`Stage B keyframe extraction produced no file at ${keyframePngPath}`);
+  }
+
+  return {
+    keyframePngPath,
+    stageAVideoPath,
+    referenceImagePaths: referenceImagePaths ?? [],
+  };
+}
+
+function collectReferenceImagePathsForShot(series: SeriesState, shot: ShotScript): string[] {
+  const resolved = shot.characters
+    .map(name => series.characters.find(c => c.name.toUpperCase() === name.toUpperCase()))
+    .filter(Boolean) as typeof series.characters;
+  if (resolved.length === 0) return [];
+  return resolved
+    .slice(0, 4)
+    .flatMap(c => {
+      const dir = getCharacterDir(series, c.name);
+      return ['front.png', 'three-quarter.png']
+        .map(f => join(dir, f))
+        .filter(p => existsSync(p));
+    })
+    .slice(0, 4);
 }
 
 function imageToDataUri(imagePath: string, mimeType = 'image/png'): string {
@@ -673,11 +845,48 @@ async function renderSingleShotUnit(
     if (res.autoUseReferenceImages) console.log('  Auto-enabled: reference images');
   }
 
-  const anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath);
+  let anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath);
   const endFramePath = chooseEndFrameImagePath(unit, sceneDir, nextShotNumber);
 
   const { elements, referenceImagePaths } = resolveCharacterElements(series, shot, videoPrompt);
   const sceneImagePaths = shot.sceneImagePaths?.filter(p => existsSync(p));
+
+  // --- CLAUDE.md rule 32: Seedance R2V → Wan 2.7 keyframe pipeline ---
+  // Wan 2.7 i2v has no `reference_image_urls`; its only identity anchor is
+  // the single `image_url` keyframe. We render a Seedance R2V identity-lock
+  // pass first, extract frame 1, and use that frame for the Wan 2.7 i2v
+  // render. The dialogue MP3 is wired into `audio_url` so Wan 2.7 lip-syncs
+  // against the real voice instead of synthesizing.
+  let keyframeArtifacts: SeedanceKeyframeArtifacts | undefined;
+  let dialogueAudioPath: string | undefined;
+  let stageAFailed = false;
+  let stageAFailureReason: string | undefined;
+  if (unit.useSeedanceKeyframe === true) {
+    try {
+      keyframeArtifacts = await renderSeedanceKeyframe(
+        client,
+        series,
+        shot,
+        sceneDir,
+        videoPath,
+        previousShot,
+      );
+      anchorImagePath = keyframeArtifacts.keyframePngPath;
+
+      const audioDir = join(dirname(sceneDir), 'audio');
+      console.log('  Stage C/3: locating dialogue audio for Wan 2.7 lip-sync');
+      dialogueAudioPath = await ensureDialogueAudio(client, series, shot, audioDir);
+    } catch (err) {
+      stageAFailed = true;
+      stageAFailureReason = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `  ⚠ Seedance R2V keyframe pipeline failed (${stageAFailureReason}); falling back to panel-anchored single-pass render.`,
+      );
+      keyframeArtifacts = undefined;
+      dialogueAudioPath = undefined;
+      anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath);
+    }
+  }
 
   const savedPath = await renderVideoFile(client, {
     prompt: videoPrompt,
@@ -687,6 +896,7 @@ async function renderSingleShotUnit(
     elements,
     referenceImagePaths,
     sceneImagePaths,
+    audioPath: dialogueAudioPath,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
   });
@@ -700,10 +910,35 @@ async function renderSingleShotUnit(
     outputFile: `shot-${String(shot.shotNumber).padStart(3, '0')}.mp4`,
   }];
 
-  await saveSingleShotMetadata(series, shot, savedPath, videoPrompt, {
-    generationUnit: unit.unitId,
-  });
+  const extraMetadata: Record<string, unknown> = { generationUnit: unit.unitId };
+  if (keyframeArtifacts) {
+    extraMetadata.seedanceKeyframe = {
+      stageAVideo: relativeForMetadata(savedPath, keyframeArtifacts.stageAVideoPath),
+      keyframePng: relativeForMetadata(savedPath, keyframeArtifacts.keyframePngPath),
+      keyframeModel: unit.keyframeModel,
+      dialogueAudio: dialogueAudioPath
+        ? relativeForMetadata(savedPath, dialogueAudioPath)
+        : null,
+    };
+  } else if (unit.useSeedanceKeyframe === true && stageAFailed) {
+    extraMetadata.seedanceKeyframe = {
+      attempted: true,
+      success: false,
+      reason: stageAFailureReason,
+    };
+  }
+
+  await saveSingleShotMetadata(series, shot, savedPath, videoPrompt, extraMetadata);
   return [savedPath];
+}
+
+function relativeForMetadata(anchorPath: string, target: string): string {
+  // Both anchorPath and target live in the same scene dir; return the
+  // basename for compactness while preserving uniqueness within the dir.
+  if (dirname(anchorPath) === dirname(target)) {
+    return target.slice(dirname(target).length + 1);
+  }
+  return target;
 }
 
 async function renderMultiShotUnit(

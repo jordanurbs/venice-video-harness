@@ -6,8 +6,13 @@ import type {
   GenerationPlan,
   GenerationUnit,
   ShotScript,
+  SeriesState,
+  VideoModelDefaults,
 } from '../series/types.js';
-import { KLING_MULTISHOT_MODEL } from '../series/types.js';
+import {
+  KLING_MULTISHOT_MODEL,
+  DEFAULT_CHARACTER_CONSISTENCY_MODEL,
+} from '../series/types.js';
 
 const CHAIN_TRANSITIONS = new Set([
   'DISSOLVE', 'MATCH CUT', 'MORPH', 'WIPE', 'CROSSFADE', 'FADE',
@@ -147,15 +152,41 @@ function chooseEndFrameStrategy(
     : 'natural';
 }
 
+/**
+ * does the planner expect this shot to render with the Seedance
+ * R2V → Wan 2.7 keyframe pipeline? True when the shot must stay as a Wan 2.7
+ * lip-sync clip, has at least one character, and neither the series nor the
+ * shot opts out. See CLAUDE.md rule 32.
+ */
+export function shouldUseSeedanceKeyframe(
+  shot: ShotScript,
+  videoDefaults?: VideoModelDefaults,
+): boolean {
+  if (!mustStayAsWanLipSync(shot)) return false;
+  if (shot.characters.length === 0) return false;
+  if (shot.disableSeedanceKeyframe === true) return false;
+  if (videoDefaults?.seedanceKeyframeForWan === false) return false;
+  return true;
+}
+
 function buildSingleUnit(
   shot: ShotScript,
   previousShot: ShotScript | undefined,
   nextShot: ShotScript | undefined,
+  videoDefaults?: VideoModelDefaults,
 ): GenerationUnit {
   const reasons = ['standalone render'];
   if (shot.mustStaySingle) reasons.push('forced single via script override');
   if (isTitleLikeInsert(shot)) reasons.push('insert or title card');
   if (isIdentitySensitive(shot)) reasons.push('identity-sensitive framing');
+
+  const useSeedanceKeyframe = shouldUseSeedanceKeyframe(shot, videoDefaults);
+  const keyframeModel = useSeedanceKeyframe
+    ? (videoDefaults?.characterConsistencyModel ?? DEFAULT_CHARACTER_CONSISTENCY_MODEL)
+    : undefined;
+  if (useSeedanceKeyframe) {
+    reasons.push(`Seedance R2V keyframe → Wan 2.7 lip-sync (via ${keyframeModel})`);
+  }
 
   return {
     unitId: `unit-${padShotNumber(shot.shotNumber)}`,
@@ -168,6 +199,8 @@ function buildSingleUnit(
     endFrameStrategy: chooseEndFrameStrategy(shot, nextShot),
     decisionReasons: reasons,
     fallbackToSingles: false,
+    useSeedanceKeyframe: useSeedanceKeyframe || undefined,
+    keyframeModel,
   };
 }
 
@@ -265,9 +298,13 @@ function buildMultiShotUnit(
   };
 }
 
-export function buildGenerationPlan(script: EpisodeScript): GenerationPlan {
+export function buildGenerationPlan(
+  script: EpisodeScript,
+  series?: Pick<SeriesState, 'videoDefaults'>,
+): GenerationPlan {
   const units: GenerationUnit[] = [];
   let index = 0;
+  const videoDefaults = series?.videoDefaults;
 
   while (index < script.shots.length) {
     const previousShot = index > 0 ? script.shots[index - 1] : undefined;
@@ -283,7 +320,7 @@ export function buildGenerationPlan(script: EpisodeScript): GenerationPlan {
     }
 
     const nextShot = script.shots[index + 1];
-    units.push(buildSingleUnit(currentShot, previousShot, nextShot));
+    units.push(buildSingleUnit(currentShot, previousShot, nextShot, videoDefaults));
     index += 1;
   }
 

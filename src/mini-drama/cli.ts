@@ -1409,7 +1409,8 @@ program
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--skip-qa', 'Skip QA approval check', false)
-  .action(async (opts: { project: string; episode: number; skipQa: boolean }) => {
+  .option('--no-seedance-keyframe', 'Disable the automatic Seedance R2V → Wan 2.7 keyframe pipeline for this run (see CLAUDE.md rule 32).')
+  .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
@@ -1425,10 +1426,18 @@ program
       process.exit(1);
     }
 
+    // commander's --no-<flag> negates the camelCase option. When the user
+    // passes --no-seedance-keyframe we flip the series-level default for
+    // this run only (no persisted change to series.json).
+    if (opts.seedanceKeyframe === false) {
+      series.videoDefaults = { ...series.videoDefaults, seedanceKeyframeForWan: false };
+      console.log('Seedance R2V → Wan 2.7 keyframe pipeline DISABLED for this run.\n');
+    }
+
     const apiKey = getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const sceneDir = join(episodeDir, 'scene-001');
-    const generationPlan = buildGenerationPlan(script);
+    const generationPlan = buildGenerationPlan(script, series);
 
     console.log(`Generating videos for Episode ${opts.episode}: ${script.title}`);
     const ccModel = series.videoDefaults.characterConsistencyModel ?? DEFAULT_CHARACTER_CONSISTENCY_MODEL;
@@ -1436,8 +1445,13 @@ program
     console.log(`Generation units: ${generationPlan.units.length}`);
     const multiUnitCount = generationPlan.units.filter(unit => unit.unitType === 'kling-multishot').length;
     if (multiUnitCount > 0) {
-      console.log(`Kling multi-shot units: ${multiUnitCount}\n`);
+      console.log(`Kling multi-shot units: ${multiUnitCount}`);
     }
+    const seedanceKeyframeCount = generationPlan.units.filter(unit => unit.useSeedanceKeyframe).length;
+    if (seedanceKeyframeCount > 0) {
+      console.log(`Seedance R2V → Wan 2.7 keyframe units: ${seedanceKeyframeCount} (~$0.85 each; CLAUDE.md rule 32)`);
+    }
+    console.log('');
 
     const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan);
     await saveGenerationPlan(episodeDir, plan);
