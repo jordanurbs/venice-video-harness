@@ -36,6 +36,7 @@ import {
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
 import { generateImage, generateWithReferences } from '../venice/generate.js';
+import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { writeImageProvenance } from '../venice/provenance.js';
 import { getVeniceApiKey } from '../config.js';
 import { listVoices, filterVoices, auditionVoices } from '../venice/voices.js';
@@ -197,8 +198,7 @@ program
 
         if (response.images?.[0]) {
           const imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
-          const imgPath = join(samplesDir, `${aes.name}.png`);
-          await writeFile(imgPath, imgBuffer);
+          const imgPath = await writeImageBytesSmart(imgBuffer, join(samplesDir, `${aes.name}.png`));
           console.log(`  ${aes.name}: ${imgPath}`);
         }
       } catch (err) {
@@ -330,8 +330,8 @@ program
 
           if (response.images?.[0]) {
             const imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
-            await writeFile(join(charDir, filenames[i]), imgBuffer);
-            console.log(`  ${angles[i]}: saved`);
+            const finalPath = await writeImageBytesSmart(imgBuffer, join(charDir, filenames[i]));
+            console.log(`  ${angles[i]}: saved -> ${basename(finalPath)}`);
           }
         } catch (err) {
           console.warn(`  ${angles[i]}: failed - ${err}`);
