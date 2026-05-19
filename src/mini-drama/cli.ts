@@ -499,9 +499,25 @@ Your task is to write a complete episode script as a JSON object. Follow the exa
 - Open with a visual hook in the first 3 seconds
 - End on a beat that makes viewers want the next episode
 - Use one scene, one location, one emotional note
-- Include specific delivery cues for all dialogue
+- Include specific delivery cues for all dialogue (see VOICE DIRECTION below)
 - Use the correct videoModel ("action" for movement/dialogue, "atmosphere" for establishing/static)
 - End with a title card shot (3s, type "insert", FADE transition)
+
+SHOT DURATION — PREFER FEWER, LONGER SHOTS (CRITICAL):
+The video models (Seedance 2.0, HappyHorse 1.0, Wan 2.7) all support up to 15 seconds in a single generation, and 15s is the strong default. For a 60-second episode, prefer 4 shots at ~15s each over 10 shots at ~6s. Reasons:
+1. Identity stays locked longer — every new shot is a fresh generation where character likeness can drift.
+2. Motion has room to breathe — short shots cut before gestures/expressions complete, which is one of the main "AI video looks twitchy" tells.
+3. Cost is lower — fewer generations per episode.
+4. Fewer transitions to police for continuity.
+Only use shorts (3-8s) for *deliberate* short beats: hard cuts, sight gags, single-frame reactions, the closing title card. Default everything else to 12-15s.
+- duration must be one of: "3s","4s","5s","6s","7s","8s","9s","10s","11s","12s","13s","14s","15s" (HappyHorse goes down to 3s; Seedance from 4s).
+- Aim for the episode to contain roughly (target_seconds / 13) shots ± 1.
+
+VOICE DIRECTION — NATIVE MODEL DIALOGUE IS PREFERRED:
+The recommended pipeline uses the video model's own native dialogue (Seedance / Wan 2.7 / HappyHorse all generate in-character speech). Venice TTS is an exception path, not the default. Therefore every dialogue shot's "delivery" cue must be RICH — direct the voice like you're talking to a voice actor: timbre, accent, pacing, emotional register, breath placement, signature delivery quirks. Two-word "delivery": "angry" cues produce flat results; "delivery": "deliberate, half-volume drawl with a beat before the punchline; warm not bitter; breath audible before 'audacity'" produces in-character results.
+
+NO MUSIC / NO SFX FROM THE VIDEO MODEL:
+Every shot "description" MUST end with the literal phrase: "No background music, no sound effects, no soundtrack, dry recording." The harness adds music and ambient/SFX in post via separate Venice audio calls; baked-in music or SFX from the video model fights the assembler's mix. The "sfx" field in the schema below describes what the harness should generate in post — it does NOT instruct the video model to produce sound effects.
 
 IMPORTANT: Every shot MUST include an "environment" field. This controls whether the pipeline uses the series' dark/rainy aesthetic or adapts it for bright daytime scenes. Values:
 - "DAY_INTERIOR" -- bright indoor scene (café, office, apartment in daylight)
@@ -521,13 +537,13 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
       "shotNumber": 1,
       "type": "establishing|dialogue|action|reaction|close-up|insert",
       "environment": "DAY_INTERIOR|DAY_EXTERIOR|NIGHT_INTERIOR|NIGHT_EXTERIOR",
-      "duration": "3s|5s|8s",
+      "duration": "3s|4s|...|15s (PREFER 15s; use shorts only for deliberate quick beats)",
       "videoModel": "action|atmosphere",
-      "description": "<full visual description>",
+      "description": "<full visual description, ending with 'No background music, no sound effects, no soundtrack, dry recording.'>",
       "panelDescription": "<optional single-frame description if description has sequential action>",
       "characters": ["<CHARACTER_NAME>"],
-      "dialogue": {"character": "<NAME>", "line": "<text>", "delivery": "<specific delivery cue>"} or null,
-      "sfx": "<sound effects>" or null,
+      "dialogue": {"character": "<NAME>", "line": "<text>", "delivery": "<rich voice-director cue: timbre, accent, pacing, emotion, breath, signature quirks>"} or null,
+      "sfx": "<sound effects to GENERATE IN POST via Venice SFX>" or null,
       "cameraMovement": "<camera direction>",
       "transition": "CUT|FADE|DISSOLVE|MATCH CUT|SMASH CUT"
     }
@@ -599,6 +615,32 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
       console.log(`  Shots: ${script.shots.length}`);
       console.log(`  Duration: ~${totalDurationSec}s`);
       console.log(`  Status: draft`);
+
+      // Post-condition advisory: the new system prompt asks for 15s-leaning
+      // shots, but LLMs sometimes ignore that and produce many shorts. We
+      // surface it so the user (and the MCP) sees the warning instead of
+      // silently shipping a draft with 10x 6s beats.
+      const shotsUnder8s = script.shots.filter((s) => {
+        const m = s.duration?.match(/(\d+)\s*s/);
+        return m ? parseInt(m[1], 10) < 8 : false;
+      });
+      if (script.shots.length > Math.max(6, Math.ceil(totalDurationSec / 13)) && shotsUnder8s.length >= 3) {
+        console.warn(
+          `  ⚠ The draft has ${script.shots.length} shots for ~${totalDurationSec}s ` +
+            `(${shotsUnder8s.length} are under 8s). Recommended target: ~${Math.max(2, Math.round(totalDurationSec / 13))} shots ` +
+            `with most at 12-15s. Edit script.json before approving or re-run workshop with stronger guidance in the concept.`,
+        );
+      }
+      const shotsWithoutAudioNegative = script.shots.filter(
+        (s) => !s.description || !/no\s+(music|background music|soundtrack|sound effects|sfx)/i.test(s.description),
+      );
+      if (shotsWithoutAudioNegative.length > 0) {
+        console.warn(
+          `  ⚠ ${shotsWithoutAudioNegative.length} shot(s) are missing the no-music/no-SFX negative in their description. ` +
+            `The video model may bake music or sound effects into the dialogue track. ` +
+            `The harness will still suppress these via its NEGATIVE_PROMPT, but the script LLM should also include them per the workshop instructions.`,
+        );
+      }
 
       const dialogueShots = script.shots.filter(s => s.dialogue);
       if (dialogueShots.length > 0) {
@@ -1081,7 +1123,11 @@ program
   .requiredOption('--after <shotId>', 'Shot id (number or suffixed string) to insert after')
   .requiredOption('--description <text>', 'Description for the new shot (drives panel + video prompt)')
   .option('--type <type>', 'Shot type', 'action')
-  .option('--duration <duration>', 'Shot duration (e.g. 5s)', '5s')
+  .option(
+    '--duration <duration>',
+    'Shot duration (e.g. 15s). DEFAULT is 15s — the native max on Seedance 2.0 (4-15s) and HappyHorse 1.0 (3-15s). Prefer 15s and stitch fewer long clips (2x15s for a 30s beat) over many short clips: identity stays locked longer, transitions are fewer, cost is lower, and motion has room to breathe. Only drop below 15s for genuine quick beats (sight gag, hard cut, deliberate stinger).',
+    '15s',
+  )
   .option('--motion <motion>', 'Motion intensity: low | medium | high', 'medium')
   .option('--characters <names>', 'Character names (comma-separated)', '')
   .option('--dialogue <line>', 'Dialogue line (omit for action/insert shots)')
@@ -1847,15 +1893,23 @@ program
 // ── assemble-episode ──────────────────────────────────────────────────
 program
   .command('assemble-episode')
-  .description('Stitch video clips + dialogue replacement + music + subtitles')
+  .description('Stitch video clips + (optional) Venice dialogue replacement + music + subtitles')
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--no-subtitles', 'Skip subtitle burn-in')
   .option('--no-music', 'Skip background music mixing')
   .option('--no-ambient', 'Skip ambient bed mixing')
   .option('--ambient-volume <vol>', 'Ambient bed volume (0-1)', '0.3')
-  .option('--no-dialogue-replace', 'Skip Venice dialogue replacement (use native model voices)')
-  .option('--native-volume <vol>', 'Native audio volume when dialogue is replaced (0-1)', '0.2')
+  // Default is OFF. Native model dialogue (Seedance / Wan 2.7 / HappyHorse)
+  // is preferred until Venice ships better TTS voice options. Pass
+  // --dialogue-replace to opt in (typically when you've also run
+  // `override-audio --dialogue` to produce dialogue-shot-NNN.mp3 files).
+  // --no-dialogue-replace is kept as an explicit alias so scripts that
+  // already pass it don't break (it's now a no-op since the default is
+  // already false).
+  .option('--dialogue-replace', 'Replace native model dialogue with Venice TTS (off by default; flip on only when override-audio --dialogue has produced dialogue-shot-NNN.mp3 files)', false)
+  .option('--no-dialogue-replace', 'Explicitly disable Venice TTS dialogue replacement (now the default — kept for backward compatibility with older scripts)')
+  .option('--native-volume <vol>', 'Native audio volume in the final mix (0-1). Default 1.0 (full). Drop to ~0.2 only when --dialogue-replace is on so the Venice TTS dialogue isn\'t fighting the model-native track.', '1.0')
   .action(async (opts: {
     project: string; episode: number; subtitles: boolean; music: boolean;
     ambient: boolean; ambientVolume: string;
@@ -1882,14 +1936,17 @@ program
 
     const hasDialogueFiles = existsSync(audioDir) &&
       readdirSync(audioDir).some((f: string) => f.startsWith('dialogue-shot-'));
-    const useDialogueReplace = opts.dialogueReplace !== false && hasDialogueFiles;
+    // Default is now OFF — native model dialogue is the recommended path.
+    // Only replace when the user explicitly opts in via --dialogue-replace
+    // AND the TTS files exist.
+    const useDialogueReplace = opts.dialogueReplace === true && hasDialogueFiles;
 
     if (useDialogueReplace) {
-      console.log(`  Dialogue replacement: ON (native audio ducked to ${Math.round(parseFloat(opts.nativeVolume) * 100)}%)`);
-    } else if (opts.dialogueReplace !== false && !hasDialogueFiles) {
-      console.log(`  Dialogue replacement: OFF (no TTS files found -- run override-audio --dialogue first for voice consistency)`);
+      console.log(`  Dialogue replacement: ON (Venice TTS; native audio ducked to ${Math.round(parseFloat(opts.nativeVolume) * 100)}%)`);
+    } else if (opts.dialogueReplace === true && !hasDialogueFiles) {
+      console.log(`  Dialogue replacement: OFF (--dialogue-replace was set but no dialogue-shot-NNN.mp3 files exist -- run override-audio --dialogue first)`);
     } else {
-      console.log(`  Dialogue replacement: OFF (using native model voices)`);
+      console.log(`  Dialogue replacement: OFF (default — using native model dialogue at ${Math.round(parseFloat(opts.nativeVolume) * 100)}% volume)`);
     }
 
     // Collect per-shot trim/flip metadata from script

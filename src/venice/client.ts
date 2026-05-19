@@ -28,6 +28,89 @@ export class VeniceRequestError extends Error {
   }
 }
 
+// ---- Deprecation header surfacing -----------------------------------------
+//
+// Venice returns these headers on every call that uses a deprecated model:
+//
+//   x-venice-model-id                            (the model actually served)
+//   x-venice-model-name                          (display name)
+//   x-venice-model-deprecation-warning           (free-form notice)
+//   x-venice-model-deprecation-date              (ISO 8601 date)
+//
+// Source: https://docs.venice.ai/api-reference/api-spec (response headers).
+//
+// Before this change the client read JSON bodies and discarded headers,
+// which meant the harness was completely blind to upcoming Venice model
+// sunsets — a model would keep working with a "deprecation in N days"
+// banner that we never saw, and then start 404ing post-sunset with no
+// warning. (This is exactly what happened with `qwen-2.5-vl` for the QA
+// vision model: the model sunset 2025-09-22 and the harness only learned
+// about it via downstream 404s.)
+//
+// We surface each unique (model, date) deprecation warning ONCE per
+// process via stderr so the MCP can pattern-match `MODEL DEPRECATION` and
+// the agent operating the pipeline can plan a migration before the sunset
+// date. The dedupe key includes the date so a model whose sunset is
+// rescheduled re-warns.
+
+const seenDeprecations = new Set<string>();
+
+export interface VeniceDeprecationNotice {
+  modelId: string | null;
+  modelName: string | null;
+  warning: string;
+  date: string | null;
+}
+
+/**
+ * Inspect a Response's headers for Venice deprecation notices and emit
+ * a structured stderr warning the first time each unique notice is seen
+ * in this process. Returns the parsed notice when present (mostly for
+ * testing), otherwise null.
+ *
+ * Exported for tests; callers in this file invoke it from each request
+ * path so every response shape (json, binary, json-or-binary) is covered.
+ */
+export function reportVeniceDeprecation(
+  headers: Headers,
+  requestPath: string,
+): VeniceDeprecationNotice | null {
+  const warning = headers.get("x-venice-model-deprecation-warning");
+  if (!warning) return null;
+
+  const date = headers.get("x-venice-model-deprecation-date");
+  const modelId = headers.get("x-venice-model-id");
+  const modelName = headers.get("x-venice-model-name");
+
+  const dedupeKey = `${modelId ?? "(unknown)"}::${date ?? "(no-date)"}`;
+  if (!seenDeprecations.has(dedupeKey)) {
+    seenDeprecations.add(dedupeKey);
+    const id = modelId ?? "(unknown id)";
+    const name = modelName ? ` "${modelName}"` : "";
+    const when = date ? ` sunset ${date}` : "";
+    console.warn(
+      `  ⚠ MODEL DEPRECATION: ${id}${name}${when} (via ${requestPath}): ${warning}`,
+    );
+    console.warn(
+      `    Migrate before the sunset date or this call will start returning 404 / 410.`,
+    );
+    console.warn(
+      `    Check the current recommended replacement via inspect.models (MCP) ` +
+        `or GET https://api.venice.ai/api/v1/models for the model's traits.`,
+    );
+  }
+
+  return { modelId, modelName, warning, date };
+}
+
+/**
+ * Test-only: reset the per-process deduplication state so unit tests can
+ * exercise the warn-once behavior across multiple invocations.
+ */
+export function _resetDeprecationDedupeForTests(): void {
+  seenDeprecations.clear();
+}
+
 // ---- Client ---------------------------------------------------------------
 
 export class VeniceClient {
@@ -96,6 +179,7 @@ export class VeniceClient {
         });
 
         this.lastRequestAt = Date.now();
+        reportVeniceDeprecation(response.headers, path);
 
         if (response.ok) {
           return (await response.json()) as T;
@@ -116,8 +200,24 @@ export class VeniceClient {
 
         // Retry on rate-limit (429) and server errors (5xx).
         if (response.status === 429 || response.status >= 500) {
+          if (response.status === 429) {
+            console.warn(
+              `  ⚠ Venice rate-limit (HTTP 429) on ${path}; retrying with exponential back-off (attempt ${attempt + 1}/${MAX_RETRIES}).`,
+            );
+          }
           lastError = new VeniceRequestError(message, response.status, errorBody);
           continue;
+        }
+
+        // 410 Gone usually means the model has been removed post-sunset and
+        // routing wasn't possible — surface it explicitly so the agent
+        // doesn't just see a generic 4xx.
+        if (response.status === 410) {
+          console.warn(
+            `  ⚠ Venice returned 410 Gone on ${path}. The requested model is likely fully retired ` +
+              `and Venice could not route to a replacement. Check the deprecation tracker or call ` +
+              `GET /api/v1/models to find the current equivalent.`,
+          );
         }
 
         // Non-retryable client error -- throw immediately.
@@ -166,6 +266,7 @@ export class VeniceClient {
         });
 
         this.lastRequestAt = Date.now();
+        reportVeniceDeprecation(response.headers, path);
 
         if (response.ok) {
           const arrayBuffer = await response.arrayBuffer();
@@ -236,6 +337,7 @@ export class VeniceClient {
         });
 
         this.lastRequestAt = Date.now();
+        reportVeniceDeprecation(response.headers, path);
 
         if (response.ok) {
           const contentType = response.headers.get("content-type") ?? "";

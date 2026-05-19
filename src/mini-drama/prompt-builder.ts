@@ -53,12 +53,24 @@ export interface MiniDramaVideoPrompt {
   modelResolution?: ModelResolution;
 }
 
+// The audio-suppression chunk keeps the video model from baking music,
+// score, sound effects, or foley into the dialogue track. The harness adds
+// music (musicCues / generate_music) and ambient/SFX (generate_ambient /
+// mix_audio) in post — bakes-in fight the assembler's mix and can't be
+// removed once they're in the output. Keep this in NEGATIVE_PROMPT for
+// every shot type; the workshop system prompt also asks the script LLM to
+// repeat it per-shot, but this is the always-on belt-and-braces.
+const AUDIO_SUPPRESSION_NEGATIVE =
+  'background music, soundtrack, score, musical score, sound effects, sfx, foley, ' +
+  'orchestral hits, sound design, audio drops';
+
 const NEGATIVE_PROMPT =
   'comic panels, multiple panels, panel layout, panel borders, panel grid, speech bubbles, text bubbles, ' +
   'manga panels, comic strip, storyboard grid, split screen, multiple frames, ' +
   'deformed, blurry, bad anatomy, bad hands, extra fingers, mutation, ' +
   'poorly drawn face, watermark, text, signature, low quality, ugly, ' +
-  'umbrella, holding umbrella';
+  'umbrella, holding umbrella, ' +
+  AUDIO_SUPPRESSION_NEGATIVE;
 
 const NO_PEOPLE_NEGATIVE =
   NEGATIVE_PROMPT + ', people, person, human, figure, silhouette, crowd, pedestrian, bystander';
