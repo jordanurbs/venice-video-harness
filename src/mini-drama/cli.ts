@@ -256,9 +256,28 @@ program
   .option('--voice-desc <voiceDesc>', 'Voice description (pitch, timbre, accent, cadence)')
   .option('--base-traits <traits>', 'Custom base traits override (e.g. "tabby cat, feline, four legs")')
   .option('--skip-images', 'Skip reference image generation', false)
+  // Override-prompt path: read positive / negative prompts (and optionally
+  // model / cfg / aspect) from a JSON file and use them verbatim, bypassing
+  // buildCharacterReferencePromptParts entirely. Lets operators rescue a
+  // character whose default-prompt outputs keep failing (the LEGISLATOR-as-bird
+  // and FOUNDER-identity-drift episodes during the PNW field-guide all needed
+  // this). When the file omits a field, the default builder fills it.
+  // File shape (any subset valid):
+  //   {
+  //     "angles": {
+  //       "front":         { "positive": "...", "negative": "..." },
+  //       "three-quarter": { ... },
+  //       "profile":       { ... },
+  //       "full-body":     { ... }
+  //     },
+  //     "shared": { "model": "seedream-v5-lite", "cfg_scale": 9,
+  //                 "aspect_ratio": "1:1", "resolution": "1K", "seed": 42 }
+  //   }
+  .option('--override-prompt <path>', 'Path to a JSON file containing per-angle prompt overrides (see header comment in cli.ts add-character)')
   .action(async (opts: {
     project: string; name: string; gender: string; age: string;
     description?: string; wardrobe: string; voiceDesc?: string; baseTraits?: string; skipImages: boolean;
+    overridePrompt?: string;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -294,36 +313,72 @@ program
       const charDir = getCharacterDir(series, character.name);
       await mkdir(charDir, { recursive: true });
 
+      // Optional operator override: read positive/negative prompts (and a
+      // small set of shared params) from a JSON file. Lets the operator
+      // rescue a character whose default-prompt outputs keep failing.
+      type OverrideFile = {
+        angles?: Record<string, { positive?: string; negative?: string }>;
+        shared?: {
+          model?: string;
+          cfg_scale?: number;
+          aspect_ratio?: string;
+          resolution?: string;
+          seed?: number;
+        };
+      };
+      let override: OverrideFile = {};
+      if (opts.overridePrompt) {
+        try {
+          const raw = await readFile(resolve(opts.overridePrompt), 'utf-8');
+          override = JSON.parse(raw) as OverrideFile;
+          console.log(`  Using prompt overrides from ${opts.overridePrompt}`);
+        } catch (err) {
+          console.warn(`  Failed to read --override-prompt ${opts.overridePrompt}: ${(err as Error).message}`);
+        }
+      }
+      const sharedModel = override.shared?.model ?? 'seedream-v5-lite';
+      const sharedCfg = override.shared?.cfg_scale ?? 10;
+      const sharedAspect = override.shared?.aspect_ratio ?? '1:1';
+      const sharedResolution = override.shared?.resolution ?? '1K';
+      const sharedSeed = override.shared?.seed ?? seed;
+
       const angles: ('front' | 'three-quarter' | 'profile' | 'full-body')[] = ['front', 'three-quarter', 'profile', 'full-body'];
       const filenames = ['front.png', 'three-quarter.png', 'profile.png', 'full-body.png'];
 
       console.log(`Generating reference images for ${character.name}...`);
 
       for (let i = 0; i < angles.length; i++) {
-        // structured prompt keeps the positive prompt under the
+        const angle = angles[i];
+        const angleOverride = override.angles?.[angle];
+
+        // Default prompt build (still used when override.angles[angle].positive
+        // is missing). structured prompt keeps the positive prompt under the
         // model's silent-reject ceiling and pushes style-reminder cues
         // into negative_prompt.
-        const { positive: prompt, negativeAdditions } =
-          buildCharacterReferencePromptParts(character, series.aesthetic, angles[i], {
-            model: 'seedream-v5-lite',
+        const { positive: defaultPositive, negativeAdditions } =
+          buildCharacterReferencePromptParts(character, series.aesthetic, angle, {
+            model: sharedModel,
             negativePromptStrategy: series.videoDefaults.imageDefaults?.negativePromptStrategy ?? 'auto',
           });
+        const prompt = angleOverride?.positive ?? defaultPositive;
         const baseNegatives = [
           'deformed', 'blurry', 'bad anatomy', 'low quality',
           'multiple people', 'watermark',
           'character reference sheet', 'comic panels', 'panel borders',
         ];
-        const negativePrompt = [...baseNegatives, ...negativeAdditions].join(', ');
+        const negativePrompt = angleOverride?.negative
+          ?? [...baseNegatives, ...negativeAdditions].join(', ');
 
         try {
           const response = await generateImage(client, {
+            model: sharedModel,
             prompt,
             negative_prompt: negativePrompt,
-            resolution: '1K',
-            aspect_ratio: '1:1',
+            resolution: sharedResolution,
+            aspect_ratio: sharedAspect,
             steps: 30,
-            cfg_scale: 10,
-            seed,
+            cfg_scale: sharedCfg,
+            seed: sharedSeed,
             safe_mode: false,
             hide_watermark: true,
           });
@@ -331,10 +386,30 @@ program
           if (response.images?.[0]) {
             const imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
             const finalPath = await writeImageBytesSmart(imgBuffer, join(charDir, filenames[i]));
-            console.log(`  ${angles[i]}: saved -> ${basename(finalPath)}`);
+            console.log(`  ${angle}: saved -> ${basename(finalPath)}`);
+
+            // Sidecar: capture the resolved prompt + params for this angle so
+            // operators can hand-edit and re-run with --override-prompt.
+            const returnedSeed = (response.images[0] as { seed?: number }).seed;
+            const sidecarPath = join(charDir, `${angle}.prompt.json`);
+            const sidecar = {
+              character: character.name,
+              angle,
+              model: sharedModel,
+              prompt,
+              negative_prompt: negativePrompt,
+              cfg_scale: sharedCfg,
+              aspect_ratio: sharedAspect,
+              resolution: sharedResolution,
+              seed: sharedSeed,
+              returnedSeed,
+              overrideSource: opts.overridePrompt ?? null,
+              generatedAt: new Date().toISOString(),
+            };
+            await writeFile(sidecarPath, JSON.stringify(sidecar, null, 2), 'utf-8');
           }
         } catch (err) {
-          console.warn(`  ${angles[i]}: failed - ${err}`);
+          console.warn(`  ${angle}: failed - ${err}`);
         }
       }
 
