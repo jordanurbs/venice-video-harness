@@ -306,6 +306,7 @@ program
         const { positive: prompt, negativeAdditions } =
           buildCharacterReferencePromptParts(character, series.aesthetic, angles[i], {
             model: 'seedream-v5-lite',
+            negativePromptStrategy: series.videoDefaults.imageDefaults?.negativePromptStrategy ?? 'auto',
           });
         const baseNegatives = [
           'deformed', 'blurry', 'bad anatomy', 'low quality',

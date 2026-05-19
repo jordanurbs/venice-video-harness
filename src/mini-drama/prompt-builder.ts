@@ -648,7 +648,16 @@ export function buildCharacterReferencePromptParts(
   char: MiniDramaCharacter,
   aesthetic: AestheticProfile,
   angle: 'front' | 'three-quarter' | 'profile' | 'full-body',
-  options?: { model?: string; maxChars?: number },
+  options?: {
+    model?: string;
+    maxChars?: number;
+    /**
+     * Selects the anti-photoreal guard family. Pass the series'
+     * `imageDefaults.negativePromptStrategy` (or `'auto'` to infer).
+     * See ImageModelDefaults.negativePromptStrategy.
+     */
+    negativePromptStrategy?: 'auto' | 'stylized' | 'photoreal' | 'none';
+  },
 ): { positive: string; negativeAdditions: string[] } {
   const baseTraits = char.baseTraits ?? (char.gender === 'female' ? FEMALE_BASE_TRAITS : MALE_BASE_TRAITS);
   const cap = options?.maxChars
@@ -689,14 +698,30 @@ export function buildCharacterReferencePromptParts(
   // Style-reminder content + photorealism guards belong on the negative side.
   // They steer the model away from the wrong rendering family without eating
   // positive-prompt budget.
+  //
+  // Strategy selects whether to emit anti-photoreal guards. For photoreal
+  // aesthetics ("documentary", "photograph", "cinematic photography") these
+  // guards fight the positives — the legislator-as-bird and founder-as-bird
+  // regressions in the PNW field-guide episode were caused exactly by this.
+  const strategy = options?.negativePromptStrategy ?? 'auto';
+  const wantsAntiPhotoreal = strategy === 'stylized'
+    ? true
+    : strategy === 'photoreal' || strategy === 'none'
+      ? false
+      : !isPhotorealAesthetic(aesthetic);
+
+  if (strategy === 'none') {
+    return { positive, negativeAdditions: [] };
+  }
+
+  const antiPhotorealParts = wantsAntiPhotoreal
+    ? ['photorealistic', 'photograph', 'photo', '3D render', 'Pixar']
+    : [];
+
   const negativeAdditions = [
     aesthetic.filmStock ? `not ${aesthetic.filmStock}` : null,
-    aesthetic.palette ? `not ${aesthetic.palette}` : null,
-    'photorealistic',
-    'photograph',
-    'photo',
-    '3D render',
-    'Pixar',
+    aesthetic.palette && wantsAntiPhotoreal ? `not ${aesthetic.palette}` : null,
+    ...antiPhotorealParts,
     'no text',
     'no labels',
     'no annotations',
@@ -706,4 +731,31 @@ export function buildCharacterReferencePromptParts(
   ].filter((s): s is string => Boolean(s));
 
   return { positive, negativeAdditions };
+}
+
+/**
+ * Detect a photoreal series aesthetic from natural-language fields so
+ * `negativePromptStrategy: 'auto'` can do the right thing without making
+ * the user spell it out. We check `style`, `lensCharacteristics`,
+ * `filmStock`, and a `notes` field (when present) for any of:
+ *   photoreal, photograph, photo, documentary, live action, naturalist,
+ *   cinematic photography
+ *
+ * This is a precision-over-recall heuristic — anything close to photoreal
+ * suppresses the anti-photoreal guards. Operators who want the legacy
+ * behaviour back can flip `negativePromptStrategy: 'stylized'`.
+ */
+function isPhotorealAesthetic(aesthetic: AestheticProfile): boolean {
+  const blob = [
+    aesthetic.style,
+    (aesthetic as { lensCharacteristics?: string }).lensCharacteristics,
+    aesthetic.filmStock,
+    (aesthetic as { notes?: string }).notes,
+  ]
+    .filter((s): s is string => typeof s === 'string')
+    .join(' ')
+    .toLowerCase();
+  return /\b(photoreal|photograph|photo|documentary|live[- ]action|naturalist|cinematic photography|nature[- ]documentary)\b/.test(
+    blob,
+  );
 }

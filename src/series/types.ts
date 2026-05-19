@@ -66,6 +66,22 @@ export interface ImageModelDefaults {
   generationModel: string;
   /** Multi-edit model — e.g. `seedream-v5-lite-edit`, `nano-banana-pro-edit`. */
   editModel: string;
+  /**
+   * Strategy for the negative-prompt builder when constructing character
+   * reference images and panels:
+   *   - 'auto'     — (default) infer from the series aesthetic. Aesthetics
+   *                  mentioning "photoreal", "photograph", "documentary",
+   *                  "photo", "live action", "cinematic photography" suppress
+   *                  the anti-photoreal guards; everything else keeps them.
+   *   - 'stylized' — always inject anti-photoreal guards (photorealistic,
+   *                  photograph, photo, 3D render, Pixar). Legacy behaviour.
+   *   - 'photoreal'— never inject anti-photoreal guards; keep only structural
+   *                  guards (deformed, watermark, text, etc.).
+   *   - 'none'     — emit an empty negative prompt; trust positives only.
+   *                  Useful for paths that have already hand-tuned a negative
+   *                  via `negativePromptOverride`.
+   */
+  negativePromptStrategy?: 'auto' | 'stylized' | 'photoreal' | 'none';
 }
 
 export type SeedanceCompatibilityMode = 'prompt' | 'fallback' | 'launder';
