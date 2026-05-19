@@ -1181,8 +1181,14 @@ export function assertShotDurationsValid(
         continue;
       }
       // The model may have a stepped duration ladder (e.g. Wan 2.7 R2V only
-      // accepts 5s/10s). Use modelSupportsDuration to honour that.
-      if (!modelSupportsDuration(model, shot.duration)) {
+      // accepts 5s/10s). Use modelSupportsDuration for the loose
+      // (under-the-ceiling) check, then a strict membership check when the
+      // model exposes an explicit ladder. Strict check catches 8s on Wan 2.7
+      // R2V which modelSupportsDuration's lenient fallback would let through.
+      const passesLenient = modelSupportsDuration(model, shot.duration);
+      const passesStrict = modelSpec.durations.length === 0
+        || modelSpec.durations.includes(shot.duration);
+      if (!passesLenient || !passesStrict) {
         violations.push({
           shotNumber: shotNum,
           duration: shot.duration,
