@@ -356,6 +356,7 @@ export function buildVideoPrompt(
   shot: ShotScript,
   series: SeriesState,
   previousShot?: ShotScript,
+  episodeAudioMix?: import('../series/types.js').AudioMixDefaults,
 ): MiniDramaVideoPrompt {
   if (!series.aesthetic) {
     throw new Error('Series aesthetic must be set before generating videos.');
@@ -439,11 +440,30 @@ export function buildVideoPrompt(
 
   const videoPrompt = parts.join(' ');
 
+  // Decide whether to ask the video model to synthesize audio. The default is
+  // `true`, but a model native audio track is wasted (and harmful) when:
+  //   - the shot's primary speaker is NARRATOR — there's nothing on-camera to
+  //     lip-sync to, and Seedance i2v will eagerly generate a competing
+  //     English narrator that fights the Venice TTS bed in the assembler,
+  //   - the episode's audio mix has opted into suppressModelNarration for
+  //     every dialogue-bearing shot,
+  //   - the shot has nativeAudio === 'mute' (per-shot override).
+  // Callers that need the native track regardless can flip nativeAudio: 'keep'.
+  const isNarratorShot = shot.dialogue?.character?.toUpperCase() === 'NARRATOR';
+  const suppressGlobal = episodeAudioMix?.suppressModelNarration === true && Boolean(shot.dialogue);
+  const muteByOverride = shot.nativeAudio === 'mute';
+  const keepByOverride = shot.nativeAudio === 'keep';
+  const audio = keepByOverride
+    ? true
+    : (isNarratorShot || suppressGlobal || muteByOverride)
+      ? false
+      : true;
+
   return {
     prompt: videoPrompt,
     model: modelId,
     duration: shot.duration,
-    audio: true,
+    audio,
     characterElements,
     sceneImagePaths: shot.sceneImagePaths,
     referenceImageUrls: useRefs ? [] : undefined,

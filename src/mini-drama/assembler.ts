@@ -264,9 +264,20 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
   let processedFiles = normalizedFiles;
 
   if (dialogueDir && existsSync(dialogueDir)) {
-    console.log(`  Replacing dialogue with Venice TTS (native audio ducked to ${Math.round(nativeAudioVolume * 100)}%)...`);
+    console.log(`  Replacing dialogue with Venice TTS (native audio default ${Math.round(nativeAudioVolume * 100)}%; per-shot shot.nativeAudio overrides)...`);
     const tmpDir = join(dirname(outputPath), '.tmp-dialogue-mix');
     await mkdir(tmpDir, { recursive: true });
+
+    // Build a quick lookup so per-shot `nativeAudio` overrides win.
+    const shotByKey = new Map<string, ShotScript>();
+    if (options.shots) {
+      for (const s of options.shots) {
+        shotByKey.set(shotKey(s.shotNumber), s);
+        if (s.shotIdSuffix) {
+          shotByKey.set(shotKey(`${s.shotNumber}${s.shotIdSuffix}`), s);
+        }
+      }
+    }
 
     processedFiles = [];
     let missing = 0;
@@ -278,12 +289,26 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
       // builder anyway so the contract is enforced everywhere.
       const shotNum = shotName.replace('shot-', '');
       const dialoguePath = dialogueFileForShot(dialogueDir, shotNum);
+      const matchingShot = shotByKey.get(shotKey(shotNum));
+      let effectiveNative = nativeAudioVolume;
+      let nativeLabel: string | undefined;
+      if (matchingShot?.nativeAudio === 'mute') {
+        effectiveNative = 0;
+        nativeLabel = 'mute';
+      } else if (matchingShot?.nativeAudio === 'duck') {
+        effectiveNative = 0.2;
+        nativeLabel = 'duck';
+      } else if (matchingShot?.nativeAudio === 'keep') {
+        effectiveNative = 1.0;
+        nativeLabel = 'keep';
+      }
 
       if (existsSync(dialoguePath)) {
         const processedPath = join(tmpDir, `${shotName}-voiced.mp4`);
-        replaceDialogueInShot(videoPath, dialoguePath, processedPath, nativeAudioVolume);
+        replaceDialogueInShot(videoPath, dialoguePath, processedPath, effectiveNative);
         processedFiles.push(processedPath);
-        console.log(`    ${shotName}: dialogue replaced (${shotKey(shotNum)})`);
+        const label = nativeLabel ? ` native=${nativeLabel}` : '';
+        console.log(`    ${shotName}: dialogue replaced (${shotKey(shotNum)})${label}`);
       } else {
         processedFiles.push(videoPath);
         // Warn loudly on fall-through. Without this, every `existsSync`

@@ -1499,7 +1499,7 @@ program
     }
     console.log('');
 
-    const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan);
+    const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan, script.audioMix);
     await saveGenerationPlan(episodeDir, plan);
 
     const ep = series.episodes.find(e => e.number === opts.episode);
@@ -1909,11 +1909,17 @@ program
   // already false).
   .option('--dialogue-replace', 'Replace native model dialogue with Venice TTS (off by default; flip on only when override-audio --dialogue has produced dialogue-shot-NNN.mp3 files)', false)
   .option('--no-dialogue-replace', 'Explicitly disable Venice TTS dialogue replacement (now the default — kept for backward compatibility with older scripts)')
-  .option('--native-volume <vol>', 'Native audio volume in the final mix (0-1). Default 1.0 (full). Drop to ~0.2 only when --dialogue-replace is on so the Venice TTS dialogue isn\'t fighting the model-native track.', '1.0')
+  // Default is intentionally unset; resolved below to `0` when
+  // --dialogue-replace is on (so model-generated narration / dialogue can't
+  // fight the Venice TTS) and `1.0` otherwise. Pass the flag explicitly to
+  // override either default — for example, --native-volume 0.2 keeps a soft
+  // ambient bed under the TTS for shots whose model audio is just room tone.
+  // Per-shot `shot.nativeAudio: 'mute' | 'duck' | 'keep'` always wins.
+  .option('--native-volume <vol>', 'Native audio volume in the final mix (0-1). Default: 0 with --dialogue-replace, 1.0 otherwise. Per-shot shot.nativeAudio overrides this default.')
   .action(async (opts: {
     project: string; episode: number; subtitles: boolean; music: boolean;
     ambient: boolean; ambientVolume: string;
-    dialogueReplace: boolean; nativeVolume: string;
+    dialogueReplace: boolean; nativeVolume?: string;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -1941,12 +1947,21 @@ program
     // AND the TTS files exist.
     const useDialogueReplace = opts.dialogueReplace === true && hasDialogueFiles;
 
+    // Resolve --native-volume default: 0 with --dialogue-replace (Venice TTS
+    // owns the dialogue lane; let nothing compete), 1.0 otherwise. An
+    // explicit operator flag always wins.
+    const nativeVolumeDefault = useDialogueReplace ? 0 : 1.0;
+    const nativeVolume = opts.nativeVolume !== undefined
+      ? parseFloat(opts.nativeVolume)
+      : nativeVolumeDefault;
+
     if (useDialogueReplace) {
-      console.log(`  Dialogue replacement: ON (Venice TTS; native audio ducked to ${Math.round(parseFloat(opts.nativeVolume) * 100)}%)`);
+      const explicit = opts.nativeVolume !== undefined ? ' (operator override)' : ' (default)';
+      console.log(`  Dialogue replacement: ON (Venice TTS; native audio at ${Math.round(nativeVolume * 100)}%${explicit})`);
     } else if (opts.dialogueReplace === true && !hasDialogueFiles) {
       console.log(`  Dialogue replacement: OFF (--dialogue-replace was set but no dialogue-shot-NNN.mp3 files exist -- run override-audio --dialogue first)`);
     } else {
-      console.log(`  Dialogue replacement: OFF (default — using native model dialogue at ${Math.round(parseFloat(opts.nativeVolume) * 100)}% volume)`);
+      console.log(`  Dialogue replacement: OFF (default — using native model dialogue at ${Math.round(nativeVolume * 100)}% volume)`);
     }
 
     // Collect per-shot trim/flip metadata from script
@@ -2037,7 +2052,7 @@ program
       ambientBedPath: hasAmbient ? ambientPath : undefined,
       ambientBedVolume: parseFloat(opts.ambientVolume),
       dialogueDir: useDialogueReplace ? audioDir : undefined,
-      nativeAudioVolume: parseFloat(opts.nativeVolume),
+      nativeAudioVolume: nativeVolume,
       shotTrims,
       endingTitleOverlay: endingTitleShot?.titleOverlay,
       audioMix: script.audioMix,

@@ -197,6 +197,17 @@ export interface AudioMixDefaults {
   lufsTarget?: number;
   /** Final-pass true peak target. Defaults to -1 dBTP. */
   truePeakDb?: number;
+  /**
+   * When true, every shot that has dialogue is queued at Seedance / Wan with
+   * `audio: false` so the model doesn't synthesize its own narrator on top of
+   * the Venice TTS that will be mixed in by the assembler. Strongly recommended
+   * whenever the script's primary speaker is `NARRATOR` — Seedance i2v with
+   * `audio: true` will eagerly generate a competing English narration track
+   * when the prompt contains "narrator" / "documentary" / "naturalist". When
+   * unset, the buildVideoPrompt heuristic forces `audio: false` for NARRATOR
+   * shots anyway (since there's nothing on-camera to lip-sync to).
+   */
+  suppressModelNarration?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +302,17 @@ export interface ShotScript {
    * moment, drop) needs audio emphasis at this shot.
    */
   musicHold?: 'sustain' | 'swell' | 'drop' | 'stinger';
+  /**
+   * How the assembler should treat the video model's native (Seedance / Wan)
+   * audio track during dialogue replacement:
+   *   - 'mute' — multiply native by 0 (silenced; only Venice TTS audible)
+   *   - 'duck' — multiply native by 0.2 (legacy default; keeps ambient bed)
+   *   - 'keep' — multiply native by 1.0 (no ducking; competes with TTS)
+   * Per-shot value wins over the CLI's `--native-volume`. Use when one shot
+   * has genuine ambient (paper rustle, room tone) you want to preserve while
+   * the rest of the episode mutes a competing AI narrator.
+   */
+  nativeAudio?: 'mute' | 'duck' | 'keep';
   /**
    * Optional suffix letter for inserted shots. When set, the canonical
    * shot id becomes `shotNumber + shotIdSuffix` — for example, shotNumber 3

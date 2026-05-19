@@ -821,6 +821,7 @@ async function renderSingleShotUnit(
   previousRenderedShotPath: string | undefined,
   nextShotNumber: number | undefined,
   previousShot?: ShotScript,
+  episodeAudioMix?: import('../series/types.js').AudioMixDefaults,
 ): Promise<string[]> {
   const panelPath = getShotPanelPath(sceneDir, shot.shotNumber);
   if (!existsSync(panelPath)) {
@@ -841,7 +842,17 @@ async function renderSingleShotUnit(
     return [videoPath];
   }
 
-  const videoPrompt = buildVideoPrompt(shot, series, previousShot);
+  const videoPrompt = buildVideoPrompt(shot, series, previousShot, episodeAudioMix);
+  if (!videoPrompt.audio && shot.dialogue) {
+    const reason = shot.nativeAudio === 'mute'
+      ? 'shot.nativeAudio=mute'
+      : episodeAudioMix?.suppressModelNarration
+        ? 'episode.audioMix.suppressModelNarration'
+        : shot.dialogue.character?.toUpperCase() === 'NARRATOR'
+          ? 'NARRATOR shot (auto)'
+          : 'unknown';
+    console.log(`  Audio: model-native disabled (${reason})`);
+  }
   unit.model = videoPrompt.model;
 
   if (videoPrompt.modelResolution) {
@@ -1122,6 +1133,7 @@ export async function generateEpisodeVideos(
   shots: ShotScript[],
   sceneDir: string,
   plan: GenerationPlan,
+  episodeAudioMix?: import('../series/types.js').AudioMixDefaults,
 ): Promise<GenerateEpisodeVideosResult> {
   const videoPaths: string[] = [];
   const shotsByNumber = new Map(shots.map(shot => [shot.shotNumber, shot]));
@@ -1149,6 +1161,7 @@ export async function generateEpisodeVideos(
           previousRenderedShotPath,
           nextShotNumber,
           previousShot,
+          episodeAudioMix,
         )
         : await renderMultiShotUnitUntilSuccess(
           client,
