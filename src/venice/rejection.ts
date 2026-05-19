@@ -19,6 +19,35 @@
 export const SILENT_REJECT_THRESHOLD_IMAGE = 30_000;
 export const SILENT_REJECT_THRESHOLD_VIDEO = 100_000;
 
+/**
+ * Per-resolution image thresholds. The flat 30_000 ceiling lets some real
+ * rejections slip through at 1K (the LEGISLATOR profile in the PNW
+ * field-guide came back as a ~2 KB refusal stub which is well under 30 KB
+ * but we need a wider margin at 1K to catch noisier rejections that still
+ * compress lower than a real photo). Conversely small-resolution outputs
+ * can legitimately be under 30 KB.
+ *
+ * Lookup with `thresholdForResolution(res)`; unknown values fall back to
+ * the flat default.
+ */
+export const SILENT_REJECT_THRESHOLDS_BY_RESOLUTION: Record<string, number> = {
+  '512x512': 20_000,
+  '512': 20_000,
+  '720p': 30_000,
+  '1K': 50_000,
+  '1k': 50_000,
+  '1080p': 75_000,
+  '2K': 150_000,
+  '2k': 150_000,
+  '4K': 400_000,
+  '4k': 400_000,
+};
+
+export function thresholdForResolution(res?: string): number {
+  if (!res) return SILENT_REJECT_THRESHOLD_IMAGE;
+  return SILENT_REJECT_THRESHOLDS_BY_RESOLUTION[res] ?? SILENT_REJECT_THRESHOLD_IMAGE;
+}
+
 export interface VeniceRejectionInfo {
   model: string;
   prompt?: string;

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import type { VeniceClient } from './client.js';
 import type { MultiEditModel, MultiEditRequest } from './types.js';
+import { assertNotSilentRejectImage } from './rejection.js';
 
 const MULTI_EDIT_PATH = '/api/v1/image/multi-edit';
 // Safe low-level fallback. Seedance 2.0 only gates face-bearing images, so
@@ -57,7 +58,13 @@ export async function multiEditImage(
     images,
   };
 
-  return client.postBinary(MULTI_EDIT_PATH, body as unknown as Record<string, unknown>);
+  const result = await client.postBinary(MULTI_EDIT_PATH, body as unknown as Record<string, unknown>);
+  // Multi-edit responses are returned as raw bytes (PNG/WebP). When Seedream
+  // silently refuses a prompt (e.g. content-moderation hit) we get a tiny
+  // refusal stub. Catch this here so callers don't try to use a 2 KB image
+  // as a valid edit result.
+  assertNotSilentRejectImage(result, { model, prompt });
+  return result;
 }
 
 /**
