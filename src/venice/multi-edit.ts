@@ -1,7 +1,15 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import type { VeniceClient } from './client.js';
 import type { MultiEditModel, MultiEditRequest } from './types.js';
 import { assertNotSilentRejectImage } from './rejection.js';
+
+// Intentional non-cache: every call to loadImageAsDataUri / multiEditImage
+// re-reads its inputs from disk. Do NOT introduce an in-process cache of
+// reference-image bytes here without also tracking each file's mtime as the
+// cache key — character reference images can be regenerated under the same
+// path while the harness process is alive (the Founder/Legislator
+// regenerations during the PNW field-guide produced exactly this pattern),
+// and a path-keyed cache would silently serve stale bytes.
 
 const MULTI_EDIT_PATH = '/api/v1/image/multi-edit';
 // Safe low-level fallback. Seedance 2.0 only gates face-bearing images, so
@@ -23,8 +31,31 @@ function toDataUri(base64: string, mime = 'image/png'): string {
 }
 
 export async function loadImageAsDataUri(filePath: string): Promise<string> {
+  // Always re-read from disk; see top-of-file note about why a cache is unsafe.
   const buffer = await readFile(filePath);
   return `data:image/png;base64,${buffer.toString('base64')}`;
+}
+
+/**
+ * Return the mtime (ms since epoch) for each reference image. Useful for
+ * diagnostic logs — "character refs loaded: front.png mtime=… three-quarter.png
+ * mtime=…" lets the operator confirm the latest regeneration was picked up.
+ *
+ * Missing files are silently dropped so callers can pass an optimistic list.
+ */
+export async function referenceFreshness(
+  paths: string[],
+): Promise<Array<{ path: string; mtimeMs: number }>> {
+  const out: Array<{ path: string; mtimeMs: number }> = [];
+  for (const p of paths) {
+    try {
+      const s = await stat(p);
+      out.push({ path: p, mtimeMs: s.mtimeMs });
+    } catch {
+      // skip missing
+    }
+  }
+  return out;
 }
 
 /**
