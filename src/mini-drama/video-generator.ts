@@ -438,7 +438,13 @@ async function renderVideoFile(
     body.resolution = '720p';
   }
 
-  if (effectiveModel.includes('reference-to-video') || effectiveModel.includes('seedance')) {
+  // Seedance image-to-video inherits aspect from the start image and
+  // returns HTTP 400 if aspect_ratio is provided. Reference-to-video and
+  // text-to-video Seedance variants do accept aspect_ratio.
+  if (
+    effectiveModel.includes('reference-to-video')
+    || (effectiveModel.includes('seedance') && !effectiveModel.includes('image-to-video'))
+  ) {
     body.aspect_ratio = options.aspectRatio ?? '16:9';
   }
 
