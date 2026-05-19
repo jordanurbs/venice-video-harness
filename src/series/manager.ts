@@ -14,6 +14,7 @@ import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   DEFAULT_IMAGE_EDIT_MODEL,
   DEFAULT_LIP_SYNC_MODEL,
+  recommendedSeedanceCompatibility,
 } from './types.js';
 
 const OUTPUT_BASE = resolve('output');
@@ -106,6 +107,26 @@ export async function saveSeries(series: SeriesState): Promise<void> {
   }
   series.updatedAt = new Date().toISOString();
   const filePath = join(series.outputDir, 'series.json');
+
+  // Auto-fill `seedanceCompatibility` from the registered image-generation
+  // model. The PNW field-guide hit a 422 because seedanceCompatibility was
+  // unset and the default planner couldn't decide what to do with a
+  // nano-banana panel bound for Seedance R2V. The auto-fill only runs when
+  // the operator hasn't already set the field, so explicit overrides win.
+  const imageGen = series.videoDefaults.imageDefaults?.generationModel;
+  const recommended = recommendedSeedanceCompatibility(imageGen);
+  if (recommended && !series.videoDefaults.seedanceCompatibility) {
+    series.videoDefaults.seedanceCompatibility = recommended;
+    console.log(`  series: auto-set seedanceCompatibility="${recommended}" from imageDefaults.generationModel="${imageGen}".`);
+  } else if (
+    recommended
+    && series.videoDefaults.seedanceCompatibility
+    && series.videoDefaults.seedanceCompatibility !== recommended
+  ) {
+    console.warn(
+      `  series: operator-set seedanceCompatibility="${series.videoDefaults.seedanceCompatibility}" disagrees with the registry recommendation "${recommended}" for imageDefaults.generationModel="${imageGen}". Keeping operator value.`,
+    );
+  }
 
   // Rebuild `characters[]` from the on-disk per-character JSON files. This
   // closes a recurring data-loss bug where storyboard-episode / qa-approve /

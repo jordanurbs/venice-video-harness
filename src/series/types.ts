@@ -86,6 +86,52 @@ export interface ImageModelDefaults {
 
 export type SeedanceCompatibilityMode = 'prompt' | 'fallback' | 'launder';
 
+/**
+ * Recommended `seedanceCompatibility` mode given an image-generation model.
+ * Used by `saveSeries` to auto-fill the field when the operator hasn't
+ * explicitly set it. The table is intentionally conservative: models known
+ * to produce face-bearing images Seedance will accept get `prompt` (run a
+ * fast preflight, but expect success); known-bad pairings get `fallback`
+ * (auto-switch to a Kling fallback); unknowns get `launder` (rewrite the
+ * image through Seedream before sending to Seedance).
+ */
+export const SEEDANCE_COMPATIBILITY_BY_IMAGE_MODEL: Record<string, SeedanceCompatibilityMode> = {
+  // Native Seedream outputs are accepted by Seedance directly.
+  'seedream-v4': 'prompt',
+  'seedream-v5-lite': 'prompt',
+  // Other faceless-friendly families: Seedance won't reject these for
+  // atmosphere shots but face-bearing images need laundering.
+  'nano-banana-2': 'launder',
+  'nano-banana-pro': 'launder',
+  'gpt-image-1-5': 'launder',
+  'gpt-image-2': 'launder',
+  // Stylized models: fall back to a Kling R2V/i2v path entirely.
+  'flux-2-pro': 'fallback',
+  'flux-2-max': 'fallback',
+  'hidream': 'fallback',
+  'recraft-v4': 'fallback',
+  'recraft-v4-pro': 'fallback',
+  'imagineart-1.5-pro': 'fallback',
+  'qwen-image': 'fallback',
+  'qwen-image-2': 'fallback',
+  'qwen-image-2-pro': 'fallback',
+  'grok-imagine': 'fallback',
+  'hunyuan-image-v3': 'fallback',
+  'venice-sd35': 'fallback',
+  'chroma': 'fallback',
+  'z-image-turbo': 'fallback',
+  'wai-Illustrious': 'fallback',
+  'lustify-sdxl': 'fallback',
+  'lustify-v7': 'fallback',
+};
+
+export function recommendedSeedanceCompatibility(
+  generationModel: string | undefined,
+): SeedanceCompatibilityMode | undefined {
+  if (!generationModel) return undefined;
+  return SEEDANCE_COMPATIBILITY_BY_IMAGE_MODEL[generationModel];
+}
+
 // ---------------------------------------------------------------------------
 // Character (general-purpose, not mini-drama specific)
 // ---------------------------------------------------------------------------
