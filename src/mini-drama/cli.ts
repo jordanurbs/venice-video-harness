@@ -2001,18 +2001,46 @@ program
     const epNum = String(opts.episode).padStart(3, '0');
     const outputPath = join(episodeDir, `episode-${epNum}-final.mp4`);
 
+    // Resolve audio paths for each music cue so the assembler picks up
+    // either spec.audioPath (script-provided) or the canonical
+    // audio/music-cue-NNN.mp3 next to the episode. When a cue has no
+    // resolvable audio, the assembler falls back to the single-bed musicPath.
+    const cueAudioPathFor = (spec: { audioPath?: string; startShot: number | string }): string | undefined => {
+      if (spec.audioPath) return resolve(opts.project, spec.audioPath);
+      const shotId = typeof spec.startShot === 'number'
+        ? String(spec.startShot).padStart(3, '0')
+        : spec.startShot;
+      const candidates = [
+        join(audioDir, `music-cue-${shotId}.mp3`),
+        join(audioDir, `music-shot-${shotId}.mp3`),
+      ];
+      for (const c of candidates) {
+        if (existsSync(c)) return c;
+      }
+      return undefined;
+    };
+    // Hydrate musicCues with resolved audio paths so renderMusicCuesTrack
+    // can render directly without re-resolving inside the assembler.
+    const hydratedCues = script.musicCues?.map(spec => ({
+      ...spec,
+      audioPath: spec.audioPath ? resolve(opts.project, spec.audioPath) : cueAudioPathFor(spec),
+    }));
+
     await assembleEpisode({
       videoFiles,
       outputPath,
       srtPath,
       musicPath: hasMusic ? musicPath : undefined,
       musicVolume: 0.15,
+      musicCues: hydratedCues,
+      shots: script.shots,
       ambientBedPath: hasAmbient ? ambientPath : undefined,
       ambientBedVolume: parseFloat(opts.ambientVolume),
       dialogueDir: useDialogueReplace ? audioDir : undefined,
       nativeAudioVolume: parseFloat(opts.nativeVolume),
       shotTrims,
       endingTitleOverlay: endingTitleShot?.titleOverlay,
+      audioMix: script.audioMix,
     });
 
     const ep = series.episodes.find(e => e.number === opts.episode);

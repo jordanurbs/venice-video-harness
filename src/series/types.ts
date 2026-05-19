@@ -146,6 +146,18 @@ export interface MusicCueSpec {
   model?: string;
   /** Output gain in dB. Defaults to -22. */
   gain?: number;
+  /**
+   * Optional time-varying gain stops for a single cue. Each stop says "by the
+   * time we reach shot `atShot`, ramp gain to `gainDb`." Stops are ramped with
+   * a smooth volume crossfade `rampSec` seconds long (default 2.0). Stops
+   * outside the cue's [startShot, endShot] window are ignored. When supplied,
+   * this layers on top of the base `gain`.
+   *
+   * Example: "drop -20% by the time of the florida porch shot"
+   *   { startShot: 1, endShot: 10, gain: -22,
+   *     gainStops: [{ atShot: 7, gainDb: -24, rampSec: 3 }] }
+   */
+  gainStops?: Array<{ atShot: number | string; gainDb: number; rampSec?: number }>;
   /** Fade-in in seconds. Defaults to 1.0. */
   fadeIn?: number;
   /** Fade-out in seconds. Defaults to 1.5. */

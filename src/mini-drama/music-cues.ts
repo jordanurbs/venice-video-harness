@@ -82,6 +82,11 @@ export async function renderMusicCuesTrack(opts: {
   cues: ResolvedMusicCue[];
   outputPath: string;
   totalDurationSec: number;
+  /**
+   * Placement map used to resolve `gainStops[].atShot`. Optional — when
+   * omitted, gain stops are skipped (cues still honour the base `gain`).
+   */
+  placementMap?: PlacementMap;
 }): Promise<string> {
   if (opts.cues.length === 0) {
     throw new Error('renderMusicCuesTrack: at least one cue is required');
@@ -95,6 +100,10 @@ export async function renderMusicCuesTrack(opts: {
     const gain = cue.spec.gain ?? DEFAULT_GAIN_DB;
     const fadeIn = cue.spec.fadeIn ?? DEFAULT_FADE_IN;
     const fadeOut = cue.spec.fadeOut ?? DEFAULT_FADE_OUT;
+    // gainStops[] runs in cue-local time, so build the expression then offset
+    // its `t` by the cue's start. Easier: render the base bed without
+    // gainStops, then apply the expression on the final track (which is
+    // already in timeline time).
     const filter = [
       `volume=${gain}dB`,
       `afade=t=in:st=0:d=${fadeIn}`,
@@ -109,6 +118,27 @@ export async function renderMusicCuesTrack(opts: {
       '-ac', '2',
       opts.outputPath,
     ]);
+    // gainStops: the expression evaluates against timeline t. By convention
+    // cue 1 begins at timeline t=0 (the music bed aligns to the first shot),
+    // so the rendered mp3's local time axis matches the timeline. For
+    // single-cue renderings that begin later, callers should pre-pad the
+    // bed (out of scope here).
+    if (opts.placementMap) {
+      const stopsExpr = buildGainStopsExpr(cue, opts.placementMap);
+      if (stopsExpr) {
+        const tmp = opts.outputPath.replace(/\.mp3$/, '-gainstops.mp3');
+        await execFileAsync('ffmpeg', [
+          '-y',
+          '-i', opts.outputPath,
+          '-af', `volume='${stopsExpr}':eval=frame`,
+          '-ar', '48000',
+          '-ac', '2',
+          tmp,
+        ]);
+        const { rename } = await import('node:fs/promises');
+        await rename(tmp, opts.outputPath);
+      }
+    }
     return opts.outputPath;
   }
 
@@ -163,7 +193,89 @@ export async function renderMusicCuesTrack(opts: {
     '-ac', '2',
     opts.outputPath,
   ]);
+  // Apply per-cue gainStops on the assembled bed. The expression evaluates
+  // against timeline t, which matches the assembled mp3's local time axis as
+  // long as cue 1 starts at timeline t=0 (the standard layout).
+  if (opts.placementMap) {
+    const exprs: string[] = [];
+    for (const cue of opts.cues) {
+      const e = buildGainStopsExpr(cue, opts.placementMap);
+      if (e) exprs.push(e);
+    }
+    if (exprs.length > 0) {
+      const filters = exprs.map(e => `volume='${e}':eval=frame`).join(',');
+      const tmp = opts.outputPath.replace(/\.mp3$/, '-gainstops.mp3');
+      await execFileAsync('ffmpeg', [
+        '-y',
+        '-i', opts.outputPath,
+        '-af', filters,
+        '-ar', '48000',
+        '-ac', '2',
+        tmp,
+      ]);
+      const { rename } = await import('node:fs/promises');
+      await rename(tmp, opts.outputPath);
+    }
+  }
   return opts.outputPath;
+}
+
+/**
+ * Build a single ffmpeg `volume=` expression that ramps gain through a cue's
+ * `gainStops[]`. Stops are ordered along the timeline and produce a smooth
+ * piecewise-linear curve.
+ *
+ * The expression evaluates `t` (timeline seconds) and returns a linear gain
+ * multiplier. Callers should pass the result with `volume=<expr>:eval=frame`.
+ *
+ * Returns null when the cue has no stops or none of them resolve to the
+ * placement map.
+ */
+export function buildGainStopsExpr(
+  cue: ResolvedMusicCue,
+  placementMap: PlacementMap,
+): string | null {
+  const stops = cue.spec.gainStops;
+  if (!stops || stops.length === 0) return null;
+  const baseDb = cue.spec.gain ?? DEFAULT_GAIN_DB;
+  const baseGain = Math.pow(10, baseDb / 20);
+  type Stop = { t: number; gain: number; rampSec: number };
+  const resolved: Stop[] = [];
+  for (const s of stops) {
+    const placement = placementMap[shotIdKey(s.atShot)];
+    if (!placement) {
+      console.warn(`  music-cue: gain stop atShot=${s.atShot} not in placement map; skipping`);
+      continue;
+    }
+    if (placement.startSec < cue.startSec || placement.startSec > cue.endSec) {
+      console.warn(`  music-cue: gain stop atShot=${s.atShot} is outside cue window; skipping`);
+      continue;
+    }
+    resolved.push({
+      t: placement.startSec,
+      gain: Math.pow(10, s.gainDb / 20),
+      rampSec: s.rampSec ?? 2.0,
+    });
+  }
+  if (resolved.length === 0) return null;
+  resolved.sort((a, b) => a.t - b.t);
+
+  // Build a nested piecewise expression:
+  //   t < t1 - r1/2          -> baseGain
+  //   t1-r1/2 .. t1+r1/2     -> linear ramp baseGain -> g1
+  //   t1+r1/2 .. t2-r2/2     -> g1
+  //   t2-r2/2 .. t2+r2/2     -> linear ramp g1 -> g2
+  //   ...                    -> gN
+  let prevGain = baseGain;
+  let expr = `${baseGain.toFixed(6)}`;
+  for (const s of resolved) {
+    const rampStart = (s.t - s.rampSec / 2).toFixed(3);
+    const rampEnd = (s.t + s.rampSec / 2).toFixed(3);
+    const ramp = `(${prevGain.toFixed(6)}+(${s.gain.toFixed(6)}-${prevGain.toFixed(6)})*(t-${rampStart})/${s.rampSec.toFixed(3)})`;
+    expr = `if(lt(t,${rampStart}),${expr},if(lt(t,${rampEnd}),${ramp},${s.gain.toFixed(6)}))`;
+    prevGain = s.gain;
+  }
+  return expr;
 }
 
 /**

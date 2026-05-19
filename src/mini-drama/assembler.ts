@@ -345,6 +345,7 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
         cues: resolved,
         outputPath: cuesTrackPath,
         totalDurationSec: concatDur,
+        placementMap,
       });
       let bedPath: string = cuesTrackPath;
       if (options.shots) {
