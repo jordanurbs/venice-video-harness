@@ -59,6 +59,21 @@ export interface VideoModelDefaults {
    * See CLAUDE.md rule 32 for the underlying motivation.
    */
   seedanceKeyframeForWan?: boolean;
+  /**
+   * Operator's answer to "lip-sync mode or native model voices?" from the
+   * upfront questionnaire. See AudioStrategy for semantics. When unset, the
+   * harness uses the per-call defaults (effectively 'native'). Setting this
+   * at series-creation time eliminates the double-narration / mouth-out-of-
+   * sync class of bugs we hit during the PNW field-guide episode.
+   */
+  audioStrategy?: AudioStrategy;
+  /**
+   * Operator's answer to "which video model family?" from the upfront
+   * questionnaire. See VideoFamilyPreference. `auto` (or unset) keeps the
+   * harness's Seedance 2.0 defaults. Setting this swaps the action /
+   * atmosphere / character-consistency model defaults to the chosen family.
+   */
+  videoFamilyPreference?: VideoFamilyPreference;
 }
 
 export interface ImageModelDefaults {
@@ -85,6 +100,121 @@ export interface ImageModelDefaults {
 }
 
 export type SeedanceCompatibilityMode = 'prompt' | 'fallback' | 'launder';
+
+// ---------------------------------------------------------------------------
+// Upfront questionnaire answers (W3 / production-audit follow-up)
+//
+// These two fields belong on every new series. The MCP's pipeline skill asks
+// the operator before calling `series.new`; the answers steer model selection
+// and audio routing for the whole series, eliminating three classes of bugs
+// we hit producing the PNW field-guide:
+//   1. NARRATOR-driven episodes with `dialogueReplace: false` → double narration
+//      when Seedance synthesizes its own competing English narrator.
+//   2. Lip-sync-heavy scripts forced through Seedance R2V (no native lip-sync) →
+//      mouths out of sync with the dialogue track.
+//   3. Multi-character episodes accidentally routed to Grok Imagine (no R2V) →
+//      identity drift across cuts.
+// ---------------------------------------------------------------------------
+
+/**
+ * How dialogue reaches the final mix.
+ *
+ *   - 'native'      — the video model speaks the dialogue in-frame. Best when
+ *                     characters speak only once or twice, the model's voice
+ *                     range suffices, and you don't need precise control.
+ *                     `assemble-episode` keeps `dialogueReplace: false`.
+ *   - 'lip-sync'    — Venice TTS renders each dialogue line, Wan 2.7 i2v
+ *                     lip-syncs the character's mouth to the audio. Best when
+ *                     a character speaks many times (so a single voice picks
+ *                     up across the episode), the user wants accent control,
+ *                     or the dialogue needs deterministic delivery.
+ *                     The planner routes face-visible low/medium-motion
+ *                     dialogue shots to `videoDefaults.lipSyncModel`.
+ *                     `assemble-episode` defaults `dialogueReplace: true`.
+ *   - 'narrator-vo' — the speaker is a NARRATOR / voice-over only (no on-camera
+ *                     speaking mouth). Every dialogue-bearing shot is queued
+ *                     with `audio: false` so Seedance can't synthesize a
+ *                     competing narrator; Venice TTS owns the dialogue lane.
+ *                     `assemble-episode` defaults `dialogueReplace: true` and
+ *                     `nativeVolume: 0`. Sets `audioMix.suppressModelNarration: true`.
+ */
+export type AudioStrategy = 'native' | 'lip-sync' | 'narrator-vo';
+
+/**
+ * Operator's preferred video model family for action / atmosphere shots.
+ * `auto` keeps the current defaults (Seedance 2.0). Picking a family swaps
+ * `actionModel`, `atmosphereModel`, and `characterConsistencyModel` to that
+ * family's i2v / R2V variants. `lipSyncModel` stays on Wan 2.7 regardless —
+ * it's the only Venice model with proper lip-sync today.
+ *
+ * Family quick reference:
+ *   - 'seedance'     — Seedance 2.0 (default). Strong R2V identity anchoring,
+ *                      4-15s native durations, mature `audio: true` support,
+ *                      strict provenance requirements (seedream face refs only).
+ *   - 'happyhorse'   — HappyHorse 1.0. Strong R2V, 3-15s natives. Use when
+ *                      you want photorealism Seedream/Seedance can't quite
+ *                      hit (livelier hand-camera realism, more cinematic
+ *                      grain). Same provenance gate as Seedance.
+ *   - 'grok-imagine' — Grok Imagine. No R2V variant — character consistency
+ *                      falls back to Kling O3 R2V. Pick when atmosphere is
+ *                      paramount and identity locks aren't critical (e.g.
+ *                      character is silhouetted or out of focus most of the
+ *                      time).
+ *   - 'kling-o3'     — Kling O3 Standard / Pro / 4K. Best for stylized /
+ *                      illustrated aesthetics. Accepts non-seedream images.
+ */
+export type VideoFamilyPreference =
+  | 'auto'
+  | 'seedance'
+  | 'happyhorse'
+  | 'grok-imagine'
+  | 'kling-o3';
+
+/**
+ * Returns the model-id triplet for a given preferred family. Used by
+ * `createSeries` to populate `actionModel` / `atmosphereModel` /
+ * `characterConsistencyModel` from the operator's questionnaire answer.
+ *
+ * `lipSyncModel` is intentionally NOT included — Wan 2.7 i2v is the only
+ * Venice lip-sync option today; callers should keep it at the default
+ * regardless of family.
+ */
+export function resolveVideoFamilyDefaults(
+  family: VideoFamilyPreference,
+): { actionModel: string; atmosphereModel: string; characterConsistencyModel: string } {
+  switch (family) {
+    case 'happyhorse':
+      return {
+        actionModel: 'happyhorse-1-0-image-to-video',
+        atmosphereModel: 'happyhorse-1-0-image-to-video',
+        characterConsistencyModel: 'happyhorse-1-0-reference-to-video',
+      };
+    case 'grok-imagine':
+      // Grok Imagine has no R2V variant; fall back to Kling O3 standard for
+      // character consistency. The planner already routes R2V-required shots
+      // appropriately when characterConsistencyModel points at a different
+      // family than action/atmosphere.
+      return {
+        actionModel: 'grok-imagine-image-to-video',
+        atmosphereModel: 'grok-imagine-image-to-video',
+        characterConsistencyModel: 'kling-o3-standard-reference-to-video',
+      };
+    case 'kling-o3':
+      return {
+        actionModel: 'kling-o3-standard-image-to-video',
+        atmosphereModel: 'kling-o3-standard-image-to-video',
+        characterConsistencyModel: 'kling-o3-standard-reference-to-video',
+      };
+    case 'seedance':
+    case 'auto':
+    default:
+      return {
+        actionModel: 'seedance-2-0-image-to-video',
+        atmosphereModel: 'seedance-2-0-image-to-video',
+        characterConsistencyModel: 'seedance-2-0-reference-to-video',
+      };
+  }
+}
 
 /**
  * Recommended `seedanceCompatibility` mode given an image-generation model.
