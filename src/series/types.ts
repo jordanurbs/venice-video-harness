@@ -155,11 +155,9 @@ export type AudioStrategy = 'native' | 'lip-sync' | 'narrator-vo';
  *                      you want photorealism Seedream/Seedance can't quite
  *                      hit (livelier hand-camera realism, more cinematic
  *                      grain). Same provenance gate as Seedance.
- *   - 'grok-imagine' — Grok Imagine. No R2V variant — character consistency
- *                      falls back to Kling O3 R2V. Pick when atmosphere is
- *                      paramount and identity locks aren't critical (e.g.
- *                      character is silhouetted or out of focus most of the
- *                      time).
+ *   - 'grok-imagine' — Grok Imagine i2v + R2V (R2V durations stepped at
+ *                      5s/8s/10s only). Pick for atmosphere-rich shots or
+ *                      when the user wants Grok's signature look.
  *   - 'kling-o3'     — Kling O3 Standard / Pro / 4K. Best for stylized /
  *                      illustrated aesthetics. Accepts non-seedream images.
  */
@@ -190,14 +188,14 @@ export function resolveVideoFamilyDefaults(
         characterConsistencyModel: 'happyhorse-1-0-reference-to-video',
       };
     case 'grok-imagine':
-      // Grok Imagine has no R2V variant; fall back to Kling O3 standard for
-      // character consistency. The planner already routes R2V-required shots
-      // appropriately when characterConsistencyModel points at a different
-      // family than action/atmosphere.
+      // Grok Imagine now ships its own R2V variant (2026-05+). Stays in-family.
+      // Note: Grok R2V durations are stepped at 5s / 8s / 10s only — the
+      // duration preflight in W1.6 will catch any shot scripted outside that
+      // ladder.
       return {
         actionModel: 'grok-imagine-image-to-video',
         atmosphereModel: 'grok-imagine-image-to-video',
-        characterConsistencyModel: 'kling-o3-standard-reference-to-video',
+        characterConsistencyModel: 'grok-imagine-reference-to-video',
       };
     case 'kling-o3':
       return {
@@ -642,8 +640,16 @@ export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   'kling-o3-standard-reference-to-video',
   'kling-o3-pro-reference-to-video',
   'kling-o3-4k-reference-to-video',
+  'kling-v3-4k-reference-to-video',
   'seedance-2-0-reference-to-video',
+  'seedance-2-0-fast-reference-to-video',
   'happyhorse-1-0-reference-to-video',
+  'pixverse-c1-reference-to-video',
+  'grok-imagine-reference-to-video',
+  // Wan 2.7 R2V uses per_reference_audio (elements[].audio_url) for lip-sync;
+  // it still exposes reference_image_urls at the API level.
+  'wan-2-7-reference-to-video',
+  'wan-2.6-reference-to-video',
   'vidu-q3-image-to-video',
   'vidu-q3-text-to-video',
 ]);
@@ -652,11 +658,13 @@ export const MODELS_SUPPORTING_SCENE_IMAGES = new Set([
   'kling-o3-standard-reference-to-video',
   'kling-o3-pro-reference-to-video',
   'kling-o3-4k-reference-to-video',
+  'kling-v3-4k-reference-to-video',
 ]);
 
 export const MODELS_SUPPORTING_END_IMAGE = new Set([
   'kling-v3-pro-image-to-video',
   'kling-v3-standard-image-to-video',
+  'kling-v3-4k-reference-to-video',
   'kling-o3-pro-image-to-video',
   'kling-o3-standard-image-to-video',
   'kling-o3-4k-image-to-video',
@@ -666,13 +674,16 @@ export const MODELS_SUPPORTING_END_IMAGE = new Set([
   'kling-2.6-pro-image-to-video',
   'kling-2.5-turbo-pro-image-to-video',
   'pixverse-v5.6-transition',
+  'pixverse-c1-transition',
   // Wan 2.7 i2v supports `end_image_url` for keyframe bookending — helps
   // anchor identity drift across low-motion lip-sync clips.
   'wan-2-7-image-to-video',
+  'wan-2-7-spicy-image-to-video',
 ]);
 
 export const MODELS_USING_IMAGE_TAGS = new Set([
   'seedance-2-0-reference-to-video',
+  'seedance-2-0-fast-reference-to-video',
   'grok-imagine-reference-to-video',
 ]);
 
@@ -680,12 +691,17 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   'wan-2.6-image-to-video',
   'wan-2.6-text-to-video',
   'wan-2.6-flash-image-to-video',
+  'wan-2.6-reference-to-video',
   'wan-2.5-preview-image-to-video',
   'wan-2.5-preview-text-to-video',
   // Wan 2.7 lip-sync family
   'wan-2-7-image-to-video',
+  'wan-2-7-spicy-image-to-video',
   'wan-2-7-text-to-video',
   'wan-2-7-video-to-video',
+  // DaVinci MagiHuman: talking-head specialist with audio_url input,
+  // alternative to Wan 2.7 i2v for lip-sync work (longer max duration: 30s).
+  'davinci-magihuman-image-to-video',
 ]);
 
 /**

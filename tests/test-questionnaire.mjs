@@ -31,14 +31,14 @@ function ok(label, cond, detail) {
   ok('videoFamilyPreference persisted', s.videoDefaults.videoFamilyPreference === 'happyhorse');
 }
 
-// Family 'grok-imagine' → Grok i2v + Kling R2V fallback.
+// Family 'grok-imagine' → Grok i2v + Grok R2V (Grok now ships R2V).
 {
   const s = createSeries('Grok Series', 'concept', 'drama', 'somewhere', {
     videoFamilyPreference: 'grok-imagine',
   });
   ok('grok actionModel', s.videoDefaults.actionModel === 'grok-imagine-image-to-video');
-  ok('grok characterConsistencyModel falls back to Kling R2V',
-    s.videoDefaults.characterConsistencyModel === 'kling-o3-standard-reference-to-video');
+  ok('grok characterConsistencyModel stays in-family (grok-imagine R2V)',
+    s.videoDefaults.characterConsistencyModel === 'grok-imagine-reference-to-video');
 }
 
 // Family 'kling-o3' → Kling everywhere.
