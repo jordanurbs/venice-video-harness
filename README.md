@@ -28,32 +28,43 @@ Most Venice integrations are thin wrappers around API calls. This harness is the
 
 ### Video Models
 
+Live catalog as of **2026-05-20** (synced against `GET /api/v1/models?type=video` — 103 entries). Families the harness routes to today; private / `-video-to-video` / `-extend-video` variants exist in the live catalog but aren't surfaced here.
+
 | Family | Image-to-Video | Text-to-Video | Max Duration | Audio | Special Features |
 |--------|---------------|---------------|-------------|-------|-----------------|
-| **Seedance 2.0** | i2v, R2V | t2v | 15s | Yes (stereo, lip-sync 8+ langs) | **#1 ranked.** R2V: flat `reference_image_urls`, `@Image` tags. Superior physics and cinematic quality. |
-| **Kling V3** | Pro, Standard | Pro, Standard | 15s | Yes | `end_image_url` for frame targeting |
-| **Kling O3** | Pro, Standard, Pro R2V, Standard R2V | Pro, Standard | 15s | Yes | R2V: `elements`, `reference_image_urls`, `scene_image_urls` |
-| **Kling 2.6** | Pro | Pro | 10s | Yes | `end_image_url` |
-| **Kling 2.5 Turbo** | Pro | Pro | 10s | No | `end_image_url` |
-| **Veo 3.1** | Fast, Full | Fast, Full | 8s | Yes | Up to 4K resolution |
+| **Seedance 2.0** | i2v, R2V | t2v | 15s | Yes (stereo, lip-sync 8+ langs) | **#1 ranked.** R2V: flat `reference_image_urls`, `@Image` tags. Default routing target. |
+| **Seedance 2.0 Fast** | i2v, R2V | t2v | 15s | Yes | Cheaper / faster Seedance 2.0 variant. Same 4-15s ladder, same provenance gate. |
+| **Seedance 1.5 Pro** | i2v | t2v | 12s | Yes | Older Seedance line; kept for parity. |
+| **HappyHorse 1.0** | i2v, R2V | t2v | 15s | Yes | 3-15s native, mature R2V. Livelier hand-camera realism / cinematic grain vs Seedance. |
+| **Wan 2.7** | i2v, R2V, V2V, Spicy | t2v | 15s | Wan i2v has no audio; lip-syncs via `audio_url` input | **Lip-sync flagship.** Only Venice model with proper `audio_url`-driven mouth motion. R2V exposes per-element `audio_url` for multi-speaker. Spicy = uncensored i2v variant. |
+| **Wan 2.6** | Standard, Flash, R2V | Standard | 15s | Yes (i2v/t2v); R2V capped at 10s | Now has R2V variant with `audio_url` input. 1080p. |
+| **Wan 2.5 Preview** | i2v | t2v | 10s | Yes | `audio_url` input. |
+| **Wan 2.2 A14B** | — | t2v | 5s | No | Legacy text-to-video. |
+| **Wan 2.1 Pro** | i2v | — | 6s | No | Legacy. |
+| **DaVinci MagiHuman** | i2v | — | **30s** | Yes (`audio_url` input) | Talking-head specialist. Longest lip-sync duration on Venice. 16:9 only. |
+| **Runway Gen-4.5** | Gen-4.5, Turbo, Aleph | Gen-4.5 Text | 10s | No (silent) | Strong motion physics; 7 aspect ratios. No R2V, no audio, no end-image. |
+| **Sora 2** | Standard, Pro | Standard, Pro | Standard 12s / **Pro 20s** | Yes | Pro now reaches 20s + `true_1080p` resolution. |
+| **Veo 3.1** | Fast, Full | Fast, Full | 8s | Yes | Up to 4K resolution. |
 | **Veo 3** | Fast, Full | Fast, Full | 8s | Yes | |
-| **Sora 2** | Standard, Pro | Standard, Pro | 12s | Yes | Up to 1080p |
-| **Wan 2.6** | Standard, Flash | Standard | 15s | Yes | 1080p, `audio_url` input |
-| **Wan 2.5 Preview** | Yes | Yes | 10s | Yes | `audio_url` input |
-| **Wan 2.2 A14B** | — | Yes | 5s | No | Legacy text-to-video |
-| **Wan 2.1 Pro** | Yes | — | 6s | No | Legacy |
-| **LTX Video 2.0** | Fast, Full, v2.3, 19B | Fast, Full, v2.3, 19B | 20s | Yes | Up to 4K, longest durations |
-| **Longcat** | Standard, Distilled | Standard, Distilled | **30s** | No | Longest single-shot duration |
-| **Vidu Q3** | Yes | Yes | 16s | Yes | `reference_image_urls` |
-| **PixVerse v5.6** | Standard, Transition | Standard | 8s | Yes | Transition: `end_image_url` |
-| **Grok Imagine** | Yes | Yes | 15s | Yes | Wide aspect ratio support |
-| **OVI** | Yes | — | 5s | Yes | |
+| **Kling O3** | Pro, Standard, 4K + R2V variants | Pro, Standard, 4K | 15s | Yes | R2V: `elements`, `reference_image_urls`, `scene_image_urls`. 4K variants for delivery-grade output. |
+| **Kling V3** | Pro, Standard, **4K R2V** | Pro, Standard, **4K** | 15s | Yes | 4K variants added 2026-05+. `end_image_url` on R2V. |
+| **Kling 2.6 Pro** | i2v | t2v | 10s | Yes | `end_image_url`. |
+| **Kling 2.5 Turbo Pro** | i2v | t2v | 10s | No | `end_image_url`. |
+| **PixVerse C1** | i2v, R2V, Transition | t2v | **15s** | Yes | Replaces v5.6: same four resolutions but 15s ladder + new R2V variant. |
+| **PixVerse v5.6** | Standard, Transition | Standard | 8s | Yes | Legacy; prefer C1 for new projects. |
+| **Grok Imagine** | i2v, **R2V**, V2V | t2v | i2v/V2V/t2v 15s · R2V 5/8/10s | i2v/t2v: yes · R2V: no | R2V added 2026-05+ (no longer needs Kling fallback). 7 aspect ratios. |
+| **LTX Video 2.0** | Fast, Full, v2.3, 19B + V2V/extend | Fast, Full, v2.3, 19B | 20s (Fast/v2.3) · 10s (Full) · 18s (19B) | Yes | Up to 4K, longest durations. |
+| **Longcat** | Standard, Distilled | Standard, Distilled | **30s** | No | Longest single-shot for non-talking-head work. |
+| **Vidu Q3** | i2v | t2v | 16s | Yes | `reference_image_urls`. |
+| **OVI** | i2v | — | 5s | Yes | |
 
 > **Seedance face rule:** Seedance 2.0 blocks **face-bearing** input images that weren't produced by `seedream-v5-lite` or `seedream-v5-lite-edit`. Faceless images (atmosphere, establishing, scene refs, object inserts, silhouettes) pass through any family. The harness picks image models per-shot automatically — see [Image / Video Family Pairing](#image--video-family-pairing) below.
 
-### Image Models (22 generation + 1 background-remove)
+### Image Models (28 entries, 2026-05-20 sync)
 
-`nano-banana-pro`, `nano-banana-2`, `gpt-image-2` (high-quality alternative to `nano-banana-pro`), `gpt-image-1-5`, `flux-2-pro`, `flux-2-max`, `grok-imagine`, `hunyuan-image-v3`, `imagineart-1.5-pro`, `qwen-image`, `qwen-image-2`, `qwen-image-2-pro`, `recraft-v4`, `recraft-v4-pro`, `seedream-v4`, `seedream-v5-lite`, `chroma`, `hidream`, `venice-sd35`, `lustify-sdxl`, `lustify-v7`, `wai-Illustrious`, `z-image-turbo`, `bria-bg-remover`
+`nano-banana-pro`, `nano-banana-2`, `gpt-image-2` (high-quality alternative to `nano-banana-pro`), `gpt-image-1-5`, `flux-2-pro`, `flux-2-max`, `grok-imagine-image`, `grok-imagine-image-quality`, `hunyuan-image-v3`, `imagineart-1.5-pro`, `qwen-image-2`, `qwen-image-2-pro`, `recraft-v4`, `recraft-v4-pro`, `seedream-v4`, `seedream-v5-lite`, `chroma`, `hidream`, `venice-sd35`, `lustify-sdxl`, `lustify-v7`, `lustify-v8`, `wai-Illustrious`, `z-image-turbo`, `ernie-image`, `ernie-image-turbo`, `wan-2-7-text-to-image`, `wan-2-7-pro-text-to-image`, `bria-bg-remover`
+
+New since the last sync: `grok-imagine-image`, `grok-imagine-image-quality`, `lustify-v8`, `ernie-image`, `ernie-image-turbo`, `wan-2-7-text-to-image`, `wan-2-7-pro-text-to-image`. Sunset: bare `qwen-image` (use `qwen-image-2`).
 
 ### Multi-Edit Models
 
