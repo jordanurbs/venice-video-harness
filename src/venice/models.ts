@@ -564,11 +564,13 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 12, privacy: 'anonymized', offline: false,
   },
   {
+    // Sora 2 Pro: durations expanded to 20s as of 2026-05; 'true_1080p' added.
     id: 'sora-2-pro-image-to-video', name: 'Sora 2 Pro', type: 'image-to-video',
-    durations: ['4s', '8s', '12s'], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16'],
+    durations: ['4s', '8s', '12s', '16s', '20s'],
+    resolutions: ['720p', '1080p', 'true_1080p'], aspectRatios: ['16:9', '9:16'],
     audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 12, privacy: 'anonymized', offline: false,
+    maxDurationSec: 20, privacy: 'anonymized', offline: false,
   },
   {
     id: 'sora-2-text-to-video', name: 'Sora 2', type: 'text-to-video',
@@ -579,10 +581,11 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   },
   {
     id: 'sora-2-pro-text-to-video', name: 'Sora 2 Pro', type: 'text-to-video',
-    durations: ['4s', '8s', '12s'], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16'],
+    durations: ['4s', '8s', '12s', '16s', '20s'],
+    resolutions: ['720p', '1080p', 'true_1080p'], aspectRatios: ['16:9', '9:16'],
     audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 12, privacy: 'anonymized', offline: false,
+    maxDurationSec: 20, privacy: 'anonymized', offline: false,
   },
   // -- PixVerse v5.6 --
   {
@@ -621,6 +624,178 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 16, privacy: 'anonymized', offline: false,
   },
+  // -- Runway Gen-4.5 (added 2026-05 sync) --
+  // Runway's family on Venice: all variants top out at 10s, silent (audio:false,
+  // not configurable), no end_image_url, no R2V identity refs. Pick when the
+  // user wants Runway's signature motion physics, not when they need
+  // character identity locks.
+  {
+    id: 'runway-gen4-5', name: 'Runway Gen-4.5', type: 'image-to-video',
+    durations: ['2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s'],
+    resolutions: [], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'runway-gen4-5-text', name: 'Runway Gen-4.5', type: 'text-to-video',
+    durations: ['2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s'],
+    resolutions: [], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'runway-gen4-turbo', name: 'Runway Gen-4 Turbo', type: 'image-to-video',
+    durations: ['2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s'],
+    resolutions: [], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'runway-gen4-aleph', name: 'Runway Gen-4 Aleph', type: 'image-to-video',
+    durations: ['2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s'],
+    resolutions: [], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  // -- Seedance 2.0 Fast (added 2026-05 sync) --
+  // Cheaper / quicker Seedance 2.0 variants. Same i2v / t2v / R2V split as
+  // the regular Seedance 2.0 line, same 4-15s ladder, same image provenance
+  // gate. Pick when iterating or when the per-second cost of Seedance regular
+  // is prohibitive.
+  {
+    id: 'seedance-2-0-fast-image-to-video', name: 'Seedance 2.0 Fast', type: 'image-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'seedance-2-0-fast-text-to-video', name: 'Seedance 2.0 Fast', type: 'text-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'seedance-2-0-fast-reference-to-video', name: 'Seedance 2.0 Fast R2V', type: 'image-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  // -- PixVerse C1 (added 2026-05 sync) --
+  // PixVerse's c1 line. Replaces the v5.6 family for new projects: same four
+  // resolutions but 15s native durations (vs v5.6's 8s ceiling) AND a new R2V
+  // variant with `reference_image_urls`. Transition variant also gained
+  // the 15s ladder.
+  {
+    id: 'pixverse-c1-text-to-video', name: 'PixVerse C1', type: 'text-to-video',
+    durations: ['3s', '5s', '8s', '10s', '15s'],
+    resolutions: ['360p', '540p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'pixverse-c1-image-to-video', name: 'PixVerse C1', type: 'image-to-video',
+    durations: ['3s', '5s', '8s', '10s', '15s'],
+    resolutions: ['360p', '540p', '720p', '1080p'], aspectRatios: [],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'pixverse-c1-reference-to-video', name: 'PixVerse C1 R2V', type: 'image-to-video',
+    durations: ['3s', '5s', '8s', '10s', '15s'],
+    resolutions: ['360p', '540p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'pixverse-c1-transition', name: 'PixVerse C1 Transition', type: 'image-to-video',
+    durations: ['3s', '5s', '8s', '10s', '15s'],
+    resolutions: ['360p', '540p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  // -- DaVinci MagiHuman (added 2026-05 sync) --
+  // Talking-head / lip-sync specialist with audio_url input. 5-30s durations.
+  // Designed for one-character close-ups driven by an external audio track —
+  // an alternative to Wan 2.7 i2v for lip-sync work, with longer max duration.
+  {
+    id: 'davinci-magihuman-image-to-video', name: 'DaVinci MagiHuman', type: 'image-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'],
+    resolutions: ['256p', '540p', '720p', '1080p'], aspectRatios: ['16:9'],
+    audio: true, audioConfigurable: false, audioInput: true, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, minAudioInputSec: 3,
+    privacy: 'anonymized', offline: false,
+  },
+  // -- Wan 2.7 Spicy + Wan 2.6 R2V (added 2026-05 sync) --
+  // wan-2-7-spicy-image-to-video is an uncensored Wan 2.7 i2v variant; same
+  // 5/10/15s ladder. wan-2.6-reference-to-video is the new R2V variant of
+  // the Wan 2.6 family.
+  {
+    id: 'wan-2-7-spicy-image-to-video', name: 'Wan 2.7 Spicy', type: 'image-to-video',
+    durations: ['5s', '10s', '15s'], resolutions: ['1080p', '720p'], aspectRatios: [],
+    audio: false, audioConfigurable: false, audioInput: true, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
+    maxDurationSec: 15, minAudioInputSec: 3,
+    privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'wan-2.6-reference-to-video', name: 'Wan 2.6 R2V', type: 'image-to-video',
+    durations: ['5s', '10s'], resolutions: ['1080p', '720p'], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  // -- Kling V3 4K (added 2026-05 sync) --
+  // 4K-resolution variants of Kling V3 R2V and t2v.
+  {
+    id: 'kling-v3-4k-text-to-video', name: 'Kling V3 4K', type: 'text-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['4K', '1080p', '720p'], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'kling-v3-4k-reference-to-video', name: 'Kling V3 4K R2V', type: 'image-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['4K', '1080p', '720p'], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: true, supportsReferenceImages: true, supportsSceneImages: true, supportsEndImage: true,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  // -- Grok Imagine R2V + V2V (added 2026-05 sync) --
+  // Grok Imagine gained R2V (with reference_image_urls) and V2V (video input)
+  // variants. R2V durations are stepped: 5s/8s/10s only.
+  {
+    id: 'grok-imagine-reference-to-video', name: 'Grok Imagine R2V', type: 'image-to-video',
+    durations: ['5s', '8s', '10s'], resolutions: ['480p', '720p'],
+    aspectRatios: ['16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'grok-imagine-video-to-video', name: 'Grok Imagine V2V', type: 'image-to-video',
+    durations: ['5s', '10s', '15s'], resolutions: ['480p', '720p'],
+    aspectRatios: ['16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: true,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
 ];
 
 // ---- Image Models ---------------------------------------------------------
@@ -633,13 +808,18 @@ export interface ImageModelSpec {
 }
 
 export const IMAGE_GENERATION_MODELS: ImageModelSpec[] = [
+  // Registry refreshed 2026-05-20 against live /models?type=image (28 models).
+  // `qwen-image` was sunset in favour of `qwen-image-2`; new entries below are
+  // marked in trailing comments.
   { id: 'venice-sd35', name: 'Venice SD 3.5', type: 'generation', offline: false },
   { id: 'hidream', name: 'HiDream', type: 'generation', offline: false },
   { id: 'flux-2-pro', name: 'Flux 2 Pro', type: 'generation', offline: false },
   { id: 'flux-2-max', name: 'Flux 2 Max', type: 'generation', offline: false },
   { id: 'gpt-image-1-5', name: 'GPT Image 1.5', type: 'generation', offline: false },
   { id: 'gpt-image-2', name: 'GPT Image 2', type: 'generation', offline: false },
-  { id: 'grok-imagine', name: 'Grok Imagine', type: 'generation', offline: false },
+  // Grok Imagine image-gen split into two endpoints (2026-05+):
+  { id: 'grok-imagine-image', name: 'Grok Imagine', type: 'generation', offline: false },
+  { id: 'grok-imagine-image-quality', name: 'Grok Imagine Quality', type: 'generation', offline: false },
   { id: 'hunyuan-image-v3', name: 'Hunyuan Image V3', type: 'generation', offline: false },
   { id: 'imagineart-1.5-pro', name: 'ImagineArt 1.5 Pro', type: 'generation', offline: false },
   { id: 'nano-banana-2', name: 'Nano Banana 2', type: 'generation', offline: false },
@@ -650,12 +830,18 @@ export const IMAGE_GENERATION_MODELS: ImageModelSpec[] = [
   { id: 'seedream-v5-lite', name: 'SeedReam V5 Lite', type: 'generation', offline: false },
   { id: 'qwen-image-2', name: 'Qwen Image 2', type: 'generation', offline: false },
   { id: 'qwen-image-2-pro', name: 'Qwen Image 2 Pro', type: 'generation', offline: false },
-  { id: 'qwen-image', name: 'Qwen Image', type: 'generation', offline: false },
   { id: 'lustify-sdxl', name: 'Lustify SDXL', type: 'generation', offline: false },
   { id: 'lustify-v7', name: 'Lustify V7', type: 'generation', offline: false },
+  { id: 'lustify-v8', name: 'Lustify V8', type: 'generation', offline: false },
   { id: 'wai-Illustrious', name: 'WAI Illustrious', type: 'generation', offline: false },
   { id: 'z-image-turbo', name: 'Z Image Turbo', type: 'generation', offline: false },
   { id: 'chroma', name: 'Chroma', type: 'generation', offline: false },
+  // Ernie joins the Venice image catalog (2026-05+):
+  { id: 'ernie-image', name: 'Ernie Image', type: 'generation', offline: false },
+  { id: 'ernie-image-turbo', name: 'Ernie Image Turbo', type: 'generation', offline: false },
+  // Wan 2.7 also offers text-to-image (separate from the video-gen pipeline):
+  { id: 'wan-2-7-text-to-image', name: 'Wan 2.7 Text-to-Image', type: 'generation', offline: false },
+  { id: 'wan-2-7-pro-text-to-image', name: 'Wan 2.7 Pro Text-to-Image', type: 'generation', offline: false },
   { id: 'bria-bg-remover', name: 'Bria Background Remover', type: 'background-remove', offline: false },
 ];
 

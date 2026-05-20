@@ -59,6 +59,21 @@ export interface VideoModelDefaults {
    * See CLAUDE.md rule 32 for the underlying motivation.
    */
   seedanceKeyframeForWan?: boolean;
+  /**
+   * Operator's answer to "lip-sync mode or native model voices?" from the
+   * upfront questionnaire. See AudioStrategy for semantics. When unset, the
+   * harness uses the per-call defaults (effectively 'native'). Setting this
+   * at series-creation time eliminates the double-narration / mouth-out-of-
+   * sync class of bugs we hit during the PNW field-guide episode.
+   */
+  audioStrategy?: AudioStrategy;
+  /**
+   * Operator's answer to "which video model family?" from the upfront
+   * questionnaire. See VideoFamilyPreference. `auto` (or unset) keeps the
+   * harness's Seedance 2.0 defaults. Setting this swaps the action /
+   * atmosphere / character-consistency model defaults to the chosen family.
+   */
+  videoFamilyPreference?: VideoFamilyPreference;
 }
 
 export interface ImageModelDefaults {
@@ -85,6 +100,119 @@ export interface ImageModelDefaults {
 }
 
 export type SeedanceCompatibilityMode = 'prompt' | 'fallback' | 'launder';
+
+// ---------------------------------------------------------------------------
+// Upfront questionnaire answers (W3 / production-audit follow-up)
+//
+// These two fields belong on every new series. The MCP's pipeline skill asks
+// the operator before calling `series.new`; the answers steer model selection
+// and audio routing for the whole series, eliminating three classes of bugs
+// we hit producing the PNW field-guide:
+//   1. NARRATOR-driven episodes with `dialogueReplace: false` → double narration
+//      when Seedance synthesizes its own competing English narrator.
+//   2. Lip-sync-heavy scripts forced through Seedance R2V (no native lip-sync) →
+//      mouths out of sync with the dialogue track.
+//   3. Multi-character episodes accidentally routed to Grok Imagine (no R2V) →
+//      identity drift across cuts.
+// ---------------------------------------------------------------------------
+
+/**
+ * How dialogue reaches the final mix.
+ *
+ *   - 'native'      — the video model speaks the dialogue in-frame. Best when
+ *                     characters speak only once or twice, the model's voice
+ *                     range suffices, and you don't need precise control.
+ *                     `assemble-episode` keeps `dialogueReplace: false`.
+ *   - 'lip-sync'    — Venice TTS renders each dialogue line, Wan 2.7 i2v
+ *                     lip-syncs the character's mouth to the audio. Best when
+ *                     a character speaks many times (so a single voice picks
+ *                     up across the episode), the user wants accent control,
+ *                     or the dialogue needs deterministic delivery.
+ *                     The planner routes face-visible low/medium-motion
+ *                     dialogue shots to `videoDefaults.lipSyncModel`.
+ *                     `assemble-episode` defaults `dialogueReplace: true`.
+ *   - 'narrator-vo' — the speaker is a NARRATOR / voice-over only (no on-camera
+ *                     speaking mouth). Every dialogue-bearing shot is queued
+ *                     with `audio: false` so Seedance can't synthesize a
+ *                     competing narrator; Venice TTS owns the dialogue lane.
+ *                     `assemble-episode` defaults `dialogueReplace: true` and
+ *                     `nativeVolume: 0`. Sets `audioMix.suppressModelNarration: true`.
+ */
+export type AudioStrategy = 'native' | 'lip-sync' | 'narrator-vo';
+
+/**
+ * Operator's preferred video model family for action / atmosphere shots.
+ * `auto` keeps the current defaults (Seedance 2.0). Picking a family swaps
+ * `actionModel`, `atmosphereModel`, and `characterConsistencyModel` to that
+ * family's i2v / R2V variants. `lipSyncModel` stays on Wan 2.7 regardless —
+ * it's the only Venice model with proper lip-sync today.
+ *
+ * Family quick reference:
+ *   - 'seedance'     — Seedance 2.0 (default). Strong R2V identity anchoring,
+ *                      4-15s native durations, mature `audio: true` support,
+ *                      strict provenance requirements (seedream face refs only).
+ *   - 'happyhorse'   — HappyHorse 1.0. Strong R2V, 3-15s natives. Use when
+ *                      you want photorealism Seedream/Seedance can't quite
+ *                      hit (livelier hand-camera realism, more cinematic
+ *                      grain). Same provenance gate as Seedance.
+ *   - 'grok-imagine' — Grok Imagine i2v + R2V (R2V durations stepped at
+ *                      5s/8s/10s only). Pick for atmosphere-rich shots or
+ *                      when the user wants Grok's signature look.
+ *   - 'kling-o3'     — Kling O3 Standard / Pro / 4K. Best for stylized /
+ *                      illustrated aesthetics. Accepts non-seedream images.
+ */
+export type VideoFamilyPreference =
+  | 'auto'
+  | 'seedance'
+  | 'happyhorse'
+  | 'grok-imagine'
+  | 'kling-o3';
+
+/**
+ * Returns the model-id triplet for a given preferred family. Used by
+ * `createSeries` to populate `actionModel` / `atmosphereModel` /
+ * `characterConsistencyModel` from the operator's questionnaire answer.
+ *
+ * `lipSyncModel` is intentionally NOT included — Wan 2.7 i2v is the only
+ * Venice lip-sync option today; callers should keep it at the default
+ * regardless of family.
+ */
+export function resolveVideoFamilyDefaults(
+  family: VideoFamilyPreference,
+): { actionModel: string; atmosphereModel: string; characterConsistencyModel: string } {
+  switch (family) {
+    case 'happyhorse':
+      return {
+        actionModel: 'happyhorse-1-0-image-to-video',
+        atmosphereModel: 'happyhorse-1-0-image-to-video',
+        characterConsistencyModel: 'happyhorse-1-0-reference-to-video',
+      };
+    case 'grok-imagine':
+      // Grok Imagine now ships its own R2V variant (2026-05+). Stays in-family.
+      // Note: Grok R2V durations are stepped at 5s / 8s / 10s only — the
+      // duration preflight in W1.6 will catch any shot scripted outside that
+      // ladder.
+      return {
+        actionModel: 'grok-imagine-image-to-video',
+        atmosphereModel: 'grok-imagine-image-to-video',
+        characterConsistencyModel: 'grok-imagine-reference-to-video',
+      };
+    case 'kling-o3':
+      return {
+        actionModel: 'kling-o3-standard-image-to-video',
+        atmosphereModel: 'kling-o3-standard-image-to-video',
+        characterConsistencyModel: 'kling-o3-standard-reference-to-video',
+      };
+    case 'seedance':
+    case 'auto':
+    default:
+      return {
+        actionModel: 'seedance-2-0-image-to-video',
+        atmosphereModel: 'seedance-2-0-image-to-video',
+        characterConsistencyModel: 'seedance-2-0-reference-to-video',
+      };
+  }
+}
 
 /**
  * Recommended `seedanceCompatibility` mode given an image-generation model.
@@ -512,8 +640,16 @@ export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   'kling-o3-standard-reference-to-video',
   'kling-o3-pro-reference-to-video',
   'kling-o3-4k-reference-to-video',
+  'kling-v3-4k-reference-to-video',
   'seedance-2-0-reference-to-video',
+  'seedance-2-0-fast-reference-to-video',
   'happyhorse-1-0-reference-to-video',
+  'pixverse-c1-reference-to-video',
+  'grok-imagine-reference-to-video',
+  // Wan 2.7 R2V uses per_reference_audio (elements[].audio_url) for lip-sync;
+  // it still exposes reference_image_urls at the API level.
+  'wan-2-7-reference-to-video',
+  'wan-2.6-reference-to-video',
   'vidu-q3-image-to-video',
   'vidu-q3-text-to-video',
 ]);
@@ -522,11 +658,13 @@ export const MODELS_SUPPORTING_SCENE_IMAGES = new Set([
   'kling-o3-standard-reference-to-video',
   'kling-o3-pro-reference-to-video',
   'kling-o3-4k-reference-to-video',
+  'kling-v3-4k-reference-to-video',
 ]);
 
 export const MODELS_SUPPORTING_END_IMAGE = new Set([
   'kling-v3-pro-image-to-video',
   'kling-v3-standard-image-to-video',
+  'kling-v3-4k-reference-to-video',
   'kling-o3-pro-image-to-video',
   'kling-o3-standard-image-to-video',
   'kling-o3-4k-image-to-video',
@@ -536,13 +674,16 @@ export const MODELS_SUPPORTING_END_IMAGE = new Set([
   'kling-2.6-pro-image-to-video',
   'kling-2.5-turbo-pro-image-to-video',
   'pixverse-v5.6-transition',
+  'pixverse-c1-transition',
   // Wan 2.7 i2v supports `end_image_url` for keyframe bookending — helps
   // anchor identity drift across low-motion lip-sync clips.
   'wan-2-7-image-to-video',
+  'wan-2-7-spicy-image-to-video',
 ]);
 
 export const MODELS_USING_IMAGE_TAGS = new Set([
   'seedance-2-0-reference-to-video',
+  'seedance-2-0-fast-reference-to-video',
   'grok-imagine-reference-to-video',
 ]);
 
@@ -550,12 +691,17 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   'wan-2.6-image-to-video',
   'wan-2.6-text-to-video',
   'wan-2.6-flash-image-to-video',
+  'wan-2.6-reference-to-video',
   'wan-2.5-preview-image-to-video',
   'wan-2.5-preview-text-to-video',
   // Wan 2.7 lip-sync family
   'wan-2-7-image-to-video',
+  'wan-2-7-spicy-image-to-video',
   'wan-2-7-text-to-video',
   'wan-2-7-video-to-video',
+  // DaVinci MagiHuman: talking-head specialist with audio_url input,
+  // alternative to Wan 2.7 i2v for lip-sync work (longer max duration: 30s).
+  'davinci-magihuman-image-to-video',
 ]);
 
 /**
