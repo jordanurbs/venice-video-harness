@@ -81,8 +81,43 @@ program
   .requiredOption('--concept <concept>', 'Series concept/premise')
   .option('-g, --genre <genre>', 'Genre', 'drama')
   .option('--setting <setting>', 'General setting description', '')
-  .action(async (opts: { name: string; concept: string; genre: string; setting: string }) => {
-    const series = createSeries(opts.name, opts.concept, opts.genre, opts.setting);
+  // ── Upfront questionnaire (production-audit follow-up) ──
+  // These two flags let the operator answer the "what kind of show is this?"
+  // questions at series-creation time, eliminating three classes of bugs we
+  // hit producing the PNW field-guide. The MCP's pipeline skill prompts for
+  // them before calling `series.new`.
+  .option(
+    '--audio-strategy <strategy>',
+    'How dialogue reaches the final mix: ' +
+    '"native" (model speaks in-frame; default; best for 1-2 lines per character), ' +
+    '"lip-sync" (Venice TTS + Wan 2.7 lip-sync; best when characters talk often), ' +
+    '"narrator-vo" (NARRATOR voice-over only; auto-mutes the model audio so a competing AI narrator can\'t fight the TTS).',
+  )
+  .option(
+    '--video-family <family>',
+    'Preferred video model family: ' +
+    'auto (default Seedance 2.0), seedance, happyhorse, grok-imagine, kling-o3. ' +
+    'Swaps actionModel/atmosphereModel/characterConsistencyModel to that family. ' +
+    'lipSyncModel stays on Wan 2.7 regardless.',
+  )
+  .action(async (opts: {
+    name: string; concept: string; genre: string; setting: string;
+    audioStrategy?: string; videoFamily?: string;
+  }) => {
+    const allowedAudio = new Set(['native', 'lip-sync', 'narrator-vo']);
+    if (opts.audioStrategy && !allowedAudio.has(opts.audioStrategy)) {
+      console.error(`--audio-strategy must be one of: ${[...allowedAudio].join(', ')}`);
+      process.exit(2);
+    }
+    const allowedFamily = new Set(['auto', 'seedance', 'happyhorse', 'grok-imagine', 'kling-o3']);
+    if (opts.videoFamily && !allowedFamily.has(opts.videoFamily)) {
+      console.error(`--video-family must be one of: ${[...allowedFamily].join(', ')}`);
+      process.exit(2);
+    }
+    const series = createSeries(opts.name, opts.concept, opts.genre, opts.setting, {
+      audioStrategy: opts.audioStrategy as 'native' | 'lip-sync' | 'narrator-vo' | undefined,
+      videoFamilyPreference: opts.videoFamily as 'auto' | 'seedance' | 'happyhorse' | 'grok-imagine' | 'kling-o3' | undefined,
+    });
     await saveSeries(series);
 
     console.log(`\nSeries created: ${series.name}`);
@@ -90,6 +125,14 @@ program
     console.log(`  Genre: ${series.genre}`);
     console.log(`  Concept: ${series.concept}`);
     console.log(`  Output: ${series.outputDir}`);
+    if (series.videoDefaults.audioStrategy) {
+      console.log(`  Audio strategy: ${series.videoDefaults.audioStrategy}`);
+    }
+    if (series.videoDefaults.videoFamilyPreference) {
+      console.log(`  Video family: ${series.videoDefaults.videoFamilyPreference}`);
+      console.log(`    actionModel: ${series.videoDefaults.actionModel}`);
+      console.log(`    characterConsistencyModel: ${series.videoDefaults.characterConsistencyModel}`);
+    }
     console.log(`\nNext: explore-aesthetic -p ${series.outputDir}`);
   });
 
@@ -1575,7 +1618,18 @@ program
     }
     console.log('');
 
-    const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan, script.audioMix);
+    // Fold the series-level audioStrategy into the episode's audioMix when
+    // the user hasn't explicitly set suppressModelNarration. 'narrator-vo'
+    // tells Seedance `audio: false` for every dialogue shot at queue time so
+    // the model can't generate a competing narrator under the Venice TTS.
+    const effectiveAudioMix = (() => {
+      const mix = { ...(script.audioMix ?? {}) };
+      if (mix.suppressModelNarration === undefined && series.videoDefaults.audioStrategy === 'narrator-vo') {
+        mix.suppressModelNarration = true;
+      }
+      return mix;
+    })();
+    const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan, effectiveAudioMix);
     await saveGenerationPlan(episodeDir, plan);
 
     const ep = series.episodes.find(e => e.number === opts.episode);
@@ -2021,7 +2075,23 @@ program
     // Default is now OFF — native model dialogue is the recommended path.
     // Only replace when the user explicitly opts in via --dialogue-replace
     // AND the TTS files exist.
-    const useDialogueReplace = opts.dialogueReplace === true && hasDialogueFiles;
+    // Series-level audio strategy (set at series-creation time via the
+    // upfront questionnaire) sets the default for --dialogue-replace:
+    //   - 'native'      : false (model audio plays as-is)
+    //   - 'lip-sync'    : true  (Venice TTS replaces native; lip-sync is
+    //                            handled by routing dialogue shots to Wan 2.7
+    //                            via videoDefaults.lipSyncModel)
+    //   - 'narrator-vo' : true  (Venice TTS owns the dialogue lane; Seedance
+    //                            was already told audio:false at queue time
+    //                            via audioMix.suppressModelNarration, so this
+    //                            ensures the final mix actually plays the TTS)
+    // Operator flag (--dialogue-replace / --no-dialogue-replace) always wins.
+    const seriesAudioStrategy = series.videoDefaults.audioStrategy;
+    const strategyImpliesReplace =
+      seriesAudioStrategy === 'lip-sync' || seriesAudioStrategy === 'narrator-vo';
+    const dialogueReplaceFlagPassed = opts.dialogueReplace === true;
+    const effectiveDialogueReplace = dialogueReplaceFlagPassed || strategyImpliesReplace;
+    const useDialogueReplace = effectiveDialogueReplace && hasDialogueFiles;
 
     // Resolve --native-volume default: 0 with --dialogue-replace (Venice TTS
     // owns the dialogue lane; let nothing compete), 1.0 otherwise. An

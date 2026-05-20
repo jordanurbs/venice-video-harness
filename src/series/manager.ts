@@ -15,6 +15,9 @@ import {
   DEFAULT_IMAGE_EDIT_MODEL,
   DEFAULT_LIP_SYNC_MODEL,
   recommendedSeedanceCompatibility,
+  resolveVideoFamilyDefaults,
+  type AudioStrategy,
+  type VideoFamilyPreference,
 } from './types.js';
 
 const OUTPUT_BASE = resolve('output');
@@ -26,15 +29,26 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+export interface CreateSeriesOptions {
+  /** Upfront questionnaire: how dialogue reaches the final mix. */
+  audioStrategy?: AudioStrategy;
+  /** Upfront questionnaire: preferred video model family. */
+  videoFamilyPreference?: VideoFamilyPreference;
+}
+
 export function createSeries(
   name: string,
   concept: string,
   genre: string,
   setting: string,
+  options?: CreateSeriesOptions,
 ): SeriesState {
   const slug = slugify(name);
   const outputDir = join(OUTPUT_BASE, slug);
   const now = new Date().toISOString();
+
+  const family = options?.videoFamilyPreference ?? 'auto';
+  const familyDefaults = resolveVideoFamilyDefaults(family);
 
   return {
     name,
@@ -46,15 +60,18 @@ export function createSeries(
     characters: [],
     episodes: [],
     videoDefaults: {
-      actionModel: DEFAULT_ACTION_MODEL,
-      atmosphereModel: DEFAULT_ATMOSPHERE_MODEL,
-      characterConsistencyModel: DEFAULT_CHARACTER_CONSISTENCY_MODEL,
+      actionModel: family === 'auto' ? DEFAULT_ACTION_MODEL : familyDefaults.actionModel,
+      atmosphereModel: family === 'auto' ? DEFAULT_ATMOSPHERE_MODEL : familyDefaults.atmosphereModel,
+      characterConsistencyModel:
+        family === 'auto' ? DEFAULT_CHARACTER_CONSISTENCY_MODEL : familyDefaults.characterConsistencyModel,
       imageDefaults: {
         generationModel: DEFAULT_IMAGE_GENERATION_MODEL,
         editModel: DEFAULT_IMAGE_EDIT_MODEL,
       },
       seedanceCompatibility: 'prompt',
       lipSyncModel: DEFAULT_LIP_SYNC_MODEL,
+      ...(options?.audioStrategy ? { audioStrategy: options.audioStrategy } : {}),
+      ...(options?.videoFamilyPreference ? { videoFamilyPreference: options.videoFamilyPreference } : {}),
     },
     outputDir,
     createdAt: now,
