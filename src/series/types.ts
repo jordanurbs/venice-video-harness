@@ -66,9 +66,71 @@ export interface ImageModelDefaults {
   generationModel: string;
   /** Multi-edit model — e.g. `seedream-v5-lite-edit`, `nano-banana-pro-edit`. */
   editModel: string;
+  /**
+   * Strategy for the negative-prompt builder when constructing character
+   * reference images and panels:
+   *   - 'auto'     — (default) infer from the series aesthetic. Aesthetics
+   *                  mentioning "photoreal", "photograph", "documentary",
+   *                  "photo", "live action", "cinematic photography" suppress
+   *                  the anti-photoreal guards; everything else keeps them.
+   *   - 'stylized' — always inject anti-photoreal guards (photorealistic,
+   *                  photograph, photo, 3D render, Pixar). Legacy behaviour.
+   *   - 'photoreal'— never inject anti-photoreal guards; keep only structural
+   *                  guards (deformed, watermark, text, etc.).
+   *   - 'none'     — emit an empty negative prompt; trust positives only.
+   *                  Useful for paths that have already hand-tuned a negative
+   *                  via `negativePromptOverride`.
+   */
+  negativePromptStrategy?: 'auto' | 'stylized' | 'photoreal' | 'none';
 }
 
 export type SeedanceCompatibilityMode = 'prompt' | 'fallback' | 'launder';
+
+/**
+ * Recommended `seedanceCompatibility` mode given an image-generation model.
+ * Used by `saveSeries` to auto-fill the field when the operator hasn't
+ * explicitly set it. The table is intentionally conservative: models known
+ * to produce face-bearing images Seedance will accept get `prompt` (run a
+ * fast preflight, but expect success); known-bad pairings get `fallback`
+ * (auto-switch to a Kling fallback); unknowns get `launder` (rewrite the
+ * image through Seedream before sending to Seedance).
+ */
+export const SEEDANCE_COMPATIBILITY_BY_IMAGE_MODEL: Record<string, SeedanceCompatibilityMode> = {
+  // Native Seedream outputs are accepted by Seedance directly.
+  'seedream-v4': 'prompt',
+  'seedream-v5-lite': 'prompt',
+  // Other faceless-friendly families: Seedance won't reject these for
+  // atmosphere shots but face-bearing images need laundering.
+  'nano-banana-2': 'launder',
+  'nano-banana-pro': 'launder',
+  'gpt-image-1-5': 'launder',
+  'gpt-image-2': 'launder',
+  // Stylized models: fall back to a Kling R2V/i2v path entirely.
+  'flux-2-pro': 'fallback',
+  'flux-2-max': 'fallback',
+  'hidream': 'fallback',
+  'recraft-v4': 'fallback',
+  'recraft-v4-pro': 'fallback',
+  'imagineart-1.5-pro': 'fallback',
+  'qwen-image': 'fallback',
+  'qwen-image-2': 'fallback',
+  'qwen-image-2-pro': 'fallback',
+  'grok-imagine': 'fallback',
+  'hunyuan-image-v3': 'fallback',
+  'venice-sd35': 'fallback',
+  'chroma': 'fallback',
+  'z-image-turbo': 'fallback',
+  'wai-Illustrious': 'fallback',
+  'lustify-sdxl': 'fallback',
+  'lustify-v7': 'fallback',
+};
+
+export function recommendedSeedanceCompatibility(
+  generationModel: string | undefined,
+): SeedanceCompatibilityMode | undefined {
+  if (!generationModel) return undefined;
+  return SEEDANCE_COMPATIBILITY_BY_IMAGE_MODEL[generationModel];
+}
 
 // ---------------------------------------------------------------------------
 // Character (general-purpose, not mini-drama specific)
@@ -146,6 +208,18 @@ export interface MusicCueSpec {
   model?: string;
   /** Output gain in dB. Defaults to -22. */
   gain?: number;
+  /**
+   * Optional time-varying gain stops for a single cue. Each stop says "by the
+   * time we reach shot `atShot`, ramp gain to `gainDb`." Stops are ramped with
+   * a smooth volume crossfade `rampSec` seconds long (default 2.0). Stops
+   * outside the cue's [startShot, endShot] window are ignored. When supplied,
+   * this layers on top of the base `gain`.
+   *
+   * Example: "drop -20% by the time of the florida porch shot"
+   *   { startShot: 1, endShot: 10, gain: -22,
+   *     gainStops: [{ atShot: 7, gainDb: -24, rampSec: 3 }] }
+   */
+  gainStops?: Array<{ atShot: number | string; gainDb: number; rampSec?: number }>;
   /** Fade-in in seconds. Defaults to 1.0. */
   fadeIn?: number;
   /** Fade-out in seconds. Defaults to 1.5. */
@@ -185,6 +259,17 @@ export interface AudioMixDefaults {
   lufsTarget?: number;
   /** Final-pass true peak target. Defaults to -1 dBTP. */
   truePeakDb?: number;
+  /**
+   * When true, every shot that has dialogue is queued at Seedance / Wan with
+   * `audio: false` so the model doesn't synthesize its own narrator on top of
+   * the Venice TTS that will be mixed in by the assembler. Strongly recommended
+   * whenever the script's primary speaker is `NARRATOR` — Seedance i2v with
+   * `audio: true` will eagerly generate a competing English narration track
+   * when the prompt contains "narrator" / "documentary" / "naturalist". When
+   * unset, the buildVideoPrompt heuristic forces `audio: false` for NARRATOR
+   * shots anyway (since there's nothing on-camera to lip-sync to).
+   */
+  suppressModelNarration?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,6 +364,17 @@ export interface ShotScript {
    * moment, drop) needs audio emphasis at this shot.
    */
   musicHold?: 'sustain' | 'swell' | 'drop' | 'stinger';
+  /**
+   * How the assembler should treat the video model's native (Seedance / Wan)
+   * audio track during dialogue replacement:
+   *   - 'mute' — multiply native by 0 (silenced; only Venice TTS audible)
+   *   - 'duck' — multiply native by 0.2 (legacy default; keeps ambient bed)
+   *   - 'keep' — multiply native by 1.0 (no ducking; competes with TTS)
+   * Per-shot value wins over the CLI's `--native-volume`. Use when one shot
+   * has genuine ambient (paper rustle, room tone) you want to preserve while
+   * the rest of the episode mutes a competing AI narrator.
+   */
+  nativeAudio?: 'mute' | 'duck' | 'keep';
   /**
    * Optional suffix letter for inserted shots. When set, the canonical
    * shot id becomes `shotNumber + shotIdSuffix` — for example, shotNumber 3

@@ -36,6 +36,7 @@ import {
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
 import { generateImage, generateWithReferences } from '../venice/generate.js';
+import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { writeImageProvenance } from '../venice/provenance.js';
 import { getVeniceApiKey } from '../config.js';
 import { listVoices, filterVoices, auditionVoices } from '../venice/voices.js';
@@ -197,8 +198,7 @@ program
 
         if (response.images?.[0]) {
           const imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
-          const imgPath = join(samplesDir, `${aes.name}.png`);
-          await writeFile(imgPath, imgBuffer);
+          const imgPath = await writeImageBytesSmart(imgBuffer, join(samplesDir, `${aes.name}.png`));
           console.log(`  ${aes.name}: ${imgPath}`);
         }
       } catch (err) {
@@ -256,9 +256,28 @@ program
   .option('--voice-desc <voiceDesc>', 'Voice description (pitch, timbre, accent, cadence)')
   .option('--base-traits <traits>', 'Custom base traits override (e.g. "tabby cat, feline, four legs")')
   .option('--skip-images', 'Skip reference image generation', false)
+  // Override-prompt path: read positive / negative prompts (and optionally
+  // model / cfg / aspect) from a JSON file and use them verbatim, bypassing
+  // buildCharacterReferencePromptParts entirely. Lets operators rescue a
+  // character whose default-prompt outputs keep failing (the LEGISLATOR-as-bird
+  // and FOUNDER-identity-drift episodes during the PNW field-guide all needed
+  // this). When the file omits a field, the default builder fills it.
+  // File shape (any subset valid):
+  //   {
+  //     "angles": {
+  //       "front":         { "positive": "...", "negative": "..." },
+  //       "three-quarter": { ... },
+  //       "profile":       { ... },
+  //       "full-body":     { ... }
+  //     },
+  //     "shared": { "model": "seedream-v5-lite", "cfg_scale": 9,
+  //                 "aspect_ratio": "1:1", "resolution": "1K", "seed": 42 }
+  //   }
+  .option('--override-prompt <path>', 'Path to a JSON file containing per-angle prompt overrides (see header comment in cli.ts add-character)')
   .action(async (opts: {
     project: string; name: string; gender: string; age: string;
     description?: string; wardrobe: string; voiceDesc?: string; baseTraits?: string; skipImages: boolean;
+    overridePrompt?: string;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -294,46 +313,103 @@ program
       const charDir = getCharacterDir(series, character.name);
       await mkdir(charDir, { recursive: true });
 
+      // Optional operator override: read positive/negative prompts (and a
+      // small set of shared params) from a JSON file. Lets the operator
+      // rescue a character whose default-prompt outputs keep failing.
+      type OverrideFile = {
+        angles?: Record<string, { positive?: string; negative?: string }>;
+        shared?: {
+          model?: string;
+          cfg_scale?: number;
+          aspect_ratio?: string;
+          resolution?: string;
+          seed?: number;
+        };
+      };
+      let override: OverrideFile = {};
+      if (opts.overridePrompt) {
+        try {
+          const raw = await readFile(resolve(opts.overridePrompt), 'utf-8');
+          override = JSON.parse(raw) as OverrideFile;
+          console.log(`  Using prompt overrides from ${opts.overridePrompt}`);
+        } catch (err) {
+          console.warn(`  Failed to read --override-prompt ${opts.overridePrompt}: ${(err as Error).message}`);
+        }
+      }
+      const sharedModel = override.shared?.model ?? 'seedream-v5-lite';
+      const sharedCfg = override.shared?.cfg_scale ?? 10;
+      const sharedAspect = override.shared?.aspect_ratio ?? '1:1';
+      const sharedResolution = override.shared?.resolution ?? '1K';
+      const sharedSeed = override.shared?.seed ?? seed;
+
       const angles: ('front' | 'three-quarter' | 'profile' | 'full-body')[] = ['front', 'three-quarter', 'profile', 'full-body'];
       const filenames = ['front.png', 'three-quarter.png', 'profile.png', 'full-body.png'];
 
       console.log(`Generating reference images for ${character.name}...`);
 
       for (let i = 0; i < angles.length; i++) {
-        // structured prompt keeps the positive prompt under the
+        const angle = angles[i];
+        const angleOverride = override.angles?.[angle];
+
+        // Default prompt build (still used when override.angles[angle].positive
+        // is missing). structured prompt keeps the positive prompt under the
         // model's silent-reject ceiling and pushes style-reminder cues
         // into negative_prompt.
-        const { positive: prompt, negativeAdditions } =
-          buildCharacterReferencePromptParts(character, series.aesthetic, angles[i], {
-            model: 'seedream-v5-lite',
+        const { positive: defaultPositive, negativeAdditions } =
+          buildCharacterReferencePromptParts(character, series.aesthetic, angle, {
+            model: sharedModel,
+            negativePromptStrategy: series.videoDefaults.imageDefaults?.negativePromptStrategy ?? 'auto',
           });
+        const prompt = angleOverride?.positive ?? defaultPositive;
         const baseNegatives = [
           'deformed', 'blurry', 'bad anatomy', 'low quality',
           'multiple people', 'watermark',
           'character reference sheet', 'comic panels', 'panel borders',
         ];
-        const negativePrompt = [...baseNegatives, ...negativeAdditions].join(', ');
+        const negativePrompt = angleOverride?.negative
+          ?? [...baseNegatives, ...negativeAdditions].join(', ');
 
         try {
           const response = await generateImage(client, {
+            model: sharedModel,
             prompt,
             negative_prompt: negativePrompt,
-            resolution: '1K',
-            aspect_ratio: '1:1',
+            resolution: sharedResolution,
+            aspect_ratio: sharedAspect,
             steps: 30,
-            cfg_scale: 10,
-            seed,
+            cfg_scale: sharedCfg,
+            seed: sharedSeed,
             safe_mode: false,
             hide_watermark: true,
           });
 
           if (response.images?.[0]) {
             const imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
-            await writeFile(join(charDir, filenames[i]), imgBuffer);
-            console.log(`  ${angles[i]}: saved`);
+            const finalPath = await writeImageBytesSmart(imgBuffer, join(charDir, filenames[i]));
+            console.log(`  ${angle}: saved -> ${basename(finalPath)}`);
+
+            // Sidecar: capture the resolved prompt + params for this angle so
+            // operators can hand-edit and re-run with --override-prompt.
+            const returnedSeed = (response.images[0] as { seed?: number }).seed;
+            const sidecarPath = join(charDir, `${angle}.prompt.json`);
+            const sidecar = {
+              character: character.name,
+              angle,
+              model: sharedModel,
+              prompt,
+              negative_prompt: negativePrompt,
+              cfg_scale: sharedCfg,
+              aspect_ratio: sharedAspect,
+              resolution: sharedResolution,
+              seed: sharedSeed,
+              returnedSeed,
+              overrideSource: opts.overridePrompt ?? null,
+              generatedAt: new Date().toISOString(),
+            };
+            await writeFile(sidecarPath, JSON.stringify(sidecar, null, 2), 'utf-8');
           }
         } catch (err) {
-          console.warn(`  ${angles[i]}: failed - ${err}`);
+          console.warn(`  ${angle}: failed - ${err}`);
         }
       }
 
@@ -1499,7 +1575,7 @@ program
     }
     console.log('');
 
-    const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan);
+    const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan, script.audioMix);
     await saveGenerationPlan(episodeDir, plan);
 
     const ep = series.episodes.find(e => e.number === opts.episode);
@@ -1909,11 +1985,17 @@ program
   // already false).
   .option('--dialogue-replace', 'Replace native model dialogue with Venice TTS (off by default; flip on only when override-audio --dialogue has produced dialogue-shot-NNN.mp3 files)', false)
   .option('--no-dialogue-replace', 'Explicitly disable Venice TTS dialogue replacement (now the default — kept for backward compatibility with older scripts)')
-  .option('--native-volume <vol>', 'Native audio volume in the final mix (0-1). Default 1.0 (full). Drop to ~0.2 only when --dialogue-replace is on so the Venice TTS dialogue isn\'t fighting the model-native track.', '1.0')
+  // Default is intentionally unset; resolved below to `0` when
+  // --dialogue-replace is on (so model-generated narration / dialogue can't
+  // fight the Venice TTS) and `1.0` otherwise. Pass the flag explicitly to
+  // override either default — for example, --native-volume 0.2 keeps a soft
+  // ambient bed under the TTS for shots whose model audio is just room tone.
+  // Per-shot `shot.nativeAudio: 'mute' | 'duck' | 'keep'` always wins.
+  .option('--native-volume <vol>', 'Native audio volume in the final mix (0-1). Default: 0 with --dialogue-replace, 1.0 otherwise. Per-shot shot.nativeAudio overrides this default.')
   .action(async (opts: {
     project: string; episode: number; subtitles: boolean; music: boolean;
     ambient: boolean; ambientVolume: string;
-    dialogueReplace: boolean; nativeVolume: string;
+    dialogueReplace: boolean; nativeVolume?: string;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -1941,12 +2023,21 @@ program
     // AND the TTS files exist.
     const useDialogueReplace = opts.dialogueReplace === true && hasDialogueFiles;
 
+    // Resolve --native-volume default: 0 with --dialogue-replace (Venice TTS
+    // owns the dialogue lane; let nothing compete), 1.0 otherwise. An
+    // explicit operator flag always wins.
+    const nativeVolumeDefault = useDialogueReplace ? 0 : 1.0;
+    const nativeVolume = opts.nativeVolume !== undefined
+      ? parseFloat(opts.nativeVolume)
+      : nativeVolumeDefault;
+
     if (useDialogueReplace) {
-      console.log(`  Dialogue replacement: ON (Venice TTS; native audio ducked to ${Math.round(parseFloat(opts.nativeVolume) * 100)}%)`);
+      const explicit = opts.nativeVolume !== undefined ? ' (operator override)' : ' (default)';
+      console.log(`  Dialogue replacement: ON (Venice TTS; native audio at ${Math.round(nativeVolume * 100)}%${explicit})`);
     } else if (opts.dialogueReplace === true && !hasDialogueFiles) {
       console.log(`  Dialogue replacement: OFF (--dialogue-replace was set but no dialogue-shot-NNN.mp3 files exist -- run override-audio --dialogue first)`);
     } else {
-      console.log(`  Dialogue replacement: OFF (default — using native model dialogue at ${Math.round(parseFloat(opts.nativeVolume) * 100)}% volume)`);
+      console.log(`  Dialogue replacement: OFF (default — using native model dialogue at ${Math.round(nativeVolume * 100)}% volume)`);
     }
 
     // Collect per-shot trim/flip metadata from script
@@ -2001,18 +2092,46 @@ program
     const epNum = String(opts.episode).padStart(3, '0');
     const outputPath = join(episodeDir, `episode-${epNum}-final.mp4`);
 
+    // Resolve audio paths for each music cue so the assembler picks up
+    // either spec.audioPath (script-provided) or the canonical
+    // audio/music-cue-NNN.mp3 next to the episode. When a cue has no
+    // resolvable audio, the assembler falls back to the single-bed musicPath.
+    const cueAudioPathFor = (spec: { audioPath?: string; startShot: number | string }): string | undefined => {
+      if (spec.audioPath) return resolve(opts.project, spec.audioPath);
+      const shotId = typeof spec.startShot === 'number'
+        ? String(spec.startShot).padStart(3, '0')
+        : spec.startShot;
+      const candidates = [
+        join(audioDir, `music-cue-${shotId}.mp3`),
+        join(audioDir, `music-shot-${shotId}.mp3`),
+      ];
+      for (const c of candidates) {
+        if (existsSync(c)) return c;
+      }
+      return undefined;
+    };
+    // Hydrate musicCues with resolved audio paths so renderMusicCuesTrack
+    // can render directly without re-resolving inside the assembler.
+    const hydratedCues = script.musicCues?.map(spec => ({
+      ...spec,
+      audioPath: spec.audioPath ? resolve(opts.project, spec.audioPath) : cueAudioPathFor(spec),
+    }));
+
     await assembleEpisode({
       videoFiles,
       outputPath,
       srtPath,
       musicPath: hasMusic ? musicPath : undefined,
       musicVolume: 0.15,
+      musicCues: hydratedCues,
+      shots: script.shots,
       ambientBedPath: hasAmbient ? ambientPath : undefined,
       ambientBedVolume: parseFloat(opts.ambientVolume),
       dialogueDir: useDialogueReplace ? audioDir : undefined,
-      nativeAudioVolume: parseFloat(opts.nativeVolume),
+      nativeAudioVolume: nativeVolume,
       shotTrims,
       endingTitleOverlay: endingTitleShot?.titleOverlay,
+      audioMix: script.audioMix,
     });
 
     const ep = series.episodes.find(e => e.number === opts.episode);

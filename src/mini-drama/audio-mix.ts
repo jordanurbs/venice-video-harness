@@ -40,6 +40,7 @@ export function resolveAudioMix(defaults?: AudioMixDefaults): Required<AudioMixD
     sfxGainDb: defaults?.sfxGainDb ?? DEFAULT_SFX_GAIN_DB,
     lufsTarget: defaults?.lufsTarget ?? DEFAULT_LUFS_TARGET,
     truePeakDb: defaults?.truePeakDb ?? DEFAULT_TRUE_PEAK_DB,
+    suppressModelNarration: defaults?.suppressModelNarration ?? false,
   };
 }
 

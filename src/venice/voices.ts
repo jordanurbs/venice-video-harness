@@ -32,6 +32,27 @@ export async function listVoices(model?: TTSModel): Promise<VoiceInfo[]> {
   return ALL_VOICES;
 }
 
+/**
+ * Filter voices by gender, age, and language.
+ *
+ * Language matching is intentionally fuzzy so callers can ask for "british",
+ * "uk", "en-gb", or "british english" and reach `bm_george` / `bf_alice`
+ * et al. — the previous strict-equality match required callers to know the
+ * exact catalog string ("British English"), which made the audition-voices
+ * CLI miss every British voice in the PNW field-guide production.
+ *
+ * Match rules (case-insensitive):
+ *   - language alias like 'british' / 'uk' / 'en-gb' / 'british english'
+ *     matches catalog 'British English' AND any voice_id starting with
+ *     'bm_' / 'bf_' (Kokoro British male/female prefixes).
+ *   - 'american' / 'us' / 'en-us' / 'american english' matches catalog
+ *     'American English' AND 'am_' / 'af_'.
+ *   - 'english' / 'en' (with no region) matches any English variant
+ *     (American + British) so generic queries still work.
+ *   - Any other value falls back to a substring match against
+ *     labels.language and labels.accent. Pass undefined to use the
+ *     legacy default ('English' family).
+ */
 export function filterVoices(
   voices: VoiceInfo[],
   gender?: string,
@@ -46,11 +67,37 @@ export function filterVoices(
     if (age && labels.age && labels.age.toLowerCase() !== age.toLowerCase()) {
       return false;
     }
-    if (language) {
-      return labels.language?.toLowerCase() === language.toLowerCase();
-    }
-    return labels.language === 'English';
+    return matchesLanguage(v, language);
   });
+}
+
+function matchesLanguage(v: VoiceInfo, language?: string): boolean {
+  const labels = v.labels ?? {};
+  const labelLang = (labels.language ?? '').toLowerCase();
+  const labelAccent = ((labels as { accent?: string }).accent ?? '').toLowerCase();
+  const id = v.voice_id.toLowerCase();
+  if (!language) return labelLang.includes('english');
+  const q = language.trim().toLowerCase();
+  const britishAliases = ['british', 'british english', 'uk', 'en-gb', 'engb', 'gb'];
+  const americanAliases = ['american', 'american english', 'us', 'en-us', 'enus'];
+  const genericEnglishAliases = ['english', 'en'];
+  if (britishAliases.includes(q)) {
+    return labelLang.includes('british')
+      || labelAccent === 'british'
+      || id.startsWith('bm_')
+      || id.startsWith('bf_');
+  }
+  if (americanAliases.includes(q)) {
+    return labelLang.includes('american')
+      || labelAccent === 'american'
+      || id.startsWith('am_')
+      || id.startsWith('af_');
+  }
+  if (genericEnglishAliases.includes(q)) {
+    return labelLang.includes('english');
+  }
+  // Fallback: substring match against language label, accent, and id.
+  return labelLang.includes(q) || labelAccent.includes(q) || id.includes(q);
 }
 
 export async function generateVoiceSample(

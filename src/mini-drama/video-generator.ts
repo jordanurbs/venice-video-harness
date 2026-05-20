@@ -34,6 +34,7 @@ import {
 import { parseShotDuration } from './generation-planner.js';
 import { ensureSeedanceCompatibility } from '../venice/seedance-preflight.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
+import { getVideoModel, modelSupportsDuration } from '../venice/models.js';
 
 const VIDEO_QUEUE_PATH = '/api/v1/video/queue';
 const VIDEO_RETRIEVE_PATH = '/api/v1/video/retrieve';
@@ -821,6 +822,7 @@ async function renderSingleShotUnit(
   previousRenderedShotPath: string | undefined,
   nextShotNumber: number | undefined,
   previousShot?: ShotScript,
+  episodeAudioMix?: import('../series/types.js').AudioMixDefaults,
 ): Promise<string[]> {
   const panelPath = getShotPanelPath(sceneDir, shot.shotNumber);
   if (!existsSync(panelPath)) {
@@ -841,7 +843,17 @@ async function renderSingleShotUnit(
     return [videoPath];
   }
 
-  const videoPrompt = buildVideoPrompt(shot, series, previousShot);
+  const videoPrompt = buildVideoPrompt(shot, series, previousShot, episodeAudioMix);
+  if (!videoPrompt.audio && shot.dialogue) {
+    const reason = shot.nativeAudio === 'mute'
+      ? 'shot.nativeAudio=mute'
+      : episodeAudioMix?.suppressModelNarration
+        ? 'episode.audioMix.suppressModelNarration'
+        : shot.dialogue.character?.toUpperCase() === 'NARRATOR'
+          ? 'NARRATOR shot (auto)'
+          : 'unknown';
+    console.log(`  Audio: model-native disabled (${reason})`);
+  }
   unit.model = videoPrompt.model;
 
   if (videoPrompt.modelResolution) {
@@ -1116,13 +1128,100 @@ export interface GenerateEpisodeVideosResult {
   plan: GenerationPlan;
 }
 
+/**
+ * Pre-flight check that every shot's requested duration is renderable on the
+ * model it was routed to. Throws a single error listing all violations so the
+ * operator can fix the script in one pass rather than fail-and-retry against
+ * Venice (which returns HTTP 422 deep into the queue call with a generic
+ * message).
+ *
+ * Examples this catches:
+ *   - duration: "16s" routed to seedance-2-0-* (max 15s)
+ *   - duration: "12s" routed to veo3.1-fast-image-to-video (max 8s)
+ *   - duration: "8s" routed to wan-2-7-reference-to-video (max 10s, but step
+ *     restriction — 8s not in [5s, 10s])
+ */
+export function assertShotDurationsValid(
+  shots: ShotScript[],
+  plan: GenerationPlan,
+): void {
+  type Violation = {
+    shotNumber: number;
+    duration: string;
+    durationSec: number;
+    model: string;
+    maxSec: number;
+    allowed: string[];
+  };
+  const violations: Violation[] = [];
+
+  const shotById = new Map(shots.map(s => [s.shotNumber, s]));
+  for (const unit of plan.units) {
+    const model = unit.model;
+    const modelSpec = getVideoModel(model);
+    if (!modelSpec) {
+      // Unknown model — registry may be stale. Don't block; the API will
+      // surface the real error if the model is actually missing.
+      continue;
+    }
+    for (const shotNum of unit.shotNumbers) {
+      const shot = shotById.get(shotNum);
+      if (!shot) continue;
+      const requestedSec = parseShotDuration(shot.duration);
+      if (!Number.isFinite(requestedSec) || requestedSec <= 0) continue;
+      if (requestedSec > modelSpec.maxDurationSec) {
+        violations.push({
+          shotNumber: shotNum,
+          duration: shot.duration,
+          durationSec: requestedSec,
+          model,
+          maxSec: modelSpec.maxDurationSec,
+          allowed: modelSpec.durations,
+        });
+        continue;
+      }
+      // The model may have a stepped duration ladder (e.g. Wan 2.7 R2V only
+      // accepts 5s/10s). Use modelSupportsDuration for the loose
+      // (under-the-ceiling) check, then a strict membership check when the
+      // model exposes an explicit ladder. Strict check catches 8s on Wan 2.7
+      // R2V which modelSupportsDuration's lenient fallback would let through.
+      const passesLenient = modelSupportsDuration(model, shot.duration);
+      const passesStrict = modelSpec.durations.length === 0
+        || modelSpec.durations.includes(shot.duration);
+      if (!passesLenient || !passesStrict) {
+        violations.push({
+          shotNumber: shotNum,
+          duration: shot.duration,
+          durationSec: requestedSec,
+          model,
+          maxSec: modelSpec.maxDurationSec,
+          allowed: modelSpec.durations,
+        });
+      }
+    }
+  }
+
+  if (violations.length === 0) return;
+  const lines = violations.map(v =>
+    `  shot ${v.shotNumber}: duration "${v.duration}" (${v.durationSec}s) exceeds model "${v.model}" ceiling ${v.maxSec}s (allowed: ${v.allowed.join(', ') || '<none>'})`,
+  );
+  throw new Error(
+    `Shot duration preflight failed for ${violations.length} shot(s):\n${lines.join('\n')}\n` +
+    `Edit script.json and re-run, or update the model registry in src/venice/models.ts if the ceiling has changed.`,
+  );
+}
+
 export async function generateEpisodeVideos(
   client: VeniceClient,
   series: SeriesState,
   shots: ShotScript[],
   sceneDir: string,
   plan: GenerationPlan,
+  episodeAudioMix?: import('../series/types.js').AudioMixDefaults,
 ): Promise<GenerateEpisodeVideosResult> {
+  // Fail fast on duration / model mismatches before any Venice queue call.
+  assertShotDurationsValid(shots, plan);
+
   const videoPaths: string[] = [];
   const shotsByNumber = new Map(shots.map(shot => [shot.shotNumber, shot]));
   let previousRenderedShotPath: string | undefined;
@@ -1149,6 +1248,7 @@ export async function generateEpisodeVideos(
           previousRenderedShotPath,
           nextShotNumber,
           previousShot,
+          episodeAudioMix,
         )
         : await renderMultiShotUnitUntilSuccess(
           client,

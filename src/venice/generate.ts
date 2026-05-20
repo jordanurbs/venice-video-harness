@@ -14,7 +14,7 @@ import type {
   GenerateWithReferencesResult,
   CharacterReference,
 } from "./types.js";
-import { assertNotSilentRejectImage } from "./rejection.js";
+import { assertNotSilentRejectImage, thresholdForResolution } from "./rejection.js";
 
 // ---- Constants ------------------------------------------------------------
 
@@ -72,9 +72,14 @@ export async function generateImage(
     }),
   };
 
+  const threshold = thresholdForResolution(body.resolution);
   for (const img of normalized.images) {
     const decoded = Buffer.from(img.b64_json, "base64");
-    assertNotSilentRejectImage(decoded, { model: body.model, prompt: body.prompt });
+    assertNotSilentRejectImage(decoded, {
+      model: body.model,
+      prompt: body.prompt,
+      threshold,
+    });
   }
 
   return normalized;
@@ -193,7 +198,11 @@ export async function generateWithReferences(
     : undefined;
 
   const decoded = Buffer.from(b64, "base64");
-  assertNotSilentRejectImage(decoded, { model, prompt: augmentedPrompt });
+  assertNotSilentRejectImage(decoded, {
+    model,
+    prompt: augmentedPrompt,
+    threshold: thresholdForResolution(resolution),
+  });
 
   return { base64: b64, seed: resultSeed };
 }
