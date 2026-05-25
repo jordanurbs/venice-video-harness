@@ -36,6 +36,7 @@ import {
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
 import { generateImage, generateWithReferences } from '../venice/generate.js';
+import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { writeImageProvenance } from '../venice/provenance.js';
 import { getVeniceApiKey } from '../config.js';
 import { listVoices, filterVoices, auditionVoices } from '../venice/voices.js';
@@ -80,8 +81,43 @@ program
   .requiredOption('--concept <concept>', 'Series concept/premise')
   .option('-g, --genre <genre>', 'Genre', 'drama')
   .option('--setting <setting>', 'General setting description', '')
-  .action(async (opts: { name: string; concept: string; genre: string; setting: string }) => {
-    const series = createSeries(opts.name, opts.concept, opts.genre, opts.setting);
+  // ── Upfront questionnaire (production-audit follow-up) ──
+  // These two flags let the operator answer the "what kind of show is this?"
+  // questions at series-creation time, eliminating three classes of bugs we
+  // hit producing the PNW field-guide. The MCP's pipeline skill prompts for
+  // them before calling `series.new`.
+  .option(
+    '--audio-strategy <strategy>',
+    'How dialogue reaches the final mix: ' +
+    '"native" (model speaks in-frame; default; best for 1-2 lines per character), ' +
+    '"lip-sync" (Venice TTS + Wan 2.7 lip-sync; best when characters talk often), ' +
+    '"narrator-vo" (NARRATOR voice-over only; auto-mutes the model audio so a competing AI narrator can\'t fight the TTS).',
+  )
+  .option(
+    '--video-family <family>',
+    'Preferred video model family: ' +
+    'auto (default Seedance 2.0), seedance, happyhorse, grok-imagine, kling-o3. ' +
+    'Swaps actionModel/atmosphereModel/characterConsistencyModel to that family. ' +
+    'lipSyncModel stays on Wan 2.7 regardless.',
+  )
+  .action(async (opts: {
+    name: string; concept: string; genre: string; setting: string;
+    audioStrategy?: string; videoFamily?: string;
+  }) => {
+    const allowedAudio = new Set(['native', 'lip-sync', 'narrator-vo']);
+    if (opts.audioStrategy && !allowedAudio.has(opts.audioStrategy)) {
+      console.error(`--audio-strategy must be one of: ${[...allowedAudio].join(', ')}`);
+      process.exit(2);
+    }
+    const allowedFamily = new Set(['auto', 'seedance', 'happyhorse', 'grok-imagine', 'kling-o3']);
+    if (opts.videoFamily && !allowedFamily.has(opts.videoFamily)) {
+      console.error(`--video-family must be one of: ${[...allowedFamily].join(', ')}`);
+      process.exit(2);
+    }
+    const series = createSeries(opts.name, opts.concept, opts.genre, opts.setting, {
+      audioStrategy: opts.audioStrategy as 'native' | 'lip-sync' | 'narrator-vo' | undefined,
+      videoFamilyPreference: opts.videoFamily as 'auto' | 'seedance' | 'happyhorse' | 'grok-imagine' | 'kling-o3' | undefined,
+    });
     await saveSeries(series);
 
     console.log(`\nSeries created: ${series.name}`);
@@ -89,6 +125,14 @@ program
     console.log(`  Genre: ${series.genre}`);
     console.log(`  Concept: ${series.concept}`);
     console.log(`  Output: ${series.outputDir}`);
+    if (series.videoDefaults.audioStrategy) {
+      console.log(`  Audio strategy: ${series.videoDefaults.audioStrategy}`);
+    }
+    if (series.videoDefaults.videoFamilyPreference) {
+      console.log(`  Video family: ${series.videoDefaults.videoFamilyPreference}`);
+      console.log(`    actionModel: ${series.videoDefaults.actionModel}`);
+      console.log(`    characterConsistencyModel: ${series.videoDefaults.characterConsistencyModel}`);
+    }
     console.log(`\nNext: explore-aesthetic -p ${series.outputDir}`);
   });
 
@@ -197,8 +241,7 @@ program
 
         if (response.images?.[0]) {
           const imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
-          const imgPath = join(samplesDir, `${aes.name}.png`);
-          await writeFile(imgPath, imgBuffer);
+          const imgPath = await writeImageBytesSmart(imgBuffer, join(samplesDir, `${aes.name}.png`));
           console.log(`  ${aes.name}: ${imgPath}`);
         }
       } catch (err) {
@@ -256,9 +299,28 @@ program
   .option('--voice-desc <voiceDesc>', 'Voice description (pitch, timbre, accent, cadence)')
   .option('--base-traits <traits>', 'Custom base traits override (e.g. "tabby cat, feline, four legs")')
   .option('--skip-images', 'Skip reference image generation', false)
+  // Override-prompt path: read positive / negative prompts (and optionally
+  // model / cfg / aspect) from a JSON file and use them verbatim, bypassing
+  // buildCharacterReferencePromptParts entirely. Lets operators rescue a
+  // character whose default-prompt outputs keep failing (the LEGISLATOR-as-bird
+  // and FOUNDER-identity-drift episodes during the PNW field-guide all needed
+  // this). When the file omits a field, the default builder fills it.
+  // File shape (any subset valid):
+  //   {
+  //     "angles": {
+  //       "front":         { "positive": "...", "negative": "..." },
+  //       "three-quarter": { ... },
+  //       "profile":       { ... },
+  //       "full-body":     { ... }
+  //     },
+  //     "shared": { "model": "seedream-v5-lite", "cfg_scale": 9,
+  //                 "aspect_ratio": "1:1", "resolution": "1K", "seed": 42 }
+  //   }
+  .option('--override-prompt <path>', 'Path to a JSON file containing per-angle prompt overrides (see header comment in cli.ts add-character)')
   .action(async (opts: {
     project: string; name: string; gender: string; age: string;
     description?: string; wardrobe: string; voiceDesc?: string; baseTraits?: string; skipImages: boolean;
+    overridePrompt?: string;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -294,46 +356,103 @@ program
       const charDir = getCharacterDir(series, character.name);
       await mkdir(charDir, { recursive: true });
 
+      // Optional operator override: read positive/negative prompts (and a
+      // small set of shared params) from a JSON file. Lets the operator
+      // rescue a character whose default-prompt outputs keep failing.
+      type OverrideFile = {
+        angles?: Record<string, { positive?: string; negative?: string }>;
+        shared?: {
+          model?: string;
+          cfg_scale?: number;
+          aspect_ratio?: string;
+          resolution?: string;
+          seed?: number;
+        };
+      };
+      let override: OverrideFile = {};
+      if (opts.overridePrompt) {
+        try {
+          const raw = await readFile(resolve(opts.overridePrompt), 'utf-8');
+          override = JSON.parse(raw) as OverrideFile;
+          console.log(`  Using prompt overrides from ${opts.overridePrompt}`);
+        } catch (err) {
+          console.warn(`  Failed to read --override-prompt ${opts.overridePrompt}: ${(err as Error).message}`);
+        }
+      }
+      const sharedModel = override.shared?.model ?? 'seedream-v5-lite';
+      const sharedCfg = override.shared?.cfg_scale ?? 10;
+      const sharedAspect = override.shared?.aspect_ratio ?? '1:1';
+      const sharedResolution = override.shared?.resolution ?? '1K';
+      const sharedSeed = override.shared?.seed ?? seed;
+
       const angles: ('front' | 'three-quarter' | 'profile' | 'full-body')[] = ['front', 'three-quarter', 'profile', 'full-body'];
       const filenames = ['front.png', 'three-quarter.png', 'profile.png', 'full-body.png'];
 
       console.log(`Generating reference images for ${character.name}...`);
 
       for (let i = 0; i < angles.length; i++) {
-        // structured prompt keeps the positive prompt under the
+        const angle = angles[i];
+        const angleOverride = override.angles?.[angle];
+
+        // Default prompt build (still used when override.angles[angle].positive
+        // is missing). structured prompt keeps the positive prompt under the
         // model's silent-reject ceiling and pushes style-reminder cues
         // into negative_prompt.
-        const { positive: prompt, negativeAdditions } =
-          buildCharacterReferencePromptParts(character, series.aesthetic, angles[i], {
-            model: 'seedream-v5-lite',
+        const { positive: defaultPositive, negativeAdditions } =
+          buildCharacterReferencePromptParts(character, series.aesthetic, angle, {
+            model: sharedModel,
+            negativePromptStrategy: series.videoDefaults.imageDefaults?.negativePromptStrategy ?? 'auto',
           });
+        const prompt = angleOverride?.positive ?? defaultPositive;
         const baseNegatives = [
           'deformed', 'blurry', 'bad anatomy', 'low quality',
           'multiple people', 'watermark',
           'character reference sheet', 'comic panels', 'panel borders',
         ];
-        const negativePrompt = [...baseNegatives, ...negativeAdditions].join(', ');
+        const negativePrompt = angleOverride?.negative
+          ?? [...baseNegatives, ...negativeAdditions].join(', ');
 
         try {
           const response = await generateImage(client, {
+            model: sharedModel,
             prompt,
             negative_prompt: negativePrompt,
-            resolution: '1K',
-            aspect_ratio: '1:1',
+            resolution: sharedResolution,
+            aspect_ratio: sharedAspect,
             steps: 30,
-            cfg_scale: 10,
-            seed,
+            cfg_scale: sharedCfg,
+            seed: sharedSeed,
             safe_mode: false,
             hide_watermark: true,
           });
 
           if (response.images?.[0]) {
             const imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
-            await writeFile(join(charDir, filenames[i]), imgBuffer);
-            console.log(`  ${angles[i]}: saved`);
+            const finalPath = await writeImageBytesSmart(imgBuffer, join(charDir, filenames[i]));
+            console.log(`  ${angle}: saved -> ${basename(finalPath)}`);
+
+            // Sidecar: capture the resolved prompt + params for this angle so
+            // operators can hand-edit and re-run with --override-prompt.
+            const returnedSeed = (response.images[0] as { seed?: number }).seed;
+            const sidecarPath = join(charDir, `${angle}.prompt.json`);
+            const sidecar = {
+              character: character.name,
+              angle,
+              model: sharedModel,
+              prompt,
+              negative_prompt: negativePrompt,
+              cfg_scale: sharedCfg,
+              aspect_ratio: sharedAspect,
+              resolution: sharedResolution,
+              seed: sharedSeed,
+              returnedSeed,
+              overrideSource: opts.overridePrompt ?? null,
+              generatedAt: new Date().toISOString(),
+            };
+            await writeFile(sidecarPath, JSON.stringify(sidecar, null, 2), 'utf-8');
           }
         } catch (err) {
-          console.warn(`  ${angles[i]}: failed - ${err}`);
+          console.warn(`  ${angle}: failed - ${err}`);
         }
       }
 
@@ -499,9 +618,25 @@ Your task is to write a complete episode script as a JSON object. Follow the exa
 - Open with a visual hook in the first 3 seconds
 - End on a beat that makes viewers want the next episode
 - Use one scene, one location, one emotional note
-- Include specific delivery cues for all dialogue
+- Include specific delivery cues for all dialogue (see VOICE DIRECTION below)
 - Use the correct videoModel ("action" for movement/dialogue, "atmosphere" for establishing/static)
 - End with a title card shot (3s, type "insert", FADE transition)
+
+SHOT DURATION — PREFER FEWER, LONGER SHOTS (CRITICAL):
+The video models (Seedance 2.0, HappyHorse 1.0, Wan 2.7) all support up to 15 seconds in a single generation, and 15s is the strong default. For a 60-second episode, prefer 4 shots at ~15s each over 10 shots at ~6s. Reasons:
+1. Identity stays locked longer — every new shot is a fresh generation where character likeness can drift.
+2. Motion has room to breathe — short shots cut before gestures/expressions complete, which is one of the main "AI video looks twitchy" tells.
+3. Cost is lower — fewer generations per episode.
+4. Fewer transitions to police for continuity.
+Only use shorts (3-8s) for *deliberate* short beats: hard cuts, sight gags, single-frame reactions, the closing title card. Default everything else to 12-15s.
+- duration must be one of: "3s","4s","5s","6s","7s","8s","9s","10s","11s","12s","13s","14s","15s" (HappyHorse goes down to 3s; Seedance from 4s).
+- Aim for the episode to contain roughly (target_seconds / 13) shots ± 1.
+
+VOICE DIRECTION — NATIVE MODEL DIALOGUE IS PREFERRED:
+The recommended pipeline uses the video model's own native dialogue (Seedance / Wan 2.7 / HappyHorse all generate in-character speech). Venice TTS is an exception path, not the default. Therefore every dialogue shot's "delivery" cue must be RICH — direct the voice like you're talking to a voice actor: timbre, accent, pacing, emotional register, breath placement, signature delivery quirks. Two-word "delivery": "angry" cues produce flat results; "delivery": "deliberate, half-volume drawl with a beat before the punchline; warm not bitter; breath audible before 'audacity'" produces in-character results.
+
+NO MUSIC / NO SFX FROM THE VIDEO MODEL:
+Every shot "description" MUST end with the literal phrase: "No background music, no sound effects, no soundtrack, dry recording." The harness adds music and ambient/SFX in post via separate Venice audio calls; baked-in music or SFX from the video model fights the assembler's mix. The "sfx" field in the schema below describes what the harness should generate in post — it does NOT instruct the video model to produce sound effects.
 
 IMPORTANT: Every shot MUST include an "environment" field. This controls whether the pipeline uses the series' dark/rainy aesthetic or adapts it for bright daytime scenes. Values:
 - "DAY_INTERIOR" -- bright indoor scene (café, office, apartment in daylight)
@@ -521,13 +656,13 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
       "shotNumber": 1,
       "type": "establishing|dialogue|action|reaction|close-up|insert",
       "environment": "DAY_INTERIOR|DAY_EXTERIOR|NIGHT_INTERIOR|NIGHT_EXTERIOR",
-      "duration": "3s|5s|8s",
+      "duration": "3s|4s|...|15s (PREFER 15s; use shorts only for deliberate quick beats)",
       "videoModel": "action|atmosphere",
-      "description": "<full visual description>",
+      "description": "<full visual description, ending with 'No background music, no sound effects, no soundtrack, dry recording.'>",
       "panelDescription": "<optional single-frame description if description has sequential action>",
       "characters": ["<CHARACTER_NAME>"],
-      "dialogue": {"character": "<NAME>", "line": "<text>", "delivery": "<specific delivery cue>"} or null,
-      "sfx": "<sound effects>" or null,
+      "dialogue": {"character": "<NAME>", "line": "<text>", "delivery": "<rich voice-director cue: timbre, accent, pacing, emotion, breath, signature quirks>"} or null,
+      "sfx": "<sound effects to GENERATE IN POST via Venice SFX>" or null,
       "cameraMovement": "<camera direction>",
       "transition": "CUT|FADE|DISSOLVE|MATCH CUT|SMASH CUT"
     }
@@ -599,6 +734,32 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
       console.log(`  Shots: ${script.shots.length}`);
       console.log(`  Duration: ~${totalDurationSec}s`);
       console.log(`  Status: draft`);
+
+      // Post-condition advisory: the new system prompt asks for 15s-leaning
+      // shots, but LLMs sometimes ignore that and produce many shorts. We
+      // surface it so the user (and the MCP) sees the warning instead of
+      // silently shipping a draft with 10x 6s beats.
+      const shotsUnder8s = script.shots.filter((s) => {
+        const m = s.duration?.match(/(\d+)\s*s/);
+        return m ? parseInt(m[1], 10) < 8 : false;
+      });
+      if (script.shots.length > Math.max(6, Math.ceil(totalDurationSec / 13)) && shotsUnder8s.length >= 3) {
+        console.warn(
+          `  ⚠ The draft has ${script.shots.length} shots for ~${totalDurationSec}s ` +
+            `(${shotsUnder8s.length} are under 8s). Recommended target: ~${Math.max(2, Math.round(totalDurationSec / 13))} shots ` +
+            `with most at 12-15s. Edit script.json before approving or re-run workshop with stronger guidance in the concept.`,
+        );
+      }
+      const shotsWithoutAudioNegative = script.shots.filter(
+        (s) => !s.description || !/no\s+(music|background music|soundtrack|sound effects|sfx)/i.test(s.description),
+      );
+      if (shotsWithoutAudioNegative.length > 0) {
+        console.warn(
+          `  ⚠ ${shotsWithoutAudioNegative.length} shot(s) are missing the no-music/no-SFX negative in their description. ` +
+            `The video model may bake music or sound effects into the dialogue track. ` +
+            `The harness will still suppress these via its NEGATIVE_PROMPT, but the script LLM should also include them per the workshop instructions.`,
+        );
+      }
 
       const dialogueShots = script.shots.filter(s => s.dialogue);
       if (dialogueShots.length > 0) {
@@ -1081,7 +1242,11 @@ program
   .requiredOption('--after <shotId>', 'Shot id (number or suffixed string) to insert after')
   .requiredOption('--description <text>', 'Description for the new shot (drives panel + video prompt)')
   .option('--type <type>', 'Shot type', 'action')
-  .option('--duration <duration>', 'Shot duration (e.g. 5s)', '5s')
+  .option(
+    '--duration <duration>',
+    'Shot duration (e.g. 15s). DEFAULT is 15s — the native max on Seedance 2.0 (4-15s) and HappyHorse 1.0 (3-15s). Prefer 15s and stitch fewer long clips (2x15s for a 30s beat) over many short clips: identity stays locked longer, transitions are fewer, cost is lower, and motion has room to breathe. Only drop below 15s for genuine quick beats (sight gag, hard cut, deliberate stinger).',
+    '15s',
+  )
   .option('--motion <motion>', 'Motion intensity: low | medium | high', 'medium')
   .option('--characters <names>', 'Character names (comma-separated)', '')
   .option('--dialogue <line>', 'Dialogue line (omit for action/insert shots)')
@@ -1409,7 +1574,8 @@ program
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--skip-qa', 'Skip QA approval check', false)
-  .action(async (opts: { project: string; episode: number; skipQa: boolean }) => {
+  .option('--no-seedance-keyframe', 'Disable the automatic Seedance R2V → Wan 2.7 keyframe pipeline for this run (see CLAUDE.md rule 32).')
+  .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
@@ -1425,10 +1591,18 @@ program
       process.exit(1);
     }
 
+    // commander's --no-<flag> negates the camelCase option. When the user
+    // passes --no-seedance-keyframe we flip the series-level default for
+    // this run only (no persisted change to series.json).
+    if (opts.seedanceKeyframe === false) {
+      series.videoDefaults = { ...series.videoDefaults, seedanceKeyframeForWan: false };
+      console.log('Seedance R2V → Wan 2.7 keyframe pipeline DISABLED for this run.\n');
+    }
+
     const apiKey = getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const sceneDir = join(episodeDir, 'scene-001');
-    const generationPlan = buildGenerationPlan(script);
+    const generationPlan = buildGenerationPlan(script, series);
 
     console.log(`Generating videos for Episode ${opts.episode}: ${script.title}`);
     const ccModel = series.videoDefaults.characterConsistencyModel ?? DEFAULT_CHARACTER_CONSISTENCY_MODEL;
@@ -1436,10 +1610,26 @@ program
     console.log(`Generation units: ${generationPlan.units.length}`);
     const multiUnitCount = generationPlan.units.filter(unit => unit.unitType === 'kling-multishot').length;
     if (multiUnitCount > 0) {
-      console.log(`Kling multi-shot units: ${multiUnitCount}\n`);
+      console.log(`Kling multi-shot units: ${multiUnitCount}`);
     }
+    const seedanceKeyframeCount = generationPlan.units.filter(unit => unit.useSeedanceKeyframe).length;
+    if (seedanceKeyframeCount > 0) {
+      console.log(`Seedance R2V → Wan 2.7 keyframe units: ${seedanceKeyframeCount} (~$0.85 each; CLAUDE.md rule 32)`);
+    }
+    console.log('');
 
-    const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan);
+    // Fold the series-level audioStrategy into the episode's audioMix when
+    // the user hasn't explicitly set suppressModelNarration. 'narrator-vo'
+    // tells Seedance `audio: false` for every dialogue shot at queue time so
+    // the model can't generate a competing narrator under the Venice TTS.
+    const effectiveAudioMix = (() => {
+      const mix = { ...(script.audioMix ?? {}) };
+      if (mix.suppressModelNarration === undefined && series.videoDefaults.audioStrategy === 'narrator-vo') {
+        mix.suppressModelNarration = true;
+      }
+      return mix;
+    })();
+    const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan, effectiveAudioMix);
     await saveGenerationPlan(episodeDir, plan);
 
     const ep = series.episodes.find(e => e.number === opts.episode);
@@ -1833,19 +2023,33 @@ program
 // ── assemble-episode ──────────────────────────────────────────────────
 program
   .command('assemble-episode')
-  .description('Stitch video clips + dialogue replacement + music + subtitles')
+  .description('Stitch video clips + (optional) Venice dialogue replacement + music + subtitles')
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--no-subtitles', 'Skip subtitle burn-in')
   .option('--no-music', 'Skip background music mixing')
   .option('--no-ambient', 'Skip ambient bed mixing')
   .option('--ambient-volume <vol>', 'Ambient bed volume (0-1)', '0.3')
-  .option('--no-dialogue-replace', 'Skip Venice dialogue replacement (use native model voices)')
-  .option('--native-volume <vol>', 'Native audio volume when dialogue is replaced (0-1)', '0.2')
+  // Default is OFF. Native model dialogue (Seedance / Wan 2.7 / HappyHorse)
+  // is preferred until Venice ships better TTS voice options. Pass
+  // --dialogue-replace to opt in (typically when you've also run
+  // `override-audio --dialogue` to produce dialogue-shot-NNN.mp3 files).
+  // --no-dialogue-replace is kept as an explicit alias so scripts that
+  // already pass it don't break (it's now a no-op since the default is
+  // already false).
+  .option('--dialogue-replace', 'Replace native model dialogue with Venice TTS (off by default; flip on only when override-audio --dialogue has produced dialogue-shot-NNN.mp3 files)', false)
+  .option('--no-dialogue-replace', 'Explicitly disable Venice TTS dialogue replacement (now the default — kept for backward compatibility with older scripts)')
+  // Default is intentionally unset; resolved below to `0` when
+  // --dialogue-replace is on (so model-generated narration / dialogue can't
+  // fight the Venice TTS) and `1.0` otherwise. Pass the flag explicitly to
+  // override either default — for example, --native-volume 0.2 keeps a soft
+  // ambient bed under the TTS for shots whose model audio is just room tone.
+  // Per-shot `shot.nativeAudio: 'mute' | 'duck' | 'keep'` always wins.
+  .option('--native-volume <vol>', 'Native audio volume in the final mix (0-1). Default: 0 with --dialogue-replace, 1.0 otherwise. Per-shot shot.nativeAudio overrides this default.')
   .action(async (opts: {
     project: string; episode: number; subtitles: boolean; music: boolean;
     ambient: boolean; ambientVolume: string;
-    dialogueReplace: boolean; nativeVolume: string;
+    dialogueReplace: boolean; nativeVolume?: string;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -1868,14 +2072,42 @@ program
 
     const hasDialogueFiles = existsSync(audioDir) &&
       readdirSync(audioDir).some((f: string) => f.startsWith('dialogue-shot-'));
-    const useDialogueReplace = opts.dialogueReplace !== false && hasDialogueFiles;
+    // Default is now OFF — native model dialogue is the recommended path.
+    // Only replace when the user explicitly opts in via --dialogue-replace
+    // AND the TTS files exist.
+    // Series-level audio strategy (set at series-creation time via the
+    // upfront questionnaire) sets the default for --dialogue-replace:
+    //   - 'native'      : false (model audio plays as-is)
+    //   - 'lip-sync'    : true  (Venice TTS replaces native; lip-sync is
+    //                            handled by routing dialogue shots to Wan 2.7
+    //                            via videoDefaults.lipSyncModel)
+    //   - 'narrator-vo' : true  (Venice TTS owns the dialogue lane; Seedance
+    //                            was already told audio:false at queue time
+    //                            via audioMix.suppressModelNarration, so this
+    //                            ensures the final mix actually plays the TTS)
+    // Operator flag (--dialogue-replace / --no-dialogue-replace) always wins.
+    const seriesAudioStrategy = series.videoDefaults.audioStrategy;
+    const strategyImpliesReplace =
+      seriesAudioStrategy === 'lip-sync' || seriesAudioStrategy === 'narrator-vo';
+    const dialogueReplaceFlagPassed = opts.dialogueReplace === true;
+    const effectiveDialogueReplace = dialogueReplaceFlagPassed || strategyImpliesReplace;
+    const useDialogueReplace = effectiveDialogueReplace && hasDialogueFiles;
+
+    // Resolve --native-volume default: 0 with --dialogue-replace (Venice TTS
+    // owns the dialogue lane; let nothing compete), 1.0 otherwise. An
+    // explicit operator flag always wins.
+    const nativeVolumeDefault = useDialogueReplace ? 0 : 1.0;
+    const nativeVolume = opts.nativeVolume !== undefined
+      ? parseFloat(opts.nativeVolume)
+      : nativeVolumeDefault;
 
     if (useDialogueReplace) {
-      console.log(`  Dialogue replacement: ON (native audio ducked to ${Math.round(parseFloat(opts.nativeVolume) * 100)}%)`);
-    } else if (opts.dialogueReplace !== false && !hasDialogueFiles) {
-      console.log(`  Dialogue replacement: OFF (no TTS files found -- run override-audio --dialogue first for voice consistency)`);
+      const explicit = opts.nativeVolume !== undefined ? ' (operator override)' : ' (default)';
+      console.log(`  Dialogue replacement: ON (Venice TTS; native audio at ${Math.round(nativeVolume * 100)}%${explicit})`);
+    } else if (opts.dialogueReplace === true && !hasDialogueFiles) {
+      console.log(`  Dialogue replacement: OFF (--dialogue-replace was set but no dialogue-shot-NNN.mp3 files exist -- run override-audio --dialogue first)`);
     } else {
-      console.log(`  Dialogue replacement: OFF (using native model voices)`);
+      console.log(`  Dialogue replacement: OFF (default — using native model dialogue at ${Math.round(nativeVolume * 100)}% volume)`);
     }
 
     // Collect per-shot trim/flip metadata from script
@@ -1930,18 +2162,46 @@ program
     const epNum = String(opts.episode).padStart(3, '0');
     const outputPath = join(episodeDir, `episode-${epNum}-final.mp4`);
 
+    // Resolve audio paths for each music cue so the assembler picks up
+    // either spec.audioPath (script-provided) or the canonical
+    // audio/music-cue-NNN.mp3 next to the episode. When a cue has no
+    // resolvable audio, the assembler falls back to the single-bed musicPath.
+    const cueAudioPathFor = (spec: { audioPath?: string; startShot: number | string }): string | undefined => {
+      if (spec.audioPath) return resolve(opts.project, spec.audioPath);
+      const shotId = typeof spec.startShot === 'number'
+        ? String(spec.startShot).padStart(3, '0')
+        : spec.startShot;
+      const candidates = [
+        join(audioDir, `music-cue-${shotId}.mp3`),
+        join(audioDir, `music-shot-${shotId}.mp3`),
+      ];
+      for (const c of candidates) {
+        if (existsSync(c)) return c;
+      }
+      return undefined;
+    };
+    // Hydrate musicCues with resolved audio paths so renderMusicCuesTrack
+    // can render directly without re-resolving inside the assembler.
+    const hydratedCues = script.musicCues?.map(spec => ({
+      ...spec,
+      audioPath: spec.audioPath ? resolve(opts.project, spec.audioPath) : cueAudioPathFor(spec),
+    }));
+
     await assembleEpisode({
       videoFiles,
       outputPath,
       srtPath,
       musicPath: hasMusic ? musicPath : undefined,
       musicVolume: 0.15,
+      musicCues: hydratedCues,
+      shots: script.shots,
       ambientBedPath: hasAmbient ? ambientPath : undefined,
       ambientBedVolume: parseFloat(opts.ambientVolume),
       dialogueDir: useDialogueReplace ? audioDir : undefined,
-      nativeAudioVolume: parseFloat(opts.nativeVolume),
+      nativeAudioVolume: nativeVolume,
       shotTrims,
       endingTitleOverlay: endingTitleShot?.titleOverlay,
+      audioMix: script.audioMix,
     });
 
     const ep = series.episodes.find(e => e.number === opts.episode);

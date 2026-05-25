@@ -53,12 +53,24 @@ export interface MiniDramaVideoPrompt {
   modelResolution?: ModelResolution;
 }
 
+// The audio-suppression chunk keeps the video model from baking music,
+// score, sound effects, or foley into the dialogue track. The harness adds
+// music (musicCues / generate_music) and ambient/SFX (generate_ambient /
+// mix_audio) in post — bakes-in fight the assembler's mix and can't be
+// removed once they're in the output. Keep this in NEGATIVE_PROMPT for
+// every shot type; the workshop system prompt also asks the script LLM to
+// repeat it per-shot, but this is the always-on belt-and-braces.
+const AUDIO_SUPPRESSION_NEGATIVE =
+  'background music, soundtrack, score, musical score, sound effects, sfx, foley, ' +
+  'orchestral hits, sound design, audio drops';
+
 const NEGATIVE_PROMPT =
   'comic panels, multiple panels, panel layout, panel borders, panel grid, speech bubbles, text bubbles, ' +
   'manga panels, comic strip, storyboard grid, split screen, multiple frames, ' +
   'deformed, blurry, bad anatomy, bad hands, extra fingers, mutation, ' +
   'poorly drawn face, watermark, text, signature, low quality, ugly, ' +
-  'umbrella, holding umbrella';
+  'umbrella, holding umbrella, ' +
+  AUDIO_SUPPRESSION_NEGATIVE;
 
 const NO_PEOPLE_NEGATIVE =
   NEGATIVE_PROMPT + ', people, person, human, figure, silhouette, crowd, pedestrian, bystander';
@@ -344,6 +356,7 @@ export function buildVideoPrompt(
   shot: ShotScript,
   series: SeriesState,
   previousShot?: ShotScript,
+  episodeAudioMix?: import('../series/types.js').AudioMixDefaults,
 ): MiniDramaVideoPrompt {
   if (!series.aesthetic) {
     throw new Error('Series aesthetic must be set before generating videos.');
@@ -427,11 +440,30 @@ export function buildVideoPrompt(
 
   const videoPrompt = parts.join(' ');
 
+  // Decide whether to ask the video model to synthesize audio. The default is
+  // `true`, but a model native audio track is wasted (and harmful) when:
+  //   - the shot's primary speaker is NARRATOR — there's nothing on-camera to
+  //     lip-sync to, and Seedance i2v will eagerly generate a competing
+  //     English narrator that fights the Venice TTS bed in the assembler,
+  //   - the episode's audio mix has opted into suppressModelNarration for
+  //     every dialogue-bearing shot,
+  //   - the shot has nativeAudio === 'mute' (per-shot override).
+  // Callers that need the native track regardless can flip nativeAudio: 'keep'.
+  const isNarratorShot = shot.dialogue?.character?.toUpperCase() === 'NARRATOR';
+  const suppressGlobal = episodeAudioMix?.suppressModelNarration === true && Boolean(shot.dialogue);
+  const muteByOverride = shot.nativeAudio === 'mute';
+  const keepByOverride = shot.nativeAudio === 'keep';
+  const audio = keepByOverride
+    ? true
+    : (isNarratorShot || suppressGlobal || muteByOverride)
+      ? false
+      : true;
+
   return {
     prompt: videoPrompt,
     model: modelId,
     duration: shot.duration,
-    audio: true,
+    audio,
     characterElements,
     sceneImagePaths: shot.sceneImagePaths,
     referenceImageUrls: useRefs ? [] : undefined,
@@ -616,7 +648,16 @@ export function buildCharacterReferencePromptParts(
   char: MiniDramaCharacter,
   aesthetic: AestheticProfile,
   angle: 'front' | 'three-quarter' | 'profile' | 'full-body',
-  options?: { model?: string; maxChars?: number },
+  options?: {
+    model?: string;
+    maxChars?: number;
+    /**
+     * Selects the anti-photoreal guard family. Pass the series'
+     * `imageDefaults.negativePromptStrategy` (or `'auto'` to infer).
+     * See ImageModelDefaults.negativePromptStrategy.
+     */
+    negativePromptStrategy?: 'auto' | 'stylized' | 'photoreal' | 'none';
+  },
 ): { positive: string; negativeAdditions: string[] } {
   const baseTraits = char.baseTraits ?? (char.gender === 'female' ? FEMALE_BASE_TRAITS : MALE_BASE_TRAITS);
   const cap = options?.maxChars
@@ -657,14 +698,30 @@ export function buildCharacterReferencePromptParts(
   // Style-reminder content + photorealism guards belong on the negative side.
   // They steer the model away from the wrong rendering family without eating
   // positive-prompt budget.
+  //
+  // Strategy selects whether to emit anti-photoreal guards. For photoreal
+  // aesthetics ("documentary", "photograph", "cinematic photography") these
+  // guards fight the positives — the legislator-as-bird and founder-as-bird
+  // regressions in the PNW field-guide episode were caused exactly by this.
+  const strategy = options?.negativePromptStrategy ?? 'auto';
+  const wantsAntiPhotoreal = strategy === 'stylized'
+    ? true
+    : strategy === 'photoreal' || strategy === 'none'
+      ? false
+      : !isPhotorealAesthetic(aesthetic);
+
+  if (strategy === 'none') {
+    return { positive, negativeAdditions: [] };
+  }
+
+  const antiPhotorealParts = wantsAntiPhotoreal
+    ? ['photorealistic', 'photograph', 'photo', '3D render', 'Pixar']
+    : [];
+
   const negativeAdditions = [
     aesthetic.filmStock ? `not ${aesthetic.filmStock}` : null,
-    aesthetic.palette ? `not ${aesthetic.palette}` : null,
-    'photorealistic',
-    'photograph',
-    'photo',
-    '3D render',
-    'Pixar',
+    aesthetic.palette && wantsAntiPhotoreal ? `not ${aesthetic.palette}` : null,
+    ...antiPhotorealParts,
     'no text',
     'no labels',
     'no annotations',
@@ -674,4 +731,31 @@ export function buildCharacterReferencePromptParts(
   ].filter((s): s is string => Boolean(s));
 
   return { positive, negativeAdditions };
+}
+
+/**
+ * Detect a photoreal series aesthetic from natural-language fields so
+ * `negativePromptStrategy: 'auto'` can do the right thing without making
+ * the user spell it out. We check `style`, `lensCharacteristics`,
+ * `filmStock`, and a `notes` field (when present) for any of:
+ *   photoreal, photograph, photo, documentary, live action, naturalist,
+ *   cinematic photography
+ *
+ * This is a precision-over-recall heuristic — anything close to photoreal
+ * suppresses the anti-photoreal guards. Operators who want the legacy
+ * behaviour back can flip `negativePromptStrategy: 'stylized'`.
+ */
+function isPhotorealAesthetic(aesthetic: AestheticProfile): boolean {
+  const blob = [
+    aesthetic.style,
+    (aesthetic as { lensCharacteristics?: string }).lensCharacteristics,
+    aesthetic.filmStock,
+    (aesthetic as { notes?: string }).notes,
+  ]
+    .filter((s): s is string => typeof s === 'string')
+    .join(' ')
+    .toLowerCase();
+  return /\b(photoreal|photograph|photo|documentary|live[- ]action|naturalist|cinematic photography|nature[- ]documentary)\b/.test(
+    blob,
+  );
 }
