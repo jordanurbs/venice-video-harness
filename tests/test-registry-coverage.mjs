@@ -44,9 +44,12 @@ const REQUIRED_VIDEO_IDS = [
   // Wan 2.6 (incl. new R2V variant)
   'wan-2.6-image-to-video',
   'wan-2.6-reference-to-video',
-  // HappyHorse 1.0
+  // HappyHorse 1.0 (back-compat) + 1.1 (default happyhorse family, 2026-07)
   'happyhorse-1-0-image-to-video',
   'happyhorse-1-0-reference-to-video',
+  'happyhorse-1-1-text-to-video',
+  'happyhorse-1-1-image-to-video',
+  'happyhorse-1-1-reference-to-video',
   // PixVerse C1 (new) + v5.6 (legacy)
   'pixverse-c1-image-to-video',
   'pixverse-c1-reference-to-video',

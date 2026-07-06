@@ -410,6 +410,38 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
+  // -- HappyHorse 1.1 (live registry sync 2026-07-06) --
+  // Alibaba's 15B model, #1 on the Artificial Analysis Video Arena (T2V + I2V)
+  // by blind human preference. Joint single-pass video+audio with phoneme-level
+  // lip-sync across 7 languages (EN, Mandarin, Cantonese, JA, KO, DE, FR).
+  // 1.1 adds reference-to-video with up to 9 reference images and widens the
+  // aspect-ratio menu to nine ratios. Draft on 720p, finalize keepers on 1080p.
+  {
+    id: 'happyhorse-1-1-text-to-video', name: 'HappyHorse 1.1', type: 'text-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['1080p', '720p'],
+    aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '9:21', '5:4', '4:5'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'happyhorse-1-1-image-to-video', name: 'HappyHorse 1.1', type: 'image-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['1080p', '720p'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'happyhorse-1-1-reference-to-video', name: 'HappyHorse 1.1 R2V', type: 'image-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['1080p', '720p'],
+    aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '9:21', '5:4', '4:5'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
   // -- Kling V3 --
   {
     id: 'kling-v3-pro-text-to-video', name: 'Kling V3 Pro', type: 'text-to-video',
