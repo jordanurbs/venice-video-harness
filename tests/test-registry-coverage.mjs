@@ -69,8 +69,6 @@ const REQUIRED_VIDEO_IDS = [
   'sora-2-pro-image-to-video',
   // Veo 3.1
   'veo3.1-fast-image-to-video',
-  // DaVinci MagiHuman (added 2026-05)
-  'davinci-magihuman-image-to-video',
   // LTX 2 + Longcat + Vidu + OVI
   'ltx-2-fast-image-to-video',
   'longcat-image-to-video',

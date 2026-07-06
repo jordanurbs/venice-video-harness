@@ -42,7 +42,6 @@ Live catalog as of **2026-05-20** (synced against `GET /api/v1/models?type=video
 | **Wan 2.5 Preview** | i2v | t2v | 10s | Yes | `audio_url` input. |
 | **Wan 2.2 A14B** | — | t2v | 5s | No | Legacy text-to-video. |
 | **Wan 2.1 Pro** | i2v | — | 6s | No | Legacy. |
-| **DaVinci MagiHuman** | i2v | — | **30s** | Yes (`audio_url` input) | Talking-head specialist. Longest lip-sync duration on Venice. 16:9 only. |
 | **Runway Gen-4.5** | Gen-4.5, Turbo, Aleph | Gen-4.5 Text | 10s | No (silent) | Strong motion physics; 7 aspect ratios. No R2V, no audio, no end-image. |
 | **Sora 2** | Standard, Pro | Standard, Pro | Standard 12s / **Pro 20s** | Yes | Pro now reaches 20s + `true_1080p` resolution. |
 | **Veo 3.1** | Fast, Full | Fast, Full | 8s | Yes | Up to 4K resolution. |

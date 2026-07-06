@@ -707,9 +707,6 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   'wan-2-7-spicy-image-to-video',
   'wan-2-7-text-to-video',
   'wan-2-7-video-to-video',
-  // DaVinci MagiHuman: talking-head specialist with audio_url input,
-  // alternative to Wan 2.7 i2v for lip-sync work (longer max duration: 30s).
-  'davinci-magihuman-image-to-video',
 ]);
 
 /**

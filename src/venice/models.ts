@@ -761,19 +761,11 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
-  // -- DaVinci MagiHuman (added 2026-05 sync) --
-  // Talking-head / lip-sync specialist with audio_url input. 5-30s durations.
-  // Designed for one-character close-ups driven by an external audio track —
-  // an alternative to Wan 2.7 i2v for lip-sync work, with longer max duration.
-  {
-    id: 'davinci-magihuman-image-to-video', name: 'DaVinci MagiHuman', type: 'image-to-video',
-    durations: ['5s', '10s', '15s', '20s', '25s', '30s'],
-    resolutions: ['256p', '540p', '720p', '1080p'], aspectRatios: ['16:9'],
-    audio: true, audioConfigurable: false, audioInput: true, videoInput: false,
-    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 30, minAudioInputSec: 3,
-    privacy: 'anonymized', offline: false,
-  },
+  // -- DaVinci MagiHuman: REMOVED 2026-07-06 --
+  // Venice pulled `davinci-magihuman-image-to-video` from the live catalog
+  // (`/models?type=all` no longer lists it). Entry removed here and the matching
+  // magihuman branches dropped from the app's VideoModelCapabilities in the same
+  // change (per harness↔app capability-sync rule). Restore both if Venice re-adds it.
   // -- Wan 2.7 Spicy + Wan 2.6 R2V (added 2026-05 sync) --
   // wan-2-7-spicy-image-to-video is an uncensored Wan 2.7 i2v variant; same
   // 5/10/15s ladder. wan-2.6-reference-to-video is the new R2V variant of
