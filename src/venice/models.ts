@@ -108,12 +108,14 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   //     yields "This model does not support aspect_ratio" — empty array.
   //   - t2v supports aspect_ratio.
   //   - R2V uses `per_reference_audio` via elements[].audio_url, not audio_url.
+  //   - end_image_url is NOT supported: live 2026-07-06 the i2v (incl. Spicy)
+  //     queue returned HTTP 400 "This model does not support end_image_url".
   //   - Cost reference: ~$0.55 per 5s clip at 720p.
   {
     id: 'wan-2-7-image-to-video', name: 'Wan 2.7', type: 'image-to-video',
     durations: ['5s', '10s', '15s'], resolutions: ['1080p', '720p'], aspectRatios: [],
     audio: false, audioConfigurable: false, audioInput: true, videoInput: false,
-    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, minAudioInputSec: 3,
     privacy: 'anonymized', offline: false,
   },
@@ -780,7 +782,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'wan-2-7-spicy-image-to-video', name: 'Wan 2.7 Spicy', type: 'image-to-video',
     durations: ['5s', '10s', '15s'], resolutions: ['1080p', '720p'], aspectRatios: [],
     audio: false, audioConfigurable: false, audioInput: true, videoInput: false,
-    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, minAudioInputSec: 3,
     privacy: 'anonymized', offline: false,
   },
