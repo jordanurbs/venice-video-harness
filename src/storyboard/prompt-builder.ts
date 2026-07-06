@@ -668,6 +668,12 @@ function extractRegister(fullText: string, sceneNumber: number): string {
  * movement, subject + action, setting, style, and audio cues. Only the
  * aesthetic register relevant to the current scene is included.
  *
+ * Directing principle (see .claude/agents/prompt-engineer.md and the README
+ * "Directing layer"): the prose should DIRECT the shot -- one intention
+ * expressed through camera/light/blocking/performance/sound -- rather than
+ * stack "cinematic" adjectives. Camera, angle, and movement come from the
+ * shot's authored intention, not from a generic "make it cinematic" default.
+ *
  * The returned `video` block is API-ready for any supported video model.
  * The model field is a default -- the generation script chooses the actual
  * model at runtime.

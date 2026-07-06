@@ -352,6 +352,17 @@ function summarizeCharacterForMultiShot(
   return `[${label}: ${baseTraits}, ${char.age}, ${char.description.split(',').slice(0, 3).join(',').trim()}, wearing ${shortWardrobe}]`;
 }
 
+/**
+ * Build a video-generation prompt for a shot.
+ *
+ * Directing principle (see .claude/agents/prompt-engineer.md and the README
+ * "Directing layer"): this assembles the prose that DIRECTS the shot -- one
+ * intention expressed through camera, light, blocking, performance, and sound
+ * -- not a pile of "cinematic" adjectives. It intentionally leans on the
+ * shot's authored `description`/delivery (which the workshop system prompt
+ * directs) rather than decorating it here. Identity is locked downstream by
+ * R2V references, so this does not inject exhaustive character descriptions.
+ */
 export function buildVideoPrompt(
   shot: ShotScript,
   series: SeriesState,

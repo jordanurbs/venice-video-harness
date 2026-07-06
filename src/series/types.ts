@@ -151,10 +151,13 @@ export type AudioStrategy = 'native' | 'lip-sync' | 'narrator-vo';
  *   - 'seedance'     — Seedance 2.0 (default). Strong R2V identity anchoring,
  *                      4-15s native durations, mature `audio: true` support,
  *                      strict provenance requirements (seedream face refs only).
- *   - 'happyhorse'   — HappyHorse 1.0. Strong R2V, 3-15s natives. Use when
- *                      you want photorealism Seedream/Seedance can't quite
- *                      hit (livelier hand-camera realism, more cinematic
- *                      grain). Same provenance gate as Seedance.
+ *   - 'happyhorse'   — HappyHorse 1.1 (Alibaba, #1 blind-preference T2V + I2V).
+ *                      Joint single-pass video+audio, phoneme-level lip-sync in
+ *                      7 languages, and R2V with up to 9 reference images. 3-15s
+ *                      natives, 720p/1080p. Best for talking characters and
+ *                      multilingual localization; SFW/commercial-leaning (for
+ *                      mature work prefer Seedance 2.0 or Wan 2.7). The 1.0 IDs
+ *                      remain in the registry for back-compat.
  *   - 'grok-imagine' — Grok Imagine i2v + R2V (R2V durations stepped at
  *                      5s/8s/10s only). Pick for atmosphere-rich shots or
  *                      when the user wants Grok's signature look.
@@ -182,10 +185,13 @@ export function resolveVideoFamilyDefaults(
 ): { actionModel: string; atmosphereModel: string; characterConsistencyModel: string } {
   switch (family) {
     case 'happyhorse':
+      // HappyHorse 1.1 (2026-07): #1 blind-preference T2V + I2V, and its new
+      // R2V lane accepts up to 9 reference images for stronger identity locks
+      // than 1.0. The 1.0 IDs remain in the registry for back-compat.
       return {
-        actionModel: 'happyhorse-1-0-image-to-video',
-        atmosphereModel: 'happyhorse-1-0-image-to-video',
-        characterConsistencyModel: 'happyhorse-1-0-reference-to-video',
+        actionModel: 'happyhorse-1-1-image-to-video',
+        atmosphereModel: 'happyhorse-1-1-image-to-video',
+        characterConsistencyModel: 'happyhorse-1-1-reference-to-video',
       };
     case 'grok-imagine':
       // Grok Imagine now ships its own R2V variant (2026-05+). Stays in-family.
@@ -644,6 +650,8 @@ export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   'seedance-2-0-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
   'happyhorse-1-0-reference-to-video',
+  // HappyHorse 1.1 R2V accepts up to 9 reference images (flat reference_image_urls).
+  'happyhorse-1-1-reference-to-video',
   'pixverse-c1-reference-to-video',
   'grok-imagine-reference-to-video',
   // Wan 2.7 R2V uses per_reference_audio (elements[].audio_url) for lip-sync;

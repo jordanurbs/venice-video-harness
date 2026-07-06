@@ -20,13 +20,13 @@ function ok(label, cond, detail) {
   ok('videoFamilyPreference unset by default', s.videoDefaults.videoFamilyPreference === undefined);
 }
 
-// Family 'happyhorse' → HappyHorse 1.0 i2v + R2V.
+// Family 'happyhorse' → HappyHorse 1.1 i2v + R2V (upgraded from 1.0, 2026-07).
 {
   const s = createSeries('HH Series', 'concept', 'drama', 'somewhere', {
     videoFamilyPreference: 'happyhorse',
   });
-  ok('happyhorse actionModel', s.videoDefaults.actionModel === 'happyhorse-1-0-image-to-video');
-  ok('happyhorse characterConsistencyModel', s.videoDefaults.characterConsistencyModel === 'happyhorse-1-0-reference-to-video');
+  ok('happyhorse actionModel', s.videoDefaults.actionModel === 'happyhorse-1-1-image-to-video');
+  ok('happyhorse characterConsistencyModel', s.videoDefaults.characterConsistencyModel === 'happyhorse-1-1-reference-to-video');
   ok('happyhorse lipSyncModel stays Wan 2.7', s.videoDefaults.lipSyncModel === 'wan-2-7-image-to-video');
   ok('videoFamilyPreference persisted', s.videoDefaults.videoFamilyPreference === 'happyhorse');
 }
@@ -74,7 +74,7 @@ for (const strategy of ['native', 'lip-sync', 'narrator-vo']) {
   ok('combo audioStrategy', s.videoDefaults.audioStrategy === 'lip-sync');
   ok('combo videoFamily', s.videoDefaults.videoFamilyPreference === 'happyhorse');
   ok('combo lipSyncModel still Wan 2.7', s.videoDefaults.lipSyncModel === 'wan-2-7-image-to-video');
-  ok('combo characterConsistencyModel is HappyHorse R2V', s.videoDefaults.characterConsistencyModel === 'happyhorse-1-0-reference-to-video');
+  ok('combo characterConsistencyModel is HappyHorse R2V', s.videoDefaults.characterConsistencyModel === 'happyhorse-1-1-reference-to-video');
 }
 
 // resolveVideoFamilyDefaults: each family returns a complete triplet.

@@ -613,17 +613,25 @@ ${priorEpisodes || 'None yet.'}
 SERIES REFERENCE DOCUMENTS:
 ${referenceContext || 'None available.'}
 
+DIRECT THE SCENE, DON'T DECORATE IT (CRITICAL):
+For every shot, first decide what the beat is DOING — the turn, the point of view, the power, the subtext — and name ONE intention. Then derive camera, lens, light, blocking, performance, and sound from that single intention. Do NOT stack empty "cinematic / epic / beautiful / dramatic / masterpiece / 4k" adjectives — they give the model nothing to serve. A reveal is not framed, lit, blocked, or performed like a goodbye; write the specific answer, not the generic one. Hold ONE directorial voice across every shot of the episode.
+- Decorated (reject): "epic cinematic close-up of a woman reading a letter, emotional, beautiful lighting".
+- Directed (write like this): "Medium close-up, eye-level; she lowers the letter and her hands go still as a slow push-in arrives; soft window light keeps her face plain; near-silence with one chair scrape — the realization lands in the stilled hands, not a word."
+Direct INTENTION / CAMERA / LIGHT / BLOCKING / PERFORMANCE / SOUND only. Do NOT write exhaustive physical character descriptions or reference-image tags into "description" — identity is locked downstream by R2V character references. Name the character and direct what they DO.
+When a take is close but wrong, the fix is one variable at a time (camera OR light OR motion OR framing), not a fresh pile of adjectives. When continuing a story, direct the next beat from what actually ended on screen, not from the original plan.
+
 Your task is to write a complete episode script as a JSON object. Follow the exact format below. The script must:
 - Target 58-75 seconds total duration
 - Open with a visual hook in the first 3 seconds
 - End on a beat that makes viewers want the next episode
 - Use one scene, one location, one emotional note
+- Give each shot ONE intention and derive its craft from it (see DIRECT THE SCENE above)
 - Include specific delivery cues for all dialogue (see VOICE DIRECTION below)
 - Use the correct videoModel ("action" for movement/dialogue, "atmosphere" for establishing/static)
 - End with a title card shot (3s, type "insert", FADE transition)
 
 SHOT DURATION — PREFER FEWER, LONGER SHOTS (CRITICAL):
-The video models (Seedance 2.0, HappyHorse 1.0, Wan 2.7) all support up to 15 seconds in a single generation, and 15s is the strong default. For a 60-second episode, prefer 4 shots at ~15s each over 10 shots at ~6s. Reasons:
+The video models (Seedance 2.0, HappyHorse 1.1, Wan 2.7) all support up to 15 seconds in a single generation, and 15s is the strong default. For a 60-second episode, prefer 4 shots at ~15s each over 10 shots at ~6s. Reasons:
 1. Identity stays locked longer — every new shot is a fresh generation where character likeness can drift.
 2. Motion has room to breathe — short shots cut before gestures/expressions complete, which is one of the main "AI video looks twitchy" tells.
 3. Cost is lower — fewer generations per episode.
@@ -1244,7 +1252,7 @@ program
   .option('--type <type>', 'Shot type', 'action')
   .option(
     '--duration <duration>',
-    'Shot duration (e.g. 15s). DEFAULT is 15s — the native max on Seedance 2.0 (4-15s) and HappyHorse 1.0 (3-15s). Prefer 15s and stitch fewer long clips (2x15s for a 30s beat) over many short clips: identity stays locked longer, transitions are fewer, cost is lower, and motion has room to breathe. Only drop below 15s for genuine quick beats (sight gag, hard cut, deliberate stinger).',
+    'Shot duration (e.g. 15s). DEFAULT is 15s — the native max on Seedance 2.0 (4-15s) and HappyHorse 1.1 (3-15s). Prefer 15s and stitch fewer long clips (2x15s for a 30s beat) over many short clips: identity stays locked longer, transitions are fewer, cost is lower, and motion has room to breathe. Only drop below 15s for genuine quick beats (sight gag, hard cut, deliberate stinger).',
     '15s',
   )
   .option('--motion <motion>', 'Motion intensity: low | medium | high', 'medium')

@@ -1,5 +1,7 @@
 Workshop an episode script collaboratively with the user.
 
+**Direct before you draft.** If the idea is vague, run the Seedance 2.0 Skill OS `seedance-interview` (short form for a fast brief); for a longer or multi-clip story run `seedance-sequence` to set the story spine and one directorial voice. Then, for every shot, name **one intention** and derive camera/light/blocking/performance/sound from it — do NOT stack "cinematic" adjectives. Read each drafted `description` back through `directing-engine`, and strip empty quality-boosters with `seedance-antislop` + `vocab/*`. If Seedance OS isn't installed, apply the same principle from memory (see this repo's README "Directing layer"). The in-code workshop system prompt (`src/mini-drama/cli.ts`) already carries this instruction; a directed concept from the user is what makes it land.
+
 1. Ask the user for the episode concept/outline (what happens in this episode?)
 2. Draft a shot-by-shot script in the EpisodeScript JSON format
 3. Each shot should specify:

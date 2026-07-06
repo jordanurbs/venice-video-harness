@@ -35,7 +35,8 @@ Live catalog as of **2026-05-20** (synced against `GET /api/v1/models?type=video
 | **Seedance 2.0** | i2v, R2V | t2v | 15s | Yes (stereo, lip-sync 8+ langs) | **#1 ranked.** R2V: flat `reference_image_urls`, `@Image` tags. Default routing target. |
 | **Seedance 2.0 Fast** | i2v, R2V | t2v | 15s | Yes | Cheaper / faster Seedance 2.0 variant. Same 4-15s ladder, same provenance gate. |
 | **Seedance 1.5 Pro** | i2v | t2v | 12s | Yes | Older Seedance line; kept for parity. |
-| **HappyHorse 1.0** | i2v, R2V | t2v | 15s | Yes | 3-15s native, mature R2V. Livelier hand-camera realism / cinematic grain vs Seedance. |
+| **HappyHorse 1.1** | i2v, R2V (up to 9 refs) | t2v | 15s | Yes (joint single-pass, 7-lang phoneme lip-sync) | **#1 blind-preference T2V + I2V** (Alibaba 15B). 3-15s, 720p/1080p, nine aspect ratios. Best for talking characters + multilingual localization; SFW/commercial-leaning. The `happyhorse` video-family now routes here. |
+| **HappyHorse 1.0** | i2v, R2V | t2v | 15s | Yes | Prior line, kept for back-compat. Livelier hand-camera realism / cinematic grain vs Seedance. |
 | **Wan 2.7** | i2v, R2V, V2V, Spicy | t2v | 15s | Wan i2v has no audio; lip-syncs via `audio_url` input | **Lip-sync flagship.** Only Venice model with proper `audio_url`-driven mouth motion. R2V exposes per-element `audio_url` for multi-speaker. Spicy = uncensored i2v variant. |
 | **Wan 2.6** | Standard, Flash, R2V | Standard | 15s | Yes (i2v/t2v); R2V capped at 10s | Now has R2V variant with `audio_url` input. 1080p. |
 | **Wan 2.5 Preview** | i2v | t2v | 10s | Yes | `audio_url` input. |
@@ -495,6 +496,25 @@ Bug reports are how we'll catch the gaps — the test fixture confirms structure
 | `screenplay-parsing` | Screenplay parsing workflows |
 | `venice-ui-production` | Manual Venice web UI prompt guides |
 | `video-editing` | Text-first editing philosophy, EDL format, cut-qa loop (inspired by browser-use/video-use) |
+
+### Directing layer (optional): Seedance 2.0 Skill OS
+
+The harness is the *production crew* — it locks identity, routes models, QA's panels, mixes audio, and assembles. It does not, by itself, make a shot feel **directed**. The [**Seedance 2.0 Skill OS**](https://github.com/emily2040/seedance-2.0) supplies that missing brain: pure directing/prompting knowledge (no execution code) built on one principle — **direct the scene, don't decorate it.** Read the beat's dramatic function, name one intention, and derive camera, light, blocking, performance, and sound from it instead of stacking "cinematic" adjectives; hold one directorial voice across the whole story. Venice ships **Seedance 2.0 (+ Fast)** as a video model family, so the directing knowledge applies almost verbatim.
+
+This principle is already baked into the harness where it matters:
+
+- The **workshop system prompt** (`src/mini-drama/cli.ts`) carries a "DIRECT THE SCENE, DON'T DECORATE IT" block, so both the CLI and the `venice-video-mcp` `episode.workshop` produce directed scripts.
+- `.claude/agents/prompt-engineer.md`, `.claude/skills/shot-composition/SKILL.md`, and `.claude/commands/workshop-episode.md` open with the same directing preface for Claude-Code-in-repo sessions.
+- The `buildVideoPrompt` builders document the principle so future prompt logic stays directed.
+
+Install Seedance OS to unlock its full `directing-engine`, genre library, `retake-protocol`, `continuation-handoff`, `seedance-copyright`, `seedance-antislop`, and multilingual `vocab/*`:
+
+```bash
+# Clone the repo (its root is shaped as the seedance-20 skill) into the skills dir:
+git clone https://github.com/emily2040/seedance-2.0 .claude/skills/seedance-20
+```
+
+**Division of labor to respect:** the harness owns identity (R2V refs + Seedance → Wan keyframe pass), durations (the pre-flight gate + 15s default), and model routing. So use Seedance OS for **intention/camera/light/blocking/performance/sound** only — do not hand-write identity locks, `[Image1]` reference tags, or surface-specific durations into prompts. Skip Seedance OS's `api-status.md` / `surface-prompt-profiles.md` / `api-workflow.md` / `model-name-map.md` (those describe non-Venice surfaces). The `venice-video-mcp` repo's `venice-mcp-directing` skill is the matching bridge for MCP-driven work.
 
 ## Production Anti-Patterns
 

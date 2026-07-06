@@ -3,6 +3,12 @@
 ## Description
 Plan cinematic shot lists for screenplay scenes, determining shot types, camera angles, movements, and lens choices for each beat.
 
+## Read the scene's dramatic function first
+
+Shot type, angle, movement, and lens are *consequences*, not starting points. Before you pick from the tables below, name what the beat is **doing** (a reveal, a goodbye, a power flip, a lie) and its **one intention**. A reveal is not framed, lit, blocked, or moved like a goodbye — derive the coverage from the intention instead of defaulting to "coverage that looks cinematic." Hold one directorial voice across the scene.
+
+When the **Seedance 2.0 Skill OS** is installed (`.claude/skills/seedance-20/`), load `directing-engine` for the derivation method, and use `retake-protocol` (triage the verdict, change one variable, keep an attempt budget) and `continuation-handoff` (direct the next beat from accepted footage, not the original plan) when iterating. See this repo's README "Directing layer."
+
 ## Shot Types
 | Type | Use Case | Lens |
 |------|----------|------|
