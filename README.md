@@ -496,6 +496,25 @@ Bug reports are how we'll catch the gaps — the test fixture confirms structure
 | `venice-ui-production` | Manual Venice web UI prompt guides |
 | `video-editing` | Text-first editing philosophy, EDL format, cut-qa loop (inspired by browser-use/video-use) |
 
+### Directing layer (optional): Seedance 2.0 Skill OS
+
+The harness is the *production crew* — it locks identity, routes models, QA's panels, mixes audio, and assembles. It does not, by itself, make a shot feel **directed**. The [**Seedance 2.0 Skill OS**](https://github.com/emily2040/seedance-2.0) supplies that missing brain: pure directing/prompting knowledge (no execution code) built on one principle — **direct the scene, don't decorate it.** Read the beat's dramatic function, name one intention, and derive camera, light, blocking, performance, and sound from it instead of stacking "cinematic" adjectives; hold one directorial voice across the whole story. Venice ships **Seedance 2.0 (+ Fast)** as a video model family, so the directing knowledge applies almost verbatim.
+
+This principle is already baked into the harness where it matters:
+
+- The **workshop system prompt** (`src/mini-drama/cli.ts`) carries a "DIRECT THE SCENE, DON'T DECORATE IT" block, so both the CLI and the `venice-video-mcp` `episode.workshop` produce directed scripts.
+- `.claude/agents/prompt-engineer.md`, `.claude/skills/shot-composition/SKILL.md`, and `.claude/commands/workshop-episode.md` open with the same directing preface for Claude-Code-in-repo sessions.
+- The `buildVideoPrompt` builders document the principle so future prompt logic stays directed.
+
+Install Seedance OS to unlock its full `directing-engine`, genre library, `retake-protocol`, `continuation-handoff`, `seedance-copyright`, `seedance-antislop`, and multilingual `vocab/*`:
+
+```bash
+# Clone the repo (its root is shaped as the seedance-20 skill) into the skills dir:
+git clone https://github.com/emily2040/seedance-2.0 .claude/skills/seedance-20
+```
+
+**Division of labor to respect:** the harness owns identity (R2V refs + Seedance → Wan keyframe pass), durations (the pre-flight gate + 15s default), and model routing. So use Seedance OS for **intention/camera/light/blocking/performance/sound** only — do not hand-write identity locks, `[Image1]` reference tags, or surface-specific durations into prompts. Skip Seedance OS's `api-status.md` / `surface-prompt-profiles.md` / `api-workflow.md` / `model-name-map.md` (those describe non-Venice surfaces). The `venice-video-mcp` repo's `venice-mcp-directing` skill is the matching bridge for MCP-driven work.
+
 ## Production Anti-Patterns
 
 The harness documents 13 production anti-patterns learned from real shoots in `CLAUDE.md`. These cover:

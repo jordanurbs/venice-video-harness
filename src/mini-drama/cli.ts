@@ -613,11 +613,19 @@ ${priorEpisodes || 'None yet.'}
 SERIES REFERENCE DOCUMENTS:
 ${referenceContext || 'None available.'}
 
+DIRECT THE SCENE, DON'T DECORATE IT (CRITICAL):
+For every shot, first decide what the beat is DOING — the turn, the point of view, the power, the subtext — and name ONE intention. Then derive camera, lens, light, blocking, performance, and sound from that single intention. Do NOT stack empty "cinematic / epic / beautiful / dramatic / masterpiece / 4k" adjectives — they give the model nothing to serve. A reveal is not framed, lit, blocked, or performed like a goodbye; write the specific answer, not the generic one. Hold ONE directorial voice across every shot of the episode.
+- Decorated (reject): "epic cinematic close-up of a woman reading a letter, emotional, beautiful lighting".
+- Directed (write like this): "Medium close-up, eye-level; she lowers the letter and her hands go still as a slow push-in arrives; soft window light keeps her face plain; near-silence with one chair scrape — the realization lands in the stilled hands, not a word."
+Direct INTENTION / CAMERA / LIGHT / BLOCKING / PERFORMANCE / SOUND only. Do NOT write exhaustive physical character descriptions or reference-image tags into "description" — identity is locked downstream by R2V character references. Name the character and direct what they DO.
+When a take is close but wrong, the fix is one variable at a time (camera OR light OR motion OR framing), not a fresh pile of adjectives. When continuing a story, direct the next beat from what actually ended on screen, not from the original plan.
+
 Your task is to write a complete episode script as a JSON object. Follow the exact format below. The script must:
 - Target 58-75 seconds total duration
 - Open with a visual hook in the first 3 seconds
 - End on a beat that makes viewers want the next episode
 - Use one scene, one location, one emotional note
+- Give each shot ONE intention and derive its craft from it (see DIRECT THE SCENE above)
 - Include specific delivery cues for all dialogue (see VOICE DIRECTION below)
 - Use the correct videoModel ("action" for movement/dialogue, "atmosphere" for establishing/static)
 - End with a title card shot (3s, type "insert", FADE transition)
