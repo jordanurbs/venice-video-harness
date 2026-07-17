@@ -589,6 +589,18 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
+  // Delisted from GET /models (2026-07 sync) but still live on the queue/quote
+  // endpoints — probed 2026-07-15 (quote OK at 5/8/10/15s, 720p + 1080p).
+  // Higher-fidelity "enhanced" render path of Seedance 2.0 R2V; same duration
+  // ladder, roughly ~1.5x the standard R2V price per clip.
+  {
+    id: 'seedance-2-0-enhanced-reference-to-video', name: 'Seedance 2.0 R2V Enhanced', type: 'image-to-video',
+    durations: ['4s', '5s', '8s', '10s', '12s', '15s'],
+    resolutions: ['480p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
   // -- Sora 2 --
   {
     id: 'sora-2-image-to-video', name: 'Sora 2', type: 'image-to-video',

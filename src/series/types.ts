@@ -648,6 +648,7 @@ export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   'kling-o3-4k-reference-to-video',
   'kling-v3-4k-reference-to-video',
   'seedance-2-0-reference-to-video',
+  'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
   'happyhorse-1-0-reference-to-video',
   // HappyHorse 1.1 R2V accepts up to 9 reference images (flat reference_image_urls).
@@ -691,6 +692,7 @@ export const MODELS_SUPPORTING_END_IMAGE = new Set([
 
 export const MODELS_USING_IMAGE_TAGS = new Set([
   'seedance-2-0-reference-to-video',
+  'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
   'grok-imagine-reference-to-video',
 ]);
