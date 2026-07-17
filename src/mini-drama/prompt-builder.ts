@@ -413,7 +413,13 @@ export function buildVideoPrompt(
     parts.push(shot.description);
   }
 
-  if (shot.dialogue) {
+  // NARRATOR / V.O. lines are voice-over — there is no on-camera speaker, so
+  // the line must never reach the video prompt. Including it is what makes
+  // Seedance synthesize its own competing English narrator. The line still
+  // lives in script.json for the assembler's TTS pass.
+  const dialogueSpeaker = shot.dialogue?.character?.toUpperCase();
+  const isVoiceOverLine = dialogueSpeaker === 'NARRATOR' || dialogueSpeaker === 'V.O.' || dialogueSpeaker === 'VO';
+  if (shot.dialogue && !isVoiceOverLine) {
     const speakingChar = series.characters.find(
       c => c.name.toUpperCase() === shot.dialogue!.character.toUpperCase(),
     );
@@ -448,25 +454,30 @@ export function buildVideoPrompt(
   }
   parts.push(aestheticStr + '.');
   parts.push(VIDEO_NO_MUSIC_SUFFIX);
+  if (isVoiceOverLine) {
+    // The VO line was withheld from the prompt above; also tell the model
+    // explicitly that this shot carries no speech, so its audio track is
+    // ambient + SFX only (the Venice TTS narrator is mixed in by the
+    // assembler).
+    parts.push('No narration, no voice-over, no spoken words in this shot.');
+  }
 
   const videoPrompt = parts.join(' ');
 
-  // Decide whether to ask the video model to synthesize audio. The default is
-  // `true`, but a model native audio track is wasted (and harmful) when:
-  //   - the shot's primary speaker is NARRATOR — there's nothing on-camera to
-  //     lip-sync to, and Seedance i2v will eagerly generate a competing
-  //     English narrator that fights the Venice TTS bed in the assembler,
+  // Decide whether to ask the video model to synthesize audio. Default is
+  // `true` — ambient sound and SFX from the model are wanted even on
+  // narrator-VO shots (the VO line never reaches the prompt, see above, so
+  // there is no competing narrator to suppress). Audio is only disabled when:
   //   - the episode's audio mix has opted into suppressModelNarration for
-  //     every dialogue-bearing shot,
+  //     every dialogue-bearing shot, or
   //   - the shot has nativeAudio === 'mute' (per-shot override).
   // Callers that need the native track regardless can flip nativeAudio: 'keep'.
-  const isNarratorShot = shot.dialogue?.character?.toUpperCase() === 'NARRATOR';
   const suppressGlobal = episodeAudioMix?.suppressModelNarration === true && Boolean(shot.dialogue);
   const muteByOverride = shot.nativeAudio === 'mute';
   const keepByOverride = shot.nativeAudio === 'keep';
   const audio = keepByOverride
     ? true
-    : (isNarratorShot || suppressGlobal || muteByOverride)
+    : (suppressGlobal || muteByOverride)
       ? false
       : true;
 
