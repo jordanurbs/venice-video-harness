@@ -877,14 +877,17 @@ program
         let imgBuffer: Buffer;
 
         // For character shots, use generateWithReferences for identity anchoring.
-        // Panels with characters need seedream-v5-lite so the output can be
-        // sent to Seedance 2.0 video; faceless panels can use whatever the
-        // project's imageDefaults specifies (nano-banana-pro by default for
-        // better atmosphere quality).
+        // Panels with characters historically forced seedream-v5-lite so the
+        // output could be sent to Seedance 2.0 video. When the series runs
+        // seedanceCompatibility 'launder', that constraint is handled at video
+        // time (non-seedream panels are laundered through a seedream edit
+        // pass), so the operator's imageDefaults.generationModel wins for ALL
+        // panels — e.g. a gpt-image-2 bakeoff winner.
         const hasChars = shot.characters && shot.characters.length > 0;
-        const panelModel = hasChars
+        const launders = series.videoDefaults.seedanceCompatibility === 'launder';
+        const panelModel = hasChars && !launders
           ? 'seedream-v5-lite'
-          : (series.videoDefaults.imageDefaults?.generationModel ?? 'nano-banana-pro');
+          : (series.videoDefaults.imageDefaults?.generationModel ?? (hasChars ? 'seedream-v5-lite' : 'nano-banana-pro'));
 
         if (hasChars) {
           const charRefs = shot.characters
