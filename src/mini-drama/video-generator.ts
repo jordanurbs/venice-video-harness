@@ -217,7 +217,7 @@ async function renderSeedanceKeyframe(
     );
   }
 
-  const panelPath = getShotPanelPath(sceneDir, shot.shotNumber);
+  const panelPath = getShotPanelPath(sceneDir, resolveDialogueShotId(shot));
   const { elements, referenceImagePaths } = resolveCharacterElements(series, stageAShot, stageAPrompt);
 
   console.log(`  Stage A/3: ${stageAPrompt.model} keyframe render (identity lock, no audio)`);
@@ -558,12 +558,44 @@ async function renderVideoFile(
   try {
     queueResponse = await client.post<QueueResponse>(VIDEO_QUEUE_PATH, body);
   } catch (err) {
-    if (err instanceof VeniceRequestError) {
-      console.error(`  Venice queue error (HTTP ${err.status}): ${err.message}`);
-      console.error(`  Error body: ${JSON.stringify(err.body, null, 2)}`);
+    // Seedance face-media consent flow (two-call attestation).
+    // A 409 needs_consent is non-charging; resubmitting the identical body
+    // with consents.seedance (all three booleans true) accepts the
+    // policy_text returned in the 409. See
+    // https://docs.venice.ai/guides/media/seedance-face-consent
+    const isNeedsConsent = err instanceof VeniceRequestError
+      && err.status === 409
+      && (err.body as { error?: { code?: string } } | undefined)?.error?.code === 'needs_consent';
+    if (isNeedsConsent) {
+      console.log('  Seedance face consent requested (409 needs_consent) — resubmitting with attestation.');
+      const consentBody = {
+        ...body,
+        consents: {
+          seedance: {
+            confirmed_terms_and_privacy: true,
+            confirmed_legal_right: true,
+            confirmed_screening_acknowledged: true,
+          },
+        },
+      };
+      try {
+        queueResponse = await client.post<QueueResponse>(VIDEO_QUEUE_PATH, consentBody);
+      } catch (consentErr) {
+        if (consentErr instanceof VeniceRequestError) {
+          console.error(`  Venice queue error after consent (HTTP ${consentErr.status}): ${consentErr.message}`);
+          console.error(`  Error body: ${JSON.stringify(consentErr.body, null, 2)}`);
+        }
+        await logFailedRequest(outputPath, consentBody, consentErr);
+        throw consentErr;
+      }
+    } else {
+      if (err instanceof VeniceRequestError) {
+        console.error(`  Venice queue error (HTTP ${err.status}): ${err.message}`);
+        console.error(`  Error body: ${JSON.stringify(err.body, null, 2)}`);
+      }
+      await logFailedRequest(outputPath, body, err);
+      throw err;
     }
-    await logFailedRequest(outputPath, body, err);
-    throw err;
   }
 
   const { queue_id, model } = queueResponse;
@@ -670,12 +702,12 @@ function resolveCharacterElements(
   return {};
 }
 
-function getShotPanelPath(sceneDir: string, shotNumber: number): string {
-  return join(sceneDir, `shot-${String(shotNumber).padStart(3, '0')}.png`);
+function getShotPanelPath(sceneDir: string, shotId: number | string): string {
+  return join(sceneDir, `shot-${shotKey(shotId)}.png`);
 }
 
-function getShotVideoPath(sceneDir: string, shotNumber: number): string {
-  return join(sceneDir, `shot-${String(shotNumber).padStart(3, '0')}.mp4`);
+function getShotVideoPath(sceneDir: string, shotId: number | string): string {
+  return join(sceneDir, `shot-${shotKey(shotId)}.mp4`);
 }
 
 function chooseAnchorImagePath(
@@ -683,9 +715,10 @@ function chooseAnchorImagePath(
   sceneDir: string,
   unitOutputPath: string,
   previousRenderedShotPath?: string,
+  explicitPanelPath?: string,
 ): string {
   const firstShotNumber = unit.shotNumbers[0];
-  const panelPath = getShotPanelPath(sceneDir, firstShotNumber);
+  const panelPath = explicitPanelPath ?? getShotPanelPath(sceneDir, firstShotNumber);
 
   if (unit.startFrameStrategy === 'previous-last-frame'
     && previousRenderedShotPath
@@ -824,21 +857,26 @@ async function renderSingleShotUnit(
   previousShot?: ShotScript,
   episodeAudioMix?: import('../series/types.js').AudioMixDefaults,
 ): Promise<string[]> {
-  const panelPath = getShotPanelPath(sceneDir, shot.shotNumber);
+  // Suffixed inserts ("3b") must key their own panel/video files — using the
+  // bare shotNumber here made every suffixed shot collide with its base shot
+  // (path resolved to shot-003.*), so inserts were silently skipped as
+  // "video exists".
+  const shotId = resolveDialogueShotId(shot);
+  const panelPath = getShotPanelPath(sceneDir, shotId);
   if (!existsSync(panelPath)) {
-    console.warn(`  Panel not found: ${panelPath}, skipping shot ${shot.shotNumber}`);
+    console.warn(`  Panel not found: ${panelPath}, skipping shot ${shotId}`);
     return [];
   }
 
-  const videoPath = getShotVideoPath(sceneDir, shot.shotNumber);
+  const videoPath = getShotVideoPath(sceneDir, shotId);
   if (existsSync(videoPath)) {
-    console.log(`  Shot ${String(shot.shotNumber).padStart(3, '0')}: video exists, skipping`);
+    console.log(`  Shot ${shotKey(shotId)}: video exists, skipping`);
     unit.renderedDurationSec = getVideoDuration(videoPath);
     unit.segments = [{
       shotNumber: shot.shotNumber,
       startOffsetSec: 0,
       durationSec: unit.renderedDurationSec,
-      outputFile: `shot-${String(shot.shotNumber).padStart(3, '0')}.mp4`,
+      outputFile: `shot-${shotKey(shotId)}.mp4`,
     }];
     return [videoPath];
   }
@@ -863,7 +901,7 @@ async function renderSingleShotUnit(
     if (res.autoUseReferenceImages) console.log('  Auto-enabled: reference images');
   }
 
-  let anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath);
+  let anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath, panelPath);
   const endFramePath = chooseEndFrameImagePath(unit, sceneDir, nextShotNumber);
 
   const { elements, referenceImagePaths } = resolveCharacterElements(series, shot, videoPrompt);
@@ -902,7 +940,7 @@ async function renderSingleShotUnit(
       );
       keyframeArtifacts = undefined;
       dialogueAudioPath = undefined;
-      anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath);
+      anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath, panelPath);
     }
   }
 
@@ -925,7 +963,7 @@ async function renderSingleShotUnit(
     shotNumber: shot.shotNumber,
     startOffsetSec: 0,
     durationSec,
-    outputFile: `shot-${String(shot.shotNumber).padStart(3, '0')}.mp4`,
+    outputFile: `shot-${shotKey(shotId)}.mp4`,
   }];
 
   const extraMetadata: Record<string, unknown> = { generationUnit: unit.unitId };
