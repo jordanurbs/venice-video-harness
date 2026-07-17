@@ -587,8 +587,11 @@ export async function collectShotVideos(sceneDir: string): Promise<string[]> {
   if (!existsSync(sceneDir)) return [];
 
   const entries = await readdir(sceneDir);
+  // Suffixed inserts (shot-003b.mp4) must be included and sort correctly:
+  // "shot-003" < "shot-003b" < "shot-004" lexicographically, so a plain
+  // sort keeps episode order.
   return entries
-    .filter(f => /^shot-\d{3}\.mp4$/.test(f))
+    .filter(f => /^shot-\d{3}[a-z]?\.mp4$/.test(f))
     .sort()
     .map(f => join(sceneDir, f));
 }
