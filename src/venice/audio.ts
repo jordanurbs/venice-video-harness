@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join } from 'node:path';
 import { promisify } from 'node:util';
 import type { VeniceClient } from './client.js';
+import { getMusicModel } from './models.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -16,6 +17,8 @@ const execFileAsync = promisify(execFile);
 export const DEFAULT_VENICE_TTS_MODEL = 'tts-kokoro';
 export const DEFAULT_VENICE_MUSIC_MODEL = 'elevenlabs-music';
 export const DEFAULT_VENICE_SFX_MODEL = 'elevenlabs-sound-effects-v2';
+/** BytePlus Seed Audio 1.0 — expressive prompt-driven speech/audio via the audio queue. */
+export const DEFAULT_VENICE_SEED_AUDIO_MODEL = 'seed-audio-1-0';
 
 /**
  * @deprecated Use DEFAULT_VENICE_MUSIC_MODEL or DEFAULT_VENICE_SFX_MODEL.
@@ -167,6 +170,10 @@ export interface MusicOptions {
   lyricsPrompt?: string;
   forceInstrumental?: boolean;
   voice?: string;
+  /** Playback speed for speed-enabled models (e.g. seed-audio-1-0: 0.5–2). */
+  speed?: number;
+  /** ISO 639-1 language code for models with supports_language_code. */
+  languageCode?: string;
 }
 
 export async function generateMusic(
@@ -181,6 +188,8 @@ export async function generateMusic(
     lyricsPrompt,
     forceInstrumental,
     voice,
+    speed,
+    languageCode,
   } = options;
 
   return generateQueuedAudio(client, {
@@ -190,6 +199,78 @@ export async function generateMusic(
     lyricsPrompt,
     forceInstrumental,
     voice,
+    speed,
+    languageCode,
+  }, outputPath);
+}
+
+// ---- Seed Audio 1.0 -------------------------------------------------------
+//
+// Seed Audio 1.0 is a `music`-type model that produces expressive speech (and
+// general audio) from a text prompt — think premium, prompt-directed narration
+// with named voices and a 2048-char script, delivered through the async audio
+// queue rather than the synchronous /audio/speech TTS endpoint.
+
+export interface SeedAudioOptions {
+  /** The text/script to speak, or an audio description. Up to 2048 chars. */
+  prompt: string;
+  /** A voice from the model's roster, or "Describe in prompt" to steer via text. */
+  voice?: string;
+  /** Playback speed, 0.5–2 (default 1). */
+  speed?: number;
+  /** Generation length in seconds (default 120). */
+  durationSeconds?: number;
+  /** Override the model id (defaults to seed-audio-1-0). */
+  modelId?: string;
+}
+
+export async function generateSeedAudio(
+  client: VeniceClient,
+  options: SeedAudioOptions,
+  outputPath: string,
+): Promise<string> {
+  const modelId = options.modelId ?? DEFAULT_VENICE_SEED_AUDIO_MODEL;
+  const spec = getMusicModel(modelId);
+
+  const prompt = options.prompt?.trim() ?? '';
+  const minLen = spec?.minPromptLength ?? 1;
+  const maxLen = spec?.promptCharacterLimit ?? 2048;
+  if (prompt.length < minLen) {
+    throw new Error(`${modelId}: prompt is required (min ${minLen} char).`);
+  }
+  if (prompt.length > maxLen) {
+    throw new Error(
+      `${modelId}: prompt is ${prompt.length} chars, exceeds the ${maxLen}-char limit. ` +
+        `Split into multiple calls and concatenate the audio.`,
+    );
+  }
+
+  // Only send a voice the model actually offers; otherwise let the model use
+  // its default ("Describe in prompt" for seed-audio) so voice steering can
+  // live in the prompt text.
+  let voice = options.voice;
+  if (voice && spec?.voices && !spec.voices.includes(voice)) {
+    throw new Error(
+      `${modelId}: unknown voice "${voice}". Valid voices: ${spec.voices.join(', ')}.`,
+    );
+  }
+  if (!voice && spec?.defaultVoice) voice = spec.defaultVoice;
+
+  let speed = options.speed;
+  if (speed !== undefined && spec?.supportsSpeed) {
+    speed = clamp(speed, spec.minSpeed ?? 0.5, spec.maxSpeed ?? 2);
+  } else if (speed !== undefined && spec && !spec.supportsSpeed) {
+    speed = undefined; // model ignores speed; drop it to keep the request clean
+  }
+
+  const durationSeconds = options.durationSeconds ?? spec?.defaultDurationSec ?? 120;
+
+  return generateQueuedAudio(client, {
+    prompt,
+    modelId,
+    durationSeconds,
+    voice,
+    speed,
   }, outputPath);
 }
 

@@ -8,7 +8,14 @@
 //
 // Run with `node tests/test-registry-coverage.mjs` after `npm run build`.
 
-import { VIDEO_MODELS, getVideoModel, IMAGE_GENERATION_MODELS } from '../dist/venice/models.js';
+import {
+  VIDEO_MODELS,
+  getVideoModel,
+  IMAGE_GENERATION_MODELS,
+  MUSIC_MODELS,
+  getMusicModel,
+  listMusicModels,
+} from '../dist/venice/models.js';
 import {
   MODELS_SUPPORTING_REFERENCE_IMAGES,
   MODELS_SUPPORTING_END_IMAGE,
@@ -127,6 +134,28 @@ for (const id of [
 }
 // Sunset: the bare `qwen-image` (use qwen-image-2 instead).
 ok('IMAGE_GENERATION_MODELS does NOT list sunset qwen-image', !imageIds.has('qwen-image'));
+
+// ---- Music / audio registry: current live entries present ----
+const musicIds = new Set(MUSIC_MODELS.map(m => m.id));
+for (const id of [
+  'elevenlabs-music', 'minimax-music-v2', 'minimax-music-v25', 'minimax-music-v26',
+  'lyria-3-pro', 'ace-step-15', 'stable-audio-25', 'seed-audio-1-0',
+]) {
+  ok(`MUSIC_MODELS has ${id}`, musicIds.has(id));
+}
+
+// Seed Audio 1.0 capability metadata is wired for pre-flight validation.
+const seed = getMusicModel('seed-audio-1-0');
+ok('seed-audio-1-0 lookup resolves', seed !== undefined);
+ok('seed-audio-1-0 is a music-type model', seed?.type === 'music');
+ok('seed-audio-1-0 supports speed', seed?.supportsSpeed === true);
+ok('seed-audio-1-0 speed bounds 0.5-2', seed?.minSpeed === 0.5 && seed?.maxSpeed === 2);
+ok('seed-audio-1-0 exposes 25 voices', seed?.voices?.length === 25);
+ok('seed-audio-1-0 default voice is "Describe in prompt"', seed?.defaultVoice === 'Describe in prompt');
+ok('seed-audio-1-0 prompt limit 2048', seed?.promptCharacterLimit === 2048);
+ok('seed-audio-1-0 supported formats mp3+wav', JSON.stringify(seed?.supportedFormats) === JSON.stringify(['mp3', 'wav']));
+ok('listMusicModels(music) includes seed-audio-1-0',
+  listMusicModels({ type: 'music' }).some(m => m.id === 'seed-audio-1-0'));
 
 if (failed > 0) { console.error(`\n${failed} assertion(s) failed.`); process.exit(1); }
 console.log('\nAll assertions passed.');

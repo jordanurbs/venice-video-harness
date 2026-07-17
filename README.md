@@ -73,7 +73,8 @@ New since the last sync: `grok-imagine-image`, `grok-imagine-image-quality`, `lu
 ### Audio / Music Models
 
 - **TTS**: `tts-kokoro` (50+ voices), `tts-qwen3-0-6b`, `tts-qwen3-1-7b` (style-prompted voices)
-- **Music**: `elevenlabs-music`, `minimax-music-v2`, `ace-step-15`, `stable-audio-25`
+- **Music**: `elevenlabs-music`, `minimax-music-v2`, `minimax-music-v25`, `minimax-music-v26`, `lyria-3-pro`, `ace-step-15`, `stable-audio-25`
+- **Expressive speech / prompt-driven audio**: `seed-audio-1-0` (BytePlus Seed Audio 1.0 — 25 named voices, speed 0.5–2, up to a 2048-char prompt; premium prompt-directed narration/VO via the async audio queue). Use `generate-audio --prompt … [--voice … --speed …]`.
 - **SFX**: `elevenlabs-sound-effects-v2`, `mmaudio-v2-text-to-audio`
 - **TTS (ElevenLabs)**: `elevenlabs-tts-v3`, `elevenlabs-tts-multilingual-v2`
 

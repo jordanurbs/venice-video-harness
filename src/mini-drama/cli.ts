@@ -40,8 +40,16 @@ import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { writeImageProvenance } from '../venice/provenance.js';
 import { getVeniceApiKey } from '../config.js';
 import { listVoices, filterVoices, auditionVoices } from '../venice/voices.js';
-import { generateDialogueForShots, generateSoundEffect, generateMusic } from '../venice/audio.js';
+import {
+  generateDialogueForShots,
+  generateSoundEffect,
+  generateMusic,
+  generateSeedAudio,
+  DEFAULT_VENICE_MUSIC_MODEL,
+  DEFAULT_VENICE_SEED_AUDIO_MODEL,
+} from '../venice/audio.js';
 import type { DialogueLine } from '../venice/audio.js';
+import { getMusicModel } from '../venice/models.js';
 
 import { buildImagePrompt, buildCharacterReferencePromptParts } from './prompt-builder.js';
 import { generateEpisodeVideos } from './video-generator.js';
@@ -1730,9 +1738,20 @@ program
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--prompt <prompt>', 'Music style/mood description')
   .option('--duration <value>', 'Duration in seconds, or milliseconds for backward compatibility', '60')
-  .action(async (opts: { project: string; episode: number; prompt?: string; duration: string }) => {
+  .option('--model <id>', `Venice music model (default ${DEFAULT_VENICE_MUSIC_MODEL})`)
+  .option('--voice <voice>', 'Voice id for voice-enabled models (e.g. seed-audio-1-0)')
+  .option('--speed <value>', 'Playback speed for speed-enabled models (e.g. 0.5-2 for seed-audio-1-0)', parseFloat)
+  .action(async (opts: {
+    project: string; episode: number; prompt?: string; duration: string;
+    model?: string; voice?: string; speed?: number;
+  }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
+
+    if (opts.model && !getMusicModel(opts.model)) {
+      console.error(`Unknown music model: ${opts.model}. Run \`inspect models --category music\` for options.`);
+      process.exit(1);
+    }
 
     const apiKey = getVeniceApiKey();
     const client = new VeniceClient(apiKey);
@@ -1744,13 +1763,62 @@ program
     const outputPath = join(audioDir, 'music.mp3');
     const durationSeconds = normalizeAudioDurationSeconds(opts.duration, 60);
 
-    console.log(`Generating music: "${musicPrompt}" (${durationSeconds}s)`);
+    console.log(`Generating music: "${musicPrompt}" (${durationSeconds}s)${opts.model ? ` via ${opts.model}` : ''}`);
     await generateMusic(client, {
       prompt: musicPrompt,
       durationSeconds,
+      modelId: opts.model,
+      voice: opts.voice,
+      speed: opts.speed,
     }, outputPath);
 
     console.log(`Music saved: ${outputPath}`);
+  });
+
+// ── generate-audio (Seed Audio 1.0 expressive speech / prompt-driven audio) ──
+program
+  .command('generate-audio')
+  .description('Generate expressive speech / prompt-driven audio via Venice (default: Seed Audio 1.0)')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
+  .requiredOption('--prompt <prompt>', 'Text/script to speak, or an audio description (<=2048 chars for seed-audio-1-0)')
+  .option('--out <filename>', 'Output filename written under the episode audio dir', 'seed-audio.mp3')
+  .option('--model <id>', `Venice audio model (default ${DEFAULT_VENICE_SEED_AUDIO_MODEL})`, DEFAULT_VENICE_SEED_AUDIO_MODEL)
+  .option('--voice <voice>', 'Voice id (default: model default; seed-audio uses "Describe in prompt")')
+  .option('--speed <value>', 'Playback speed 0.5-2 (default 1)', parseFloat)
+  .option('--duration <value>', 'Duration in seconds (default: model default)', parseFloat)
+  .action(async (opts: {
+    project: string; episode: number; prompt: string; out: string;
+    model: string; voice?: string; speed?: number; duration?: number;
+  }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+
+    const spec = getMusicModel(opts.model);
+    if (!spec) {
+      console.error(`Unknown audio model: ${opts.model}. Run \`inspect models --category music\` for options.`);
+      process.exit(1);
+    }
+
+    const apiKey = getVeniceApiKey();
+    const client = new VeniceClient(apiKey);
+    const episodeDir = getEpisodeDir(series, opts.episode);
+    const audioDir = join(episodeDir, 'audio');
+    await mkdir(audioDir, { recursive: true });
+
+    const outputPath = join(audioDir, opts.out);
+    const voiceLabel = opts.voice ?? spec.defaultVoice ?? 'model default';
+    console.log(`Generating audio via ${opts.model} [voice: ${voiceLabel}]: "${opts.prompt.slice(0, 60)}${opts.prompt.length > 60 ? '…' : ''}"`);
+
+    await generateSeedAudio(client, {
+      prompt: opts.prompt,
+      modelId: opts.model,
+      voice: opts.voice,
+      speed: opts.speed,
+      durationSeconds: opts.duration,
+    }, outputPath);
+
+    console.log(`Audio saved: ${outputPath}`);
   });
 
 // ── validate-episode ─────────────────────────────────────────────────

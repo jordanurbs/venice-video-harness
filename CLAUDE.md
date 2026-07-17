@@ -140,7 +140,8 @@ The full model registry lives in `src/venice/models.ts` with typed specs for eve
 
 ### Music / SFX Models
 
-- **Music**: `elevenlabs-music`, `minimax-music-v2`, `ace-step-15`, `stable-audio-25`
+- **Music**: `elevenlabs-music`, `minimax-music-v2`, `minimax-music-v25`, `minimax-music-v26`, `lyria-3-pro`, `ace-step-15`, `stable-audio-25`
+- **Expressive speech / prompt-driven audio**: `seed-audio-1-0` (BytePlus Seed Audio 1.0 — `music`-type async model with 25 named voices, speed 0.5–2, 2048-char prompt; premium prompt-directed narration/VO). Generate with `generate-audio --prompt … [--voice … --speed … --out …]`, or pass `--model seed-audio-1-0 --voice … --speed …` to `generate-music`.
 - **SFX**: `elevenlabs-sound-effects-v2`, `mmaudio-v2-text-to-audio`
 
 ## Default Venice Routing
@@ -167,6 +168,7 @@ Preferred defaults (overridable per-project via `series.json` → `videoDefaults
 | Multi-Edit (style-match, no face) | `nano-banana-pro-edit` | Refining non-character panels — any family works. `gpt-image-2-edit` is a high-quality alternative |
 | TTS | `tts-kokoro` | 50+ voices, fast, consistent |
 | Music | `elevenlabs-music` | High quality music generation |
+| Expressive speech / audio | `seed-audio-1-0` | Prompt-directed narration/VO with named voices + speed (async queue) |
 | SFX | `elevenlabs-sound-effects-v2` | Best sound effect quality |
 
 ### Image / Video Family Pairing

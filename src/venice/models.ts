@@ -906,13 +906,79 @@ export interface MusicModelSpec {
   name: string;
   type: 'music' | 'sound-effects' | 'tts';
   offline: boolean;
+  // ---- Optional capability metadata (mirrors GET /models?type=music) -------
+  // Populated for models whose queue-time params matter to callers so the
+  // harness can validate voice/speed/prompt/format before enqueuing (and
+  // avoid a paid 400). Left undefined for models where the generic queued-audio
+  // path already does the right thing with no extra params.
+  /** Selectable voices (voice-enabled models). `default_voice` first if known. */
+  voices?: string[];
+  /** Default voice id. For seed-audio this is the sentinel "Describe in prompt". */
+  defaultVoice?: string;
+  /** `speed` param support + bounds. */
+  supportsSpeed?: boolean;
+  minSpeed?: number;
+  maxSpeed?: number;
+  defaultSpeed?: number;
+  /** Lyrics / instrumental behaviour. */
+  supportsLyrics?: boolean;
+  lyricsRequired?: boolean;
+  supportsForceInstrumental?: boolean;
+  supportsLanguageCode?: boolean;
+  /** Output containers the model can emit (`response_format` on retrieve). */
+  supportedFormats?: string[];
+  defaultFormat?: string;
+  /** Prompt length bounds, in characters. */
+  promptCharacterLimit?: number;
+  minPromptLength?: number;
+  /** Default generation length in seconds. */
+  defaultDurationSec?: number;
+  /** Per-second price in USD (for budgeting without a `/audio/quote` round-trip). */
+  pricingPerSecondUsd?: number;
+  /** One-line human summary. */
+  description?: string;
 }
 
 export const MUSIC_MODELS: MusicModelSpec[] = [
   { id: 'ace-step-15', name: 'ACE Step 1.5', type: 'music', offline: false },
   { id: 'elevenlabs-music', name: 'ElevenLabs Music', type: 'music', offline: false },
   { id: 'minimax-music-v2', name: 'MiniMax Music V2', type: 'music', offline: false },
+  { id: 'minimax-music-v25', name: 'MiniMax Music V2.5', type: 'music', offline: false },
+  { id: 'minimax-music-v26', name: 'MiniMax Music V2.6', type: 'music', offline: false },
+  { id: 'lyria-3-pro', name: 'Lyria 3 Pro', type: 'music', offline: false },
   { id: 'stable-audio-25', name: 'Stable Audio 2.5', type: 'music', offline: false },
+  // Seed Audio 1.0 (BytePlus) — expressive speech + audio from a text prompt.
+  // A `music`-type (async queue) model, not a synchronous /audio/speech TTS:
+  // it carries named voices, speed control, and a 2048-char prompt, so treat
+  // it as premium prompt-driven narration/VO delivered through the audio queue.
+  {
+    id: 'seed-audio-1-0',
+    name: 'Seed Audio 1.0',
+    type: 'music',
+    offline: false,
+    voices: [
+      'Describe in prompt', 'Tim', 'Stokie', 'Dacey', 'Vivi', 'Mindy', 'Kian',
+      'Jess', 'Vienna', 'Cedric', 'Magnus', 'Quentin', 'Wukong', 'Gigi',
+      'Celeste', 'Esther', 'Tracy', 'Sven', 'Felipe', 'Usseau', 'Enzo',
+      'Minimi', 'Jihoon', 'Martins', 'Han',
+    ],
+    defaultVoice: 'Describe in prompt',
+    supportsSpeed: true,
+    minSpeed: 0.5,
+    maxSpeed: 2,
+    defaultSpeed: 1,
+    supportsLyrics: false,
+    lyricsRequired: false,
+    supportsForceInstrumental: false,
+    supportsLanguageCode: false,
+    supportedFormats: ['mp3', 'wav'],
+    defaultFormat: 'mp3',
+    promptCharacterLimit: 2048,
+    minPromptLength: 1,
+    defaultDurationSec: 120,
+    pricingPerSecondUsd: 0.0028750000000000004,
+    description: 'Generate expressive speech and audio from a text prompt with BytePlus Seed Audio 1.0.',
+  },
   { id: 'elevenlabs-sound-effects-v2', name: 'ElevenLabs Sound Effects V2', type: 'sound-effects', offline: false },
   { id: 'mmaudio-v2-text-to-audio', name: 'MMAudio V2', type: 'sound-effects', offline: false },
   { id: 'elevenlabs-tts-v3', name: 'ElevenLabs TTS V3', type: 'tts', offline: false },
@@ -928,6 +994,18 @@ const _videoIndex = new Map(VIDEO_MODELS.map(m => [m.id, m]));
 
 export function getVideoModel(id: string): VideoModelSpec | undefined {
   return _videoIndex.get(id);
+}
+
+const _musicIndex = new Map(MUSIC_MODELS.map(m => [m.id, m]));
+
+export function getMusicModel(id: string): MusicModelSpec | undefined {
+  return _musicIndex.get(id);
+}
+
+export function listMusicModels(filter?: { type?: MusicModelSpec['type'] }): MusicModelSpec[] {
+  let models = MUSIC_MODELS.filter(m => !m.offline);
+  if (filter?.type) models = models.filter(m => m.type === filter.type);
+  return models;
 }
 
 export function listVideoModels(filter?: {
