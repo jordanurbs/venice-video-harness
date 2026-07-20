@@ -15,7 +15,7 @@ import { loadSeries, loadEpisodeScript, getEpisodeDir, getCharacterDir } from '.
 import { shotKey } from '../src/mini-drama/shot-paths.js';
 import type { CharacterReference } from '../src/venice/types.js';
 
-const PROJECT = '/Users/venetian42069/projects/learn-venice/output/the-chrome-canary-trailer';
+const PROJECT = '/Users/venetian42069/projects/sites/learn-venice/output/the-chrome-canary-trailer';
 const EPISODE = 2;
 const TARGETS = process.argv.slice(2); // e.g. 009 013 013b 004b ...
 
