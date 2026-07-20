@@ -1261,14 +1261,28 @@ export async function generateEpisodeVideos(
   assertShotDurationsValid(shots, plan);
 
   const videoPaths: string[] = [];
+  // Suffixed inserts ("13b") share their base shotNumber, so a Map keyed by
+  // shotNumber collapses "13" and "13b" onto one entry and the base shot is
+  // silently skipped as "video exists" (the insert's video). The plan is
+  // built from `shots` in order with each shot in exactly one unit, so we
+  // resolve unit shots with a sequential cursor instead; the Map remains
+  // only as a fallback for hand-edited plans.
   const shotsByNumber = new Map(shots.map(shot => [shot.shotNumber, shot]));
+  let shotCursor = 0;
   let previousRenderedShotPath: string | undefined;
   let previousShot: ShotScript | undefined;
 
   for (let unitIndex = 0; unitIndex < plan.units.length; unitIndex++) {
     const unit = plan.units[unitIndex];
     const unitShots = unit.shotNumbers
-      .map(shotNumber => shotsByNumber.get(shotNumber))
+      .map(shotNumber => {
+        const candidate = shots[shotCursor];
+        if (candidate && candidate.shotNumber === shotNumber) {
+          shotCursor += 1;
+          return candidate;
+        }
+        return shotsByNumber.get(shotNumber);
+      })
       .filter((shot): shot is ShotScript => Boolean(shot));
     const nextUnit = plan.units[unitIndex + 1];
     const nextShotNumber = nextUnit?.shotNumbers[0];
