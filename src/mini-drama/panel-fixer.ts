@@ -8,7 +8,7 @@ import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
 import type { SeriesState, ShotScript, ShotEnvironment, MiniDramaCharacter } from '../series/types.js';
 import { FEMALE_BASE_TRAITS, MALE_BASE_TRAITS, DAYTIME_ENVIRONMENTS } from '../series/types.js';
 import { getCharacterDir } from '../series/manager.js';
-import { recordEditProvenance } from '../venice/provenance.js';
+import { appendRecipePass } from '../venice/recipe.js';
 
 function runCommand(command: string, args: string[]): string {
   const result = spawnSync(command, args, {
@@ -207,6 +207,7 @@ export async function fixPanel(
   }
 
   const charRefs: string[] = [];
+  const charRefPaths: string[] = [];
   for (const char of chars.slice(0, 2)) {
     const charDir = getCharacterDir(series, char.name);
     const frontPath = join(charDir, 'front.png');
@@ -214,6 +215,7 @@ export async function fixPanel(
       throw new Error(`Reference image not found for ${char.name}: ${frontPath}`);
     }
     charRefs.push(await loadImageAsDataUri(frontPath));
+    charRefPaths.push(frontPath);
     // For single-character shots, use a second angle for stronger identity anchoring.
     // multi-edit accepts up to 3 images total (base + 2 refs), so this slot is free
     // when there is only one character.
@@ -221,6 +223,7 @@ export async function fixPanel(
       const threeQuarterPath = join(charDir, 'three-quarter.png');
       if (existsSync(threeQuarterPath)) {
         charRefs.push(await loadImageAsDataUri(threeQuarterPath));
+        charRefPaths.push(threeQuarterPath);
       }
     }
   }
@@ -250,10 +253,11 @@ export async function fixPanel(
     referenceImages: charRefs,
   });
 
+  let archivedPrevious: string | undefined;
   if (existsSync(panelPath)) {
-    const archivePath = panelPath.replace(/\.png$/, '-pre-fix.png');
-    await rename(panelPath, archivePath);
-    console.log(`  Archived original: ${archivePath}`);
+    archivedPrevious = panelPath.replace(/\.png$/, '-pre-fix.png');
+    await rename(panelPath, archivedPrevious);
+    console.log(`  Archived original: ${archivedPrevious}`);
   }
 
   await writeFile(panelPath, resultBuffer);
@@ -263,12 +267,24 @@ export async function fixPanel(
     await restoreAspectRatio(panelPath, origW, origH);
   }
 
-  // Record the edit in the panel's provenance sidecar so the Seedance
-  // pre-flight gate can tell whether the panel is still compatible.
-  // fixPanel is always called with at least one character reference, so
-  // the panel now contains a human face.
+  // Record the edit in the panel's recipe + provenance sidecars so a
+  // finishing agent can replay the pass and the Seedance pre-flight gate
+  // can tell whether the panel is still compatible. fixPanel is always
+  // called with at least one character reference, so the panel now
+  // contains a human face.
   const editModelUsed = model ?? 'seedream-v5-lite-edit';
-  await recordEditProvenance(panelPath, editModelUsed, { hasFace: true });
+  await appendRecipePass(panelPath, {
+    kind: 'multi-edit',
+    role: 'identity',
+    model: editModelUsed,
+    label: 'character refine',
+    prompt,
+    referenceImagePaths: charRefPaths,
+    archivedPrevious,
+    extra: origW > 0 && origH > 0
+      ? { aspectRestore: `1024x1024 -> ${origW}x${origH} center crop + scale` }
+      : undefined,
+  }, { provenance: 'edit', hasFace: true });
 
   console.log(`  Fixed panel saved: ${panelPath}`);
   return panelPath;
@@ -325,9 +341,10 @@ export async function refineStyleConsistency(
     referenceImages: [anchorDataUri],
   });
 
+  let archivedPrevious: string | undefined;
   if (existsSync(panelPath)) {
-    const archivePath = panelPath.replace(/\.png$/, '-pre-style.png');
-    await rename(panelPath, archivePath);
+    archivedPrevious = panelPath.replace(/\.png$/, '-pre-style.png');
+    await rename(panelPath, archivedPrevious);
   }
 
   await writeFile(panelPath, resultBuffer);
@@ -339,7 +356,18 @@ export async function refineStyleConsistency(
   // Style refinement explicitly preserves no-character panels, so mark
   // hasFace:false so Seedance accepts this panel regardless of edit model.
   const editModelUsed = model ?? 'seedream-v5-lite-edit';
-  await recordEditProvenance(panelPath, editModelUsed, { hasFace: false });
+  await appendRecipePass(panelPath, {
+    kind: 'multi-edit',
+    role: 'look',
+    model: editModelUsed,
+    label: 'style match',
+    prompt,
+    referenceImagePaths: [styleAnchorPath],
+    archivedPrevious,
+    extra: origW > 0 && origH > 0
+      ? { aspectRestore: `1024x1024 -> ${origW}x${origH} center crop + scale` }
+      : undefined,
+  }, { provenance: 'edit', hasFace: false });
 
   console.log(`  Style-matched panel saved: ${panelPath}`);
   return panelPath;

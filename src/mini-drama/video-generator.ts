@@ -35,6 +35,7 @@ import { parseShotDuration } from './generation-planner.js';
 import { ensureSeedanceCompatibility } from '../venice/seedance-preflight.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
 import { getVideoModel, modelSupportsDuration } from '../venice/models.js';
+import { appendRecipePass } from '../venice/recipe.js';
 
 const VIDEO_QUEUE_PATH = '/api/v1/video/queue';
 const VIDEO_RETRIEVE_PATH = '/api/v1/video/retrieve';
@@ -236,6 +237,13 @@ async function renderSeedanceKeyframe(
   if (!existsSync(keyframePngPath)) {
     throw new Error(`Stage B keyframe extraction produced no file at ${keyframePngPath}`);
   }
+  await appendRecipePass(keyframePngPath, {
+    kind: 'mechanical',
+    role: 'mechanical',
+    model: 'ffmpeg',
+    label: 'keyframe extraction (frame 1 of Seedance R2V identity-lock pass)',
+    anchorImagePath: stageAVideoPath,
+  });
 
   return {
     keyframePngPath,
@@ -627,6 +635,45 @@ async function renderVideoFile(
         try {
           await client.post(VIDEO_COMPLETE_PATH, { model, queue_id });
         } catch { /* cleanup is optional */ }
+
+        // Recipe sidecar: log the resolved video call with stable on-disk
+        // paths (never data: URIs) so a finishing agent can replay or
+        // continue this shot. `elements` mapping goes in `extra` since it
+        // carries per-character frontal/reference structure.
+        const isPath = (p?: string): p is string => !!p && !p.startsWith('data:');
+        await appendRecipePass(outputPath, {
+          kind: 'video-generate',
+          role: (prompt.characterElements && prompt.characterElements.length > 0)
+            || (referenceImagePaths && referenceImagePaths.length > 0)
+            || (elements && elements.length > 0)
+            ? 'identity' : 'content',
+          model: effectiveModel,
+          label: effectiveModel !== prompt.model
+            ? `video render (fallback from ${prompt.model})`
+            : 'video render',
+          prompt: prompt.prompt,
+          negativePrompt,
+          duration: prompt.duration,
+          aspectRatio: (body.aspect_ratio as string | undefined) ?? options.aspectRatio,
+          resolution: body.resolution as string | undefined,
+          anchorImagePath: isPath(anchorImagePath) ? anchorImagePath : undefined,
+          endImagePath: isPath(endFrameImagePath) ? endFrameImagePath : undefined,
+          audioPath: isPath(audioPath) ? audioPath : undefined,
+          referenceImagePaths: referenceImagePaths?.filter(isPath),
+          extra: {
+            audio: prompt.audio,
+            ...(sceneImagePaths && sceneImagePaths.length > 0
+              ? { sceneImagePaths: sceneImagePaths.filter(isPath) } : {}),
+            ...(elements && elements.length > 0
+              ? {
+                elements: elements.map(el => ({
+                  frontalImageUrl: isPath(el.frontalImageUrl) ? el.frontalImageUrl : undefined,
+                  referenceImageUrls: el.referenceImageUrls?.filter(isPath),
+                  audioPath: isPath(el.audioPath) ? el.audioPath : undefined,
+                })),
+              } : {}),
+          },
+        });
 
         return outputPath;
       }

@@ -4,7 +4,7 @@ import 'dotenv/config';
 import { Command } from 'commander';
 import { resolve, join, basename } from 'node:path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { mkdir, readFile, writeFile, copyFile, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 
 import {
@@ -37,7 +37,7 @@ import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
 import { generateImage, generateWithReferences } from '../venice/generate.js';
 import { writeImageBytesSmart } from '../venice/image-bytes.js';
-import { writeImageProvenance } from '../venice/provenance.js';
+import { appendRecipePass } from '../venice/recipe.js';
 import { getVeniceApiKey } from '../config.js';
 import { listVoices, filterVoices, auditionVoices } from '../venice/voices.js';
 import {
@@ -458,6 +458,22 @@ program
               generatedAt: new Date().toISOString(),
             };
             await writeFile(sidecarPath, JSON.stringify(sidecar, null, 2), 'utf-8');
+
+            // Recipe sidecar (same info, unified format used by every asset
+            // in the project — panels, videos, and refs all carry one).
+            await appendRecipePass(finalPath, {
+              kind: 'generate',
+              role: 'identity',
+              model: sharedModel,
+              label: `character reference (${character.name}, ${angle})`,
+              prompt,
+              negativePrompt,
+              seed: sharedSeed,
+              cfgScale: sharedCfg,
+              aspectRatio: sharedAspect,
+              resolution: sharedResolution,
+              extra: returnedSeed !== undefined ? { returnedSeed } : undefined,
+            }, { provenance: 'generate', hasFace: true });
           }
         } catch (err) {
           console.warn(`  ${angle}: failed - ${err}`);
@@ -897,6 +913,7 @@ program
           ? 'seedream-v5-lite'
           : (series.videoDefaults.imageDefaults?.generationModel ?? (hasChars ? 'seedream-v5-lite' : 'nano-banana-pro'));
 
+        const charRefPaths: string[] = [];
         if (hasChars) {
           const charRefs = shot.characters
             .map(name => {
@@ -905,6 +922,7 @@ program
               const charDir = getCharacterDir(series, char.name);
               const frontPath = join(charDir, 'front.png');
               if (!existsSync(frontPath)) return null;
+              charRefPaths.push(frontPath);
               return {
                 name: char.name,
                 role: char.description.slice(0, 80),
@@ -977,11 +995,24 @@ program
             }
           } catch { /* conversion is best-effort */ }
 
-          // Record provenance — `panelModel` was chosen above based on
-          // whether this shot has characters. `hasFace` is true when the
+          // Record provenance + recipe — `panelModel` was chosen above based
+          // on whether this shot has characters. `hasFace` is true when the
           // shot has named (non-silhouette) characters; Seedance only
-          // gates face-bearing images.
-          await writeImageProvenance(imgPath, panelModel, [], { hasFace: hasChars });
+          // gates face-bearing images. The recipe entry makes this pass
+          // replayable by a finishing agent (model/prompt/seed/cfg/refs).
+          await appendRecipePass(imgPath, {
+            kind: 'generate',
+            role: 'content',
+            model: panelModel,
+            label: 'base panel',
+            prompt: imagePrompt.prompt,
+            negativePrompt: imagePrompt.negativePrompt,
+            seed: imagePrompt.seed,
+            cfgScale,
+            aspectRatio: storyboardAR,
+            resolution: '1K',
+            referenceImagePaths: charRefPaths.length > 0 ? charRefPaths : undefined,
+          }, { provenance: 'generate', hasFace: hasChars });
 
           newlyGenerated.add(shot.shotNumber);
           generatedCount++;
@@ -1092,10 +1123,10 @@ program
       const pass2Elapsed = ((Date.now() - pass2Start) / 1000).toFixed(0);
       console.log(`\nPass 2 complete (${pass2Elapsed}s total)`);
 
-      // Clean up temporary anchor
-      if (styleAnchorPath && existsSync(styleAnchorPath)) {
-        await unlink(styleAnchorPath);
-      }
+      // NOTE: the style anchor (.style-anchor.png) is intentionally KEPT on
+      // disk. Recipe sidecars reference it as the style-match input, and any
+      // finishing pass that needs to match the episode look (new shots,
+      // regens, polish edits) should anchor against the same file.
     }
 
     // ── Pass 3: Scene-ref injection for shots with sceneImagePaths ────────
@@ -1124,9 +1155,11 @@ program
 
         // Load all scene ref images that actually exist on disk
         const sceneRefUris: string[] = [];
+        const sceneRefPaths: string[] = [];
         for (const refPath of shot.sceneImagePaths!.slice(0, 2)) {
           if (existsSync(refPath)) {
             sceneRefUris.push(await loadImageAsDataUri(refPath));
+            sceneRefPaths.push(refPath);
           } else {
             console.warn(`  ${progress} Shot ${shotNum}: scene ref not found: ${refPath}`);
           }
@@ -1160,6 +1193,15 @@ program
             await rename(imgPath, archivePath);
           }
           await writeFile(imgPath, resultBuffer);
+          await appendRecipePass(imgPath, {
+            kind: 'multi-edit',
+            role: 'content',
+            model: sceneEditModel,
+            label: 'scene-ref injection',
+            prompt: sceneRefPrompt,
+            referenceImagePaths: sceneRefPaths,
+            archivedPrevious: archivePath,
+          }, { provenance: 'edit', hasFace: shot.characters.length > 0 });
           const elapsed = ((Date.now() - refStart) / 1000).toFixed(1);
           console.log(`  ${progress} Shot ${shotNum}: scene-ref injected (${elapsed}s)`);
         } catch (err) {

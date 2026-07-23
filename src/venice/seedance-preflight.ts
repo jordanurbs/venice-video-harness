@@ -35,9 +35,9 @@ import type { VeniceClient } from './client.js';
 import { multiEditImage } from './multi-edit.js';
 import {
   checkImagesForSeedance,
-  recordEditProvenance,
   type ImageProvenance,
 } from './provenance.js';
+import { appendRecipePass } from './recipe.js';
 import type { SeedanceCompatibilityMode } from '../series/types.js';
 import {
   isSeedanceVideoModel,
@@ -234,7 +234,15 @@ async function launderImages(client: VeniceClient, paths: string[]): Promise<str
       const archivePath = path.replace(/\.(png|jpg|jpeg|webp)$/i, '-pre-launder.png');
       await rename(path, archivePath);
       await writeFile(path, resultBuffer);
-      await recordEditProvenance(path, 'seedream-v5-lite-edit');
+      await appendRecipePass(path, {
+        kind: 'multi-edit',
+        role: 'mechanical',
+        model: 'seedream-v5-lite-edit',
+        label: 'seedance provenance launder (neutral preserve pass)',
+        prompt:
+          'Preserve the image exactly as-is. Do not alter composition, characters, lighting, style, colors, or framing. This is a provenance conversion pass only.',
+        archivedPrevious: archivePath,
+      }, { provenance: 'edit' });
       laundered.push(path);
       console.log(`    Laundered; archived original to ${archivePath}`);
     } catch (err) {
