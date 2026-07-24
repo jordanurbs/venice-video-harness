@@ -6,6 +6,7 @@ import type {
   MiniDramaCharacter,
   EpisodeMeta,
   EpisodeScript,
+  Location,
 } from './types.js';
 import {
   DEFAULT_ACTION_MODEL,
@@ -14,7 +15,6 @@ import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   DEFAULT_IMAGE_EDIT_MODEL,
   DEFAULT_LIP_SYNC_MODEL,
-  recommendedSeedanceCompatibility,
   resolveVideoFamilyDefaults,
   type AudioStrategy,
   type VideoFamilyPreference,
@@ -68,7 +68,6 @@ export function createSeries(
         generationModel: DEFAULT_IMAGE_GENERATION_MODEL,
         editModel: DEFAULT_IMAGE_EDIT_MODEL,
       },
-      seedanceCompatibility: 'prompt',
       lipSyncModel: DEFAULT_LIP_SYNC_MODEL,
       ...(options?.audioStrategy ? { audioStrategy: options.audioStrategy } : {}),
       ...(options?.videoFamilyPreference ? { videoFamilyPreference: options.videoFamilyPreference } : {}),
@@ -125,25 +124,11 @@ export async function saveSeries(series: SeriesState): Promise<void> {
   series.updatedAt = new Date().toISOString();
   const filePath = join(series.outputDir, 'series.json');
 
-  // Auto-fill `seedanceCompatibility` from the registered image-generation
-  // model. The PNW field-guide hit a 422 because seedanceCompatibility was
-  // unset and the default planner couldn't decide what to do with a
-  // nano-banana panel bound for Seedance R2V. The auto-fill only runs when
-  // the operator hasn't already set the field, so explicit overrides win.
-  const imageGen = series.videoDefaults.imageDefaults?.generationModel;
-  const recommended = recommendedSeedanceCompatibility(imageGen);
-  if (recommended && !series.videoDefaults.seedanceCompatibility) {
-    series.videoDefaults.seedanceCompatibility = recommended;
-    console.log(`  series: auto-set seedanceCompatibility="${recommended}" from imageDefaults.generationModel="${imageGen}".`);
-  } else if (
-    recommended
-    && series.videoDefaults.seedanceCompatibility
-    && series.videoDefaults.seedanceCompatibility !== recommended
-  ) {
-    console.warn(
-      `  series: operator-set seedanceCompatibility="${series.videoDefaults.seedanceCompatibility}" disagrees with the registry recommendation "${recommended}" for imageDefaults.generationModel="${imageGen}". Keeping operator value.`,
-    );
-  }
+  // NOTE: the former `seedanceCompatibility` auto-fill was removed (2026-07)
+  // once Venice dropped the Seedance seedream-only face restriction. Seedance
+  // now accepts face-bearing input images from any image family, so there is no
+  // provenance-driven mode to infer. The field is still honored if an operator
+  // sets it explicitly, but nothing sets it automatically anymore.
 
   // Rebuild `characters[]` from the on-disk per-character JSON files. This
   // closes a recurring data-loss bug where storyboard-episode / qa-approve /
@@ -240,6 +225,43 @@ export function getCharacterDir(series: SeriesState, characterName: string): str
   const rawPath = join(series.outputDir, 'characters', characterName);
   if (existsSync(rawPath)) return rawPath;
   return slugPath;
+}
+
+/**
+ * Directory for a location's reference assets, mirroring getCharacterDir.
+ * Accepts a slug or a display name; slugifies to find the canonical dir and
+ * falls back to the raw name for directories created outside the CLI.
+ */
+export function getLocationDir(series: SeriesState, locationSlugOrName: string): string {
+  const safeName = locationSlugOrName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  const slugPath = join(series.outputDir, 'locations', safeName);
+  if (existsSync(slugPath)) return slugPath;
+  const rawPath = join(series.outputDir, 'locations', locationSlugOrName);
+  if (existsSync(rawPath)) return rawPath;
+  return slugPath;
+}
+
+export function locationSlugify(name: string): string {
+  return slugify(name);
+}
+
+/** Find a location by slug (preferred) or display name. */
+export function getLocation(series: SeriesState, slugOrName: string): Location | undefined {
+  const needle = slugOrName.toLowerCase();
+  return (series.locations ?? []).find(
+    l => l.slug.toLowerCase() === needle || l.name.toLowerCase() === needle,
+  );
+}
+
+/** Insert or replace a location by slug. */
+export function addLocation(series: SeriesState, location: Location): void {
+  if (!series.locations) series.locations = [];
+  const idx = series.locations.findIndex(l => l.slug === location.slug);
+  if (idx >= 0) series.locations[idx] = location;
+  else series.locations.push(location);
 }
 
 export async function saveEpisodeScript(

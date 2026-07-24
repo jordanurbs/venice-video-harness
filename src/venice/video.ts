@@ -15,6 +15,7 @@ import type {
   VideoQuoteResponse,
 } from './types.js';
 import { getVideoModel, buildModelParams } from './models.js';
+import { MODELS_SUPPORTING_REFERENCE_AUDIO } from '../series/types.js';
 import { assertNotSilentRejectVideo } from './rejection.js';
 
 const VIDEO_QUEUE_PATH = '/api/v1/video/queue';
@@ -62,6 +63,12 @@ export interface QueueVideoOptions {
     video_url?: string;
   }>;
   sceneImageUrls?: string[];
+  /**
+   * Voice-donor reference clips (data URLs or HTTP URLs), bound in-prompt as
+   * @Audio1, @Audio2, …. Only sent to reference-audio-capable models and only
+   * when at least one reference image is present (Venice rejects audio-only).
+   */
+  referenceAudioUrls?: string[];
 }
 
 /**
@@ -128,6 +135,25 @@ export async function queueVideo(
   if (options.sceneImageUrls && options.sceneImageUrls.length > 0) {
     if (!modelSpec || modelSpec.supportsSceneImages) {
       body.scene_image_urls = options.sceneImageUrls;
+    }
+  }
+
+  // Voice-donor reference audio (@Audio1, @Audio2, …). Gated on model support
+  // AND on the presence of at least one reference image — Venice rejects
+  // audio-only reference_audio_urls at validation.
+  if (options.referenceAudioUrls && options.referenceAudioUrls.length > 0) {
+    const supportsRefAudio = modelSpec
+      ? modelSpec.supportsReferenceAudio === true
+      : MODELS_SUPPORTING_REFERENCE_AUDIO.has(options.model);
+    const hasReferenceImage = Array.isArray(body.reference_image_urls)
+      && (body.reference_image_urls as string[]).length > 0;
+    if (supportsRefAudio && hasReferenceImage) {
+      // Enforce the aggregate ≤3-clip budget defensively.
+      body.reference_audio_urls = options.referenceAudioUrls.slice(0, 3);
+    } else if (supportsRefAudio && !hasReferenceImage) {
+      console.warn(`  ⚠ Dropping reference_audio_urls for ${options.model}: no reference image present (Venice rejects audio-only reference audio).`);
+    } else {
+      console.warn(`  ⚠ Model ${options.model} does not support reference_audio_urls; dropping.`);
     }
   }
 

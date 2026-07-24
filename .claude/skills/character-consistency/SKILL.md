@@ -41,7 +41,7 @@ STYLE REMINDER: [style], [film stock].
 - **Negative prompt must include:** `photorealistic, photograph, photo` alongside standard negative terms — this prevents the model from drifting toward realism when the target aesthetic is stylized/illustration
 - **Fixed seed** per character, recorded at lock time
 - **Resolution:** 1K, aspect ratio 1:1 for references
-- **Image model:** Character reference sheets always contain a human face, and Seedance 2.0 only accepts face-bearing inputs from `seedream-v5-lite`. The harness hardcodes `seedream-v5-lite` in `src/characters/reference-manager.ts` for this reason. If the project targets Kling/Veo instead of Seedance, `nano-banana-pro` is fine (Kling/Veo have no face-family gate).
+- **Image model:** `nano-banana-2` (the global default in `src/characters/reference-manager.ts`). Seedance 2.0 used to accept face-bearing inputs only from `seedream-v5-lite`, but Venice removed that restriction (2026-07) — any image family works for character reference sheets now, regardless of whether the project targets Seedance, Kling, or Veo.
 
 ### Reference Angles
 4 angles per character are generated and stored:
@@ -61,8 +61,8 @@ When base generation produces stylistically inconsistent angles despite front-lo
    and illustration style of the reference image (image 2). Keep the pose,
    angle, and composition of the base image (image 1)."
    Images: [base (drifting angle), reference (good angle)]
-   Model: seedream-v5-lite-edit  (these images contain faces, so the Seedance
-          face rule applies; use nano-banana-pro-edit only when targeting Kling/Veo)
+   Model: nano-banana-2-edit  (global default; the old Seedance seedream-only
+          face rule was removed 2026-07 — any edit family works)
    ```
 4. This forces the edit model to adopt the rendering style of the good reference while preserving the pose
 

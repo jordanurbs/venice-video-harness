@@ -6,7 +6,7 @@ import type { VeniceClient } from '../venice/client.js';
 import type { MultiEditModel } from '../venice/types.js';
 import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
 import type { SeriesState, ShotScript, ShotEnvironment, MiniDramaCharacter } from '../series/types.js';
-import { FEMALE_BASE_TRAITS, MALE_BASE_TRAITS, DAYTIME_ENVIRONMENTS } from '../series/types.js';
+import { FEMALE_BASE_TRAITS, MALE_BASE_TRAITS, DAYTIME_ENVIRONMENTS, DEFAULT_IMAGE_EDIT_MODEL } from '../series/types.js';
 import { getCharacterDir } from '../series/manager.js';
 import { appendRecipePass } from '../venice/recipe.js';
 
@@ -189,6 +189,7 @@ export async function fixPanel(
   customPrompt?: string,
   episodeWardrobe?: Record<string, string>,
   environment?: ShotEnvironment,
+  environmentRefPath?: string,
 ): Promise<string> {
   await ensureRealPng(panelPath);
 
@@ -208,6 +209,11 @@ export async function fixPanel(
 
   const charRefs: string[] = [];
   const charRefPaths: string[] = [];
+  // Multi-edit accepts up to 3 images total (base + 2 refs). Characters come
+  // first; a location environment ref (when provided) takes the last free
+  // slot. With 2+ characters both ref slots are full, so the location ref is
+  // dropped with a warning (4-image cap, characters first — plan B4).
+  const wantLocationRef = Boolean(environmentRefPath) && existsSync(environmentRefPath!);
   for (const char of chars.slice(0, 2)) {
     const charDir = getCharacterDir(series, char.name);
     const frontPath = join(charDir, 'front.png');
@@ -216,15 +222,25 @@ export async function fixPanel(
     }
     charRefs.push(await loadImageAsDataUri(frontPath));
     charRefPaths.push(frontPath);
-    // For single-character shots, use a second angle for stronger identity anchoring.
-    // multi-edit accepts up to 3 images total (base + 2 refs), so this slot is free
-    // when there is only one character.
-    if (chars.length === 1) {
+    // For single-character shots, use a second angle for stronger identity
+    // anchoring — UNLESS a location ref wants that last slot.
+    if (chars.length === 1 && !wantLocationRef) {
       const threeQuarterPath = join(charDir, 'three-quarter.png');
       if (existsSync(threeQuarterPath)) {
         charRefs.push(await loadImageAsDataUri(threeQuarterPath));
         charRefPaths.push(threeQuarterPath);
       }
+    }
+  }
+
+  let includedLocationRef = false;
+  if (wantLocationRef) {
+    if (charRefs.length < 2) {
+      charRefs.push(await loadImageAsDataUri(environmentRefPath!));
+      charRefPaths.push(environmentRefPath!);
+      includedLocationRef = true;
+    } else {
+      console.warn('  ⚠ Location environment ref dropped: character refs fill the multi-edit slot budget (2+ characters).');
     }
   }
 
@@ -236,6 +252,9 @@ export async function fixPanel(
   } else {
     prompt = buildTwoCharacterFixPrompt(chars[0], chars[1], episodeWardrobe, environment);
   }
+  if (includedLocationRef) {
+    prompt += ` The final reference image is the location environment — match its setting, architecture, and lighting; it is not a character.`;
+  }
 
   // Warn about 16:9 close-ups losing forehead/chin after 1:1→16:9 crop
   if (origW > origH && origW / origH > 1.5) {
@@ -244,7 +263,7 @@ export async function fixPanel(
   }
 
   console.log(`  Multi-editing panel with ${chars.length} character reference(s)...`);
-  console.log(`  Model: ${model || 'seedream-v5-lite-edit'}`);
+  console.log(`  Model: ${model || DEFAULT_IMAGE_EDIT_MODEL}`);
 
   const resultBuffer = await multiEditImage(client, {
     model,
@@ -272,7 +291,7 @@ export async function fixPanel(
   // can tell whether the panel is still compatible. fixPanel is always
   // called with at least one character reference, so the panel now
   // contains a human face.
-  const editModelUsed = model ?? 'seedream-v5-lite-edit';
+  const editModelUsed = model ?? DEFAULT_IMAGE_EDIT_MODEL;
   await appendRecipePass(panelPath, {
     kind: 'multi-edit',
     role: 'identity',
@@ -296,9 +315,10 @@ export async function refineWithReferences(
   panelPath: string,
   shot: ShotScript,
   model?: MultiEditModel,
+  environmentRefPath?: string,
 ): Promise<string> {
   if (shot.characters.length === 0) return panelPath;
-  return fixPanel(client, series, panelPath, shot.characters, model, undefined, shot.episodeWardrobe, shot.environment);
+  return fixPanel(client, series, panelPath, shot.characters, model, undefined, shot.episodeWardrobe, shot.environment, environmentRefPath);
 }
 
 /**
@@ -353,9 +373,8 @@ export async function refineStyleConsistency(
     await restoreAspectRatio(panelPath, origW, origH);
   }
 
-  // Style refinement explicitly preserves no-character panels, so mark
-  // hasFace:false so Seedance accepts this panel regardless of edit model.
-  const editModelUsed = model ?? 'seedream-v5-lite-edit';
+  // Style refinement explicitly preserves no-character panels (hasFace:false).
+  const editModelUsed = model ?? DEFAULT_IMAGE_EDIT_MODEL;
   await appendRecipePass(panelPath, {
     kind: 'multi-edit',
     role: 'look',

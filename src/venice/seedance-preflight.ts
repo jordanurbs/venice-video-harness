@@ -1,49 +1,24 @@
 // ---------------------------------------------------------------------------
-// Seedance 2.0 Compatibility Pre-flight
+// Seedance 2.0 Compatibility Pre-flight — NEUTRALIZED (2026-07)
 //
-// Seedance 2.0 (both R2V and i2v variants) blocks face-bearing input images
-// that weren't produced by `seedream-v5-lite` or edited by
-// `seedream-v5-lite-edit`. Faceless images (establishing shots, scene refs,
-// atmosphere plates) pass regardless of provenance.
+// Historical behavior: Seedance 2.0 used to reject face-bearing input images
+// that weren't produced by `seedream-v5-lite` / `seedream-v5-lite-edit`. This
+// module ran a provenance check before every Seedance call and, on a face-
+// bearing non-seedream image, either rerouted the shot to a Kling/Veo fallback
+// or "laundered" the image through a seedream edit pass.
 //
-// This gate reads each input image's provenance sidecar — which records
-// `hasFace: true|false` alongside the generation/edit models — and only
-// flags images that both (a) contain a face and (b) came from a
-// non-seedream family. That means a nano-banana-generated atmosphere
-// plate marked `hasFace: false` passes freely, while a nano-banana-
-// generated character portrait marked `hasFace: true` is flagged.
+// **Venice removed that cross-family restriction.** Seedance now accepts face-
+// bearing input images from ANY image family, so the gate has nothing to do.
+// `ensureSeedanceCompatibility` is kept as a no-op that always proceeds, so the
+// remaining callers (a couple of one-off scripts) keep compiling; it can be
+// deleted entirely once nothing imports it.
 //
-// Running this check before every Seedance call lets us:
-//   1. Detect face-bearing images that would otherwise 4xx from Venice
-//   2. Offer the user an interactive choice:
-//      - fallback: route this shot to Kling O3 R2V / Veo atmosphere
-//      - launder: pass each incompatible image through seedream-v5-lite-edit
-//        with a neutral "preserve image" prompt so it becomes compatible
-//   3. Honor a pre-configured `seedanceCompatibility` strategy for batch
-//      / CI runs where no human is present.
-//
-// The launder step is intentionally conservative: it only fires on images
-// that fail the provenance check, and it updates the provenance sidecar so
-// subsequent calls pass the check without re-laundering.
+// NOTE: the Seedance face *consent* attestation (HTTP 409 `needs_consent`) is a
+// SEPARATE mechanism handled at queue time in `video.ts` / `video-generator.ts`
+// — it was never part of this provenance gate and is unaffected.
 // ---------------------------------------------------------------------------
 
-import { readFile, writeFile, rename } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { createInterface } from 'node:readline/promises';
-import { stdin, stdout } from 'node:process';
 import type { VeniceClient } from './client.js';
-import { multiEditImage } from './multi-edit.js';
-import {
-  checkImagesForSeedance,
-  type ImageProvenance,
-} from './provenance.js';
-import { appendRecipePass } from './recipe.js';
-import type { SeedanceCompatibilityMode } from '../series/types.js';
-import {
-  isSeedanceVideoModel,
-  SEEDANCE_FALLBACK_ATMOSPHERE_MODEL,
-  SEEDANCE_FALLBACK_R2V_MODEL,
-} from '../series/types.js';
 
 // ---- Types ----------------------------------------------------------------
 
@@ -58,9 +33,9 @@ export interface SeedanceInputImagePaths {
 }
 
 export interface PreflightOptions {
-  /** The configured strategy. Defaults to `prompt` if interactive, otherwise `fallback`. */
-  mode?: SeedanceCompatibilityMode;
-  /** Hint to skip the interactive prompt (used in tests and CI). */
+  /** @deprecated The gate is neutralized; this option is ignored. */
+  mode?: import('../series/types.js').SeedanceCompatibilityMode;
+  /** @deprecated The gate is neutralized; this option is ignored. */
   nonInteractive?: boolean;
 }
 
@@ -69,186 +44,18 @@ export type PreflightAction =
   | { type: 'fallback'; newModel: string; reason: string; imagePaths: SeedanceInputImagePaths }
   | { type: 'laundered'; model: string; imagePaths: SeedanceInputImagePaths; lauderedPaths: string[] };
 
-// ---- Public entry point ---------------------------------------------------
+// ---- Public entry point (no-op) -------------------------------------------
 
 /**
- * Run the Seedance pre-flight check against a pending video request.
- *
- * No-op if the target model is not a Seedance model. Otherwise:
- *   - Confirms every image path's provenance is Seedance-compatible
- *   - If any are not, resolves the strategy (prompt / fallback / launder)
- *     and returns a `PreflightAction` describing how to proceed.
- *
- * The caller applies the `PreflightAction`: for `fallback`, it re-resolves
- * the request against the fallback model; for `laundered`, it proceeds with
- * the original Seedance call (images now have compatible provenance).
+ * No-op Seedance pre-flight. Always returns `proceed` with the original model
+ * and image paths. Retained only so existing callers keep compiling — Venice
+ * removed the seedream-only face restriction that this gate used to enforce.
  */
 export async function ensureSeedanceCompatibility(
-  client: VeniceClient,
+  _client: VeniceClient,
   targetModel: string,
   images: SeedanceInputImagePaths,
-  options: PreflightOptions = {},
+  _options: PreflightOptions = {},
 ): Promise<PreflightAction> {
-  if (!isSeedanceVideoModel(targetModel)) {
-    return { type: 'proceed', model: targetModel, imagePaths: images };
-  }
-
-  const imagePathList = collectPaths(images);
-  const result = await checkImagesForSeedance(imagePathList);
-  if (result.compatible) {
-    return { type: 'proceed', model: targetModel, imagePaths: images };
-  }
-
-  const mode = resolveMode(options);
-  reportIncompatibility(targetModel, result.incompatible);
-
-  let chosen: SeedanceCompatibilityMode;
-  if (mode === 'prompt') {
-    chosen = await promptUser(options);
-  } else {
-    chosen = mode;
-    console.warn(`  Seedance pre-flight: applying configured mode '${mode}'.`);
-  }
-
-  if (chosen === 'fallback') {
-    const newModel = isReferenceToVideo(targetModel)
-      ? SEEDANCE_FALLBACK_R2V_MODEL
-      : SEEDANCE_FALLBACK_ATMOSPHERE_MODEL;
-    return {
-      type: 'fallback',
-      newModel,
-      reason: `Seedance provenance check failed on ${result.incompatible.length} image(s); rerouting to ${newModel}.`,
-      imagePaths: images,
-    };
-  }
-
-  // launder
-  const lauderedPaths = await launderImages(
-    client,
-    result.incompatible.map(entry => entry.imagePath),
-  );
-  return {
-    type: 'laundered',
-    model: targetModel,
-    imagePaths: images,
-    lauderedPaths,
-  };
-}
-
-// ---- Helpers --------------------------------------------------------------
-
-function collectPaths(images: SeedanceInputImagePaths): Array<string | undefined> {
-  return [
-    images.imageUrl,
-    images.endImageUrl,
-    ...(images.referenceImagePaths ?? []),
-    ...(images.sceneImagePaths ?? []),
-    ...(images.elementsFrontalPaths ?? []),
-    ...(images.elementsReferencePaths ?? []),
-  ];
-}
-
-function isReferenceToVideo(modelId: string): boolean {
-  return modelId.includes('reference-to-video');
-}
-
-function resolveMode(options: PreflightOptions): SeedanceCompatibilityMode {
-  if (options.mode) return options.mode;
-  if (options.nonInteractive) return 'fallback';
-  return stdout.isTTY ? 'prompt' : 'fallback';
-}
-
-function reportIncompatibility(
-  targetModel: string,
-  entries: Array<{
-    imagePath: string;
-    provenance: ImageProvenance | 'unknown';
-    reason: string;
-  }>,
-): void {
-  console.warn('');
-  console.warn(`  ⚠ Seedance pre-flight: ${targetModel} will block this request.`);
-  console.warn(`    Seedance 2.0 blocks face-bearing images that weren't produced by`);
-  console.warn(`    seedream-v5-lite / seedream-v5-lite-edit. Mark sidecars with`);
-  console.warn(`    hasFace:false for images with no human faces to skip this check.`);
-  console.warn(`    ${entries.length} image(s) flagged:`);
-  for (const entry of entries) {
-    console.warn(`      • ${entry.imagePath}`);
-    console.warn(`        ${entry.reason}`);
-  }
-  console.warn('');
-}
-
-async function promptUser(options: PreflightOptions): Promise<'fallback' | 'launder'> {
-  if (options.nonInteractive || !stdin.isTTY) {
-    console.warn('  Non-interactive environment — defaulting to fallback.');
-    return 'fallback';
-  }
-
-  const rl = createInterface({ input: stdin, output: stdout });
-  try {
-    while (true) {
-      const answer = (
-        await rl.question(
-          '  How should the harness proceed?\n' +
-            '    [f] fallback — reroute this shot to Kling O3 R2V / Veo 3.1 atmosphere\n' +
-            '    [l] launder  — re-render each incompatible image through seedream-v5-lite-edit and retry\n' +
-            '  Choose [f/l]: ',
-        )
-      )
-        .trim()
-        .toLowerCase();
-      if (answer === 'f' || answer === 'fallback') return 'fallback';
-      if (answer === 'l' || answer === 'launder') return 'launder';
-      console.warn("  Please answer 'f' or 'l'.");
-    }
-  } finally {
-    rl.close();
-  }
-}
-
-/**
- * Re-render each incompatible image through `seedream-v5-lite-edit` with a
- * neutral "preserve the image" prompt so it acquires Seedance-compatible
- * provenance. The original file is archived next to it (`<name>-pre-launder.png`).
- */
-async function launderImages(client: VeniceClient, paths: string[]): Promise<string[]> {
-  const laundered: string[] = [];
-  for (const path of paths) {
-    if (!existsSync(path)) {
-      console.warn(`  Launder skipped (not on disk): ${path}`);
-      continue;
-    }
-
-    console.log(`  Laundering through seedream-v5-lite-edit: ${path}`);
-    try {
-      const original = await readFile(path);
-      const baseDataUri = `data:image/png;base64,${original.toString('base64')}`;
-      const resultBuffer = await multiEditImage(client, {
-        model: 'seedream-v5-lite-edit',
-        prompt:
-          'Preserve the image exactly as-is. Do not alter composition, characters, lighting, style, colors, or framing. This is a provenance conversion pass only.',
-        baseImage: baseDataUri,
-      });
-
-      const archivePath = path.replace(/\.(png|jpg|jpeg|webp)$/i, '-pre-launder.png');
-      await rename(path, archivePath);
-      await writeFile(path, resultBuffer);
-      await appendRecipePass(path, {
-        kind: 'multi-edit',
-        role: 'mechanical',
-        model: 'seedream-v5-lite-edit',
-        label: 'seedance provenance launder (neutral preserve pass)',
-        prompt:
-          'Preserve the image exactly as-is. Do not alter composition, characters, lighting, style, colors, or framing. This is a provenance conversion pass only.',
-        archivedPrevious: archivePath,
-      }, { provenance: 'edit' });
-      laundered.push(path);
-      console.log(`    Laundered; archived original to ${archivePath}`);
-    } catch (err) {
-      console.warn(`  Launder failed for ${path}: ${err}`);
-      throw err;
-    }
-  }
-  return laundered;
+  return { type: 'proceed', model: targetModel, imagePaths: images };
 }

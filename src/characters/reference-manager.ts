@@ -59,12 +59,12 @@ export interface CharacterLock {
 /**
  * Default model for reference image generation.
  *
- * Character reference sheets always depict a human face, and Seedance 2.0
- * (the harness's default video family) only accepts face-bearing images
- * from `seedream-v5-lite`. This constant is therefore hardcoded to the
- * Seedance-compatible face model — changing it will break Seedance runs.
+ * Character reference sheets depict a human face. Seedance 2.0 used to accept
+ * face-bearing input images only from `seedream-v5-lite`, but Venice removed
+ * that restriction (2026-07), so reference sheets now use the higher-quality
+ * general default (`nano-banana-2`) like every other panel.
  */
-const DEFAULT_MODEL = "seedream-v5-lite";
+const DEFAULT_MODEL = "nano-banana-2";
 
 /** Default resolution and aspect ratio for character reference sheets. */
 const REF_RESOLUTION = "1K";

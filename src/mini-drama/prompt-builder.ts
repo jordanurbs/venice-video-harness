@@ -16,12 +16,16 @@ import {
   MODELS_SUPPORTING_ELEMENTS,
   MODELS_SUPPORTING_REFERENCE_IMAGES,
   MODELS_SUPPORTING_SCENE_IMAGES,
+  MODELS_SUPPORTING_REFERENCE_AUDIO,
   MODELS_USING_IMAGE_TAGS,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { parseShotDuration } from './generation-planner.js';
 import { getMaxPositivePromptChars } from '../venice/models.js';
+import { getLocation, getLocationDir } from '../series/manager.js';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 export interface MiniDramaImagePrompt {
   prompt: string;
@@ -32,6 +36,16 @@ export interface MiniDramaImagePrompt {
 export interface CharacterElementSlot {
   characterName: string;
   elementIndex: number;
+}
+
+/**
+ * Maps a speaking character to an @AudioN reference-audio slot. The
+ * `audioIndex` MUST match the push order of `reference_audio_urls` in the
+ * video generator, so the prompt binding and the request array stay in sync.
+ */
+export interface VoiceReferenceSlot {
+  characterName: string;
+  audioIndex: number;
 }
 
 export interface MiniDramaVideoPrompt {
@@ -49,6 +63,24 @@ export interface MiniDramaVideoPrompt {
   characterElements?: CharacterElementSlot[];
   /** File paths for scene reference images (@Image1, @Image2). */
   sceneImagePaths?: string[];
+  /**
+   * Voice-reference slots for speaking characters (@Audio1, @Audio2). The
+   * video generator resolves these to the character's voiceReferencePath and
+   * pushes them into `reference_audio_urls` in exactly this order so the
+   * @AudioN bindings match. Empty/undefined when the model can't take
+   * reference audio, voice-refs are disabled, or no speaker has a ref.
+   */
+  voiceReferenceSlots?: VoiceReferenceSlot[];
+  /**
+   * Location environment reference slot for @Image-tag models (Seedance /
+   * HappyHorse, which lack scene_image_urls). The video generator folds the
+   * location wide.png into `reference_image_urls` at this 1-based index —
+   * one image per character first, then the location — so @ImageN in the
+   * prompt matches the request array. Undefined for Kling (scene_image_urls),
+   * when the shot has no location, when refs don't exist on disk, or when the
+   * 4-image cap is already full of characters.
+   */
+  locationEnvSlot?: { slug: string; imageIndex: number };
   /** How the model was selected — logged for transparency. */
   modelResolution?: ModelResolution;
 }
@@ -419,6 +451,23 @@ export function buildVideoPrompt(
   // lives in script.json for the assembler's TTS pass.
   const dialogueSpeaker = shot.dialogue?.character?.toUpperCase();
   const isVoiceOverLine = dialogueSpeaker === 'NARRATOR' || dialogueSpeaker === 'V.O.' || dialogueSpeaker === 'VO';
+
+  // Voice-reference slots: when the model can take reference audio, voice-refs
+  // aren't disabled, and the speaking character has a voice-donor clip, bind
+  // it in-prompt as @AudioN. The audioIndex here MUST match the push order of
+  // reference_audio_urls in the video generator (see resolveVoiceReferences).
+  const voiceRefEnabled = series.videoDefaults.voiceReferenceForDialogue !== false
+    && MODELS_SUPPORTING_REFERENCE_AUDIO.has(modelId);
+  let voiceReferenceSlots: VoiceReferenceSlot[] | undefined;
+  if (voiceRefEnabled && shot.dialogue && !isVoiceOverLine) {
+    const speakingChar = series.characters.find(
+      c => c.name.toUpperCase() === shot.dialogue!.character.toUpperCase(),
+    );
+    if (speakingChar?.voiceReferencePath) {
+      voiceReferenceSlots = [{ characterName: speakingChar.name, audioIndex: 1 }];
+    }
+  }
+
   if (shot.dialogue && !isVoiceOverLine) {
     const speakingChar = series.characters.find(
       c => c.name.toUpperCase() === shot.dialogue!.character.toUpperCase(),
@@ -433,6 +482,18 @@ export function buildVideoPrompt(
 
     const voiceParts = [voiceDesc, delivery].filter(Boolean).join(', ');
     parts.push(`[${charRef}, ${voiceParts}]: "${shot.dialogue.line}"`);
+
+    // Bind the voice-donor clip. @AudioN carries voice identity ONLY; the
+    // model should still render clean studio dialogue for the line above.
+    const slot = voiceReferenceSlots?.find(
+      s => s.characterName.toUpperCase() === shot.dialogue!.character.toUpperCase(),
+    );
+    if (slot) {
+      parts.push(
+        `Use @Audio${slot.audioIndex} only for voice identity — timbre, accent, pacing; ` +
+        `regenerate clean studio dialogue, do not copy any noise from the reference.`,
+      );
+    }
   }
 
   if (shot.sfx) {
@@ -445,6 +506,38 @@ export function buildVideoPrompt(
     const sceneOffset = useImageTags ? (characterElements?.length ?? 0) : 0;
     const refs = shot.sceneImagePaths.slice(0, 4).map((_, i) => `@Image${sceneOffset + i + 1}`);
     parts.push(`Scene style references: ${refs.join(', ')}.`);
+  }
+
+  // Location environment reference. When the shot is tagged with a location
+  // that has generated reference images, inject its locked description +
+  // lighting so consecutive shots in the same place stay consistent
+  // (anti-pattern 7). On @Image-tag models (Seedance / HappyHorse — no
+  // scene_image_urls) the wide ref folds into reference_image_urls; compute
+  // the env slot so the prompt's @ImageN matches the generator's push order
+  // (one image per character first, then the location).
+  let locationEnvSlot: { slug: string; imageIndex: number } | undefined;
+  if (shot.location) {
+    const loc = getLocation(series, shot.location);
+    if (loc) {
+      const envNote = [loc.description, loc.lightingNotes ? `Lighting: ${loc.lightingNotes}.` : '']
+        .filter(Boolean).join(' ');
+      if (envNote) parts.push(`Location: ${envNote}`);
+
+      if (useImageTags && !MODELS_SUPPORTING_SCENE_IMAGES.has(modelId)) {
+        const dir = getLocationDir(series, loc.slug);
+        const hasRef = ['wide.png', 'medium.png', 'detail.png']
+          .some(f => existsSync(join(dir, f)));
+        const charCount = characterElements?.length ?? 0;
+        if (hasRef && charCount < 4) {
+          const imageIndex = charCount + 1;
+          locationEnvSlot = { slug: loc.slug, imageIndex };
+          parts.push(
+            `@Image${imageIndex} is the location environment reference — match its setting, ` +
+            `architecture, and lighting; it is not a character.`,
+          );
+        }
+      }
+    }
   }
 
   let aestheticStr = buildAestheticString(series.aesthetic);
@@ -488,6 +581,8 @@ export function buildVideoPrompt(
     audio,
     characterElements,
     sceneImagePaths: shot.sceneImagePaths,
+    voiceReferenceSlots,
+    locationEnvSlot,
     referenceImageUrls: useRefs ? [] : undefined,
     modelResolution: resolution,
   };

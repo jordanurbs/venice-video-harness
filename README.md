@@ -58,7 +58,7 @@ Live catalog as of **2026-05-20** (synced against `GET /api/v1/models?type=video
 | **Vidu Q3** | i2v | t2v | 16s | Yes | `reference_image_urls`. |
 | **OVI** | i2v | — | 5s | Yes | |
 
-> **Seedance face rule:** Seedance 2.0 blocks **face-bearing** input images that weren't produced by `seedream-v5-lite` or `seedream-v5-lite-edit`. Faceless images (atmosphere, establishing, scene refs, object inserts, silhouettes) pass through any family. The harness picks image models per-shot automatically — see [Image / Video Family Pairing](#image--video-family-pairing) below.
+> **Seedance face rule (removed 2026-07):** Seedance 2.0 used to reject face-bearing input images that weren't produced by `seedream-v5-lite` / `seedream-v5-lite-edit`. Venice removed that restriction — any image family now works for face-bearing inputs, so the harness uses `nano-banana-2` for all panels. See [Image / Video Family Pairing](#image--video-family-pairing) below.
 
 ### Image Models (28 entries, 2026-05-20 sync)
 
@@ -241,21 +241,21 @@ Seedance 2.0 (#1 ranked on [Artificial Analysis Video Arena](https://artificiala
 | **Character shots (3+ characters)** | `kling-o3-standard-reference-to-video` | Auto-fallback — structured `elements` for multi-character identity |
 | **Establishing / mood / action** | `seedance-2-0-image-to-video` | No characters — epic cinematic quality, physics-aware, up to 15s |
 
-These defaults are overridable per-project via `series.json` → `videoDefaults`. To target a non-Seedance family (e.g. for accounts that lack Seedance access, or projects that need a different look), set `videoDefaults` to `kling-o3-standard-reference-to-video` (character consistency) and `veo3.1-fast-image-to-video` (atmosphere), and flip `videoDefaults.imageDefaults` back to `nano-banana-pro` / `nano-banana-pro-edit`.
+These defaults are overridable per-project via `series.json` → `videoDefaults`. To target a non-Seedance family (e.g. for accounts that lack Seedance access, or projects that need a different look), set `videoDefaults` to `kling-o3-standard-reference-to-video` (character consistency) and `veo3.1-fast-image-to-video` (atmosphere). Image models default to `nano-banana-2` / `nano-banana-2-edit` for all panels regardless of video family.
 
 ## Image / Video Family Pairing
 
-Seedance 2.0 blocks **face-bearing** input images that weren't produced by `seedream-v5-lite` or `seedream-v5-lite-edit`. Faceless images (atmosphere, establishing, scene refs, object inserts, silhouettes) pass through any family. The harness therefore picks the image model per-shot based on whether the shot contains characters:
+**Venice removed the Seedance seedream-only face restriction (2026-07).** Seedance 2.0 previously rejected face-bearing input images that weren't produced by `seedream-v5-lite` / `seedream-v5-lite-edit`; it now accepts face-bearing images from **any** image family. The harness therefore uses a single high-quality default for every panel — character-bearing or faceless, generation or multi-edit:
 
 | Image Role | Default | Why |
 |------------|---------|-----|
-| Character reference sheets | `seedream-v5-lite` | Always face-bearing; required for Seedance |
-| Character-bearing panels | `seedream-v5-lite` | Face-bearing; required for Seedance |
-| Character fix via multi-edit | `seedream-v5-lite-edit` | Touches faces; required for Seedance |
-| Atmosphere / establishing panels | `nano-banana-pro` (configurable) | Faceless — better quality from nano-banana. `gpt-image-2` is a high-quality alternative |
-| Style-match multi-edit (no characters) | `nano-banana-pro-edit` (configurable) | Faceless — any family works. `gpt-image-2-edit` is a high-quality alternative |
+| Character reference sheets | `nano-banana-2` | Any family works — no seedream requirement |
+| Character-bearing panels | `nano-banana-2` | Any family works — no seedream requirement |
+| Character fix via multi-edit | `nano-banana-2-edit` | Any family works |
+| Atmosphere / establishing panels | `nano-banana-2` (configurable) | `gpt-image-2` / `nano-banana-pro` are high-quality alternatives |
+| Style-match multi-edit (no characters) | `nano-banana-2-edit` (configurable) | `gpt-image-2-edit` is a high-quality alternative |
 
-The faceless-side defaults are configurable per-project under `series.json`:
+Defaults are configurable per-project under `series.json`:
 
 ```json
 {
@@ -264,34 +264,23 @@ The faceless-side defaults are configurable per-project under `series.json`:
     "atmosphereModel": "seedance-2-0-image-to-video",
     "characterConsistencyModel": "seedance-2-0-reference-to-video",
     "imageDefaults": {
-      "generationModel": "nano-banana-pro",
-      "editModel": "nano-banana-pro-edit"
-    },
-    "seedanceCompatibility": "prompt"
+      "generationModel": "nano-banana-2",
+      "editModel": "nano-banana-2-edit"
+    }
   }
 }
 ```
 
-The face-bearing side (`seedream-v5-lite` / `seedream-v5-lite-edit`) is hardcoded because it's the only family Seedance accepts for face inputs. If your project targets a non-Seedance video family (e.g. Kling / Veo), you can additionally switch face-bearing work to `nano-banana-pro` — the face rule only applies when the video target is Seedance.
+### Seedance Pre-flight Gate (neutralized)
 
-### Seedance Pre-flight Gate
-
-Even when defaults are correct, users occasionally bring existing assets (panels from a previous project, hand-crafted references, etc.). Before every Seedance call the harness runs a pre-flight gate that:
-
-1. Reads the provenance sidecar (`shot-NNN.provenance.json`) next to each input image
-2. Skips any image marked `hasFace: false` (Seedance accepts those from any family)
-3. Confirms each remaining image's generation / most-recent-edit model is in the Seedance-compatible set
-4. If any face-bearing images are incompatible, behaves according to `seedanceCompatibility`:
-   - **`prompt`** (default in interactive shells) — list the offending files and ask the user to choose `fallback` or `launder`
-   - **`fallback`** (default in non-TTY / CI) — reroute this shot to `kling-o3-standard-reference-to-video` (R2V) or `veo3.1-fast-image-to-video` (i2v); other shots in the run continue to use Seedance if they're compatible
-   - **`launder`** — re-render each incompatible image through `seedream-v5-lite-edit` with a neutral "preserve image" prompt so it acquires compatible provenance, archive the pre-launder original, then proceed with Seedance
+The former provenance-driven pre-flight gate is a **no-op** as of 2026-07. Because Seedance accepts any image family, there is nothing to validate, reroute, or launder before a Seedance call — `ensureSeedanceCompatibility()` always proceeds and `videoDefaults.seedanceCompatibility` is no longer auto-set (an explicit value is read but does nothing meaningful). Provenance sidecars (`shot-NNN.provenance.json`) are still written as metadata for other tooling but nothing gates on them. (The separate Seedance face **consent** attestation, HTTP 409 `needs_consent`, is unrelated and still handled at queue time.)
 
 The sidecar shape:
 
 ```json
 {
-  "generationModel": "seedream-v5-lite",
-  "editModels": ["seedream-v5-lite-edit"],
+  "generationModel": "nano-banana-2",
+  "editModels": ["nano-banana-2-edit"],
   "hasFace": true,
   "createdAt": "...",
   "updatedAt": "..."
@@ -451,8 +440,11 @@ Bug reports are how we'll catch the gaps — the test fixture confirms structure
 |---------|---------|
 | `new-series` | Create a new series with locked aesthetics |
 | `add-character` | Add a character with reference images |
-| `lock-character` | Lock a character's voice |
+| `lock-character` | Lock a character's voice (add `--voice-reference <file>` to import a voice-donor clip) |
 | `lock-characters` | Batch voice locking |
+| `generate-voice-reference` | Generate/import a character voice-donor clip (`reference_audio_urls` / @AudioN, Seedance & HappyHorse R2V) |
+| `add-location` | Add a location with generated reference images (wide / medium / detail) |
+| `generate-location-references` | Regenerate a location's reference images |
 | `set-aesthetic` | Set or derive series aesthetic |
 | `explore-aesthetic` | Generate aesthetic comparison samples |
 | `workshop-episode` | Collaborative episode scripting |
@@ -527,7 +519,7 @@ The harness documents 13 production anti-patterns learned from real shoots in `C
 - Multi-edit cropping foreheads on close-up panels
 - Lighting inconsistency between consecutive shots
 - Logo/sigil prompt mismatches
-- Seedance 2.0 blocking face-bearing non-seedream images (face-rule + provenance gate)
+- Seedance 2.0's former seedream-only face-image restriction (removed by Venice 2026-07; gate now neutralized)
 - And more
 
 See `CLAUDE.md` > "Learned Anti-Patterns" for the full list with root causes and fixes.

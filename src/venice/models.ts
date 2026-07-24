@@ -37,6 +37,17 @@ export interface VideoModelSpec {
    */
   perReferenceAudio?: boolean;
   /**
+   * Supports `reference_audio_urls` — voice-donor clips (up to 3, 2-15s each,
+   * ≤15s aggregate, wav/mp3, ≤15MB per file) bound in-prompt as @Audio1,
+   * @Audio2, … so a character's voice (timbre / accent / pacing) stays
+   * consistent across shots. Must be paired with ≥1 reference image (Venice
+   * rejects audio-only requests at validation). Distinct from `audioInput`
+   * (lip-sync `audio_url`): these four R2V models accept reference audio but
+   * do NOT set `audio_input: true` in GET /models. Confirmed live via
+   * /video/quote (HTTP 200) 2026-07-23.
+   */
+  supportsReferenceAudio?: boolean;
+  /**
    * Minimum allowed duration (seconds) for `audio_url` input.
    * Wan 2.7 rejects audio shorter than 3 seconds. Use the pre-flight
    * helper in `src/venice/audio-preflight.ts` to pad shorter clips.
@@ -440,9 +451,14 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: ['1080p', '720p'],
     aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '9:21', '5:4', '4:5'],
+    // Top-level audio_url is rejected ("This model does not support audio input",
+    // probe 2026-07-23), but per-reference audio via
+    // image_references[{image_url, audio_url}] IS accepted (paid job queued same
+    // probe). Requires the object-form builder; audioInput stays false.
     audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+    maxDurationSec: 15, perReferenceAudio: true, supportsReferenceAudio: true,
+    privacy: 'anonymized', offline: false,
   },
   // -- Kling V3 --
   {
@@ -581,13 +597,18 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
+  // Seedance R2V variants accept audio_url despite /models reporting
+  // audio_input: false — live probe 2026-07-23 (queue accepted audio_url on all
+  // four R2V variants, real job completed on Fast R2V; i2v/t2v rejected with
+  // "This model does not support audio input"). reference_audio_urls (≤3) also
+  // validates on R2V only.
   {
     id: 'seedance-2-0-reference-to-video', name: 'Seedance 2.0 R2V', type: 'image-to-video',
     durations: ['4s', '5s', '8s', '10s', '12s', '15s'],
     resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
-    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+    maxDurationSec: 15, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
   },
   // Delisted from GET /models (2026-07 sync) but still live on the queue/quote
   // endpoints — probed 2026-07-15 (quote OK at 5/8/10/15s, 720p + 1080p).
@@ -597,9 +618,10 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'seedance-2-0-enhanced-reference-to-video', name: 'Seedance 2.0 R2V Enhanced', type: 'image-to-video',
     durations: ['4s', '5s', '8s', '10s', '12s', '15s'],
     resolutions: ['480p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
-    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    // audioInput probe 2026-07-23: queue validator accepted audio_url (R2V family).
+    audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+    maxDurationSec: 15, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
   },
   // -- Sora 2 --
   {
@@ -732,9 +754,10 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'seedance-2-0-fast-reference-to-video', name: 'Seedance 2.0 Fast R2V', type: 'image-to-video',
     durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
-    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    // audioInput probe 2026-07-23: real audio_url job queued + completed.
+    audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+    maxDurationSec: 15, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
   },
   // -- PixVerse C1 (added 2026-05 sync) --
   // PixVerse's c1 line. Replaces the v5.6 family for new projects: same four

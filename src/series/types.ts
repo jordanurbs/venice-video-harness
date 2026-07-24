@@ -13,6 +13,8 @@ export interface SeriesState {
   aesthetic: AestheticProfile | null;
   aestheticSeed?: number;
   characters: Character[];
+  /** First-class location entities with generated reference images. */
+  locations?: Location[];
   episodes: EpisodeMeta[];
   videoDefaults: VideoModelDefaults;
   storyboardAspectRatio?: '16:9' | '9:16' | '1:1';
@@ -74,6 +76,17 @@ export interface VideoModelDefaults {
    * atmosphere / character-consistency model defaults to the chosen family.
    */
   videoFamilyPreference?: VideoFamilyPreference;
+  /**
+   * Auto-generate + attach a per-character voice-donor reference clip
+   * (`reference_audio_urls`, bound in-prompt as @AudioN) on dialogue shots
+   * that route to a reference-audio-capable model (Seedance 2.0 R2V family,
+   * HappyHorse 1.1 R2V). The clip locks the character's voice — timbre,
+   * accent, pacing — across shots so the native model dialogue doesn't drift
+   * take to take. Defaults to `true`. Set `false` to disable series-wide;
+   * `generate-videos --no-voice-reference` disables for one run. See
+   * CLAUDE.md rule 40.
+   */
+  voiceReferenceForDialogue?: boolean;
 }
 
 export interface ImageModelDefaults {
@@ -281,8 +294,62 @@ export interface Character {
   voiceId?: string;
   voiceName?: string;
   baseTraits?: string;
+  /**
+   * Path (relative to the series output dir or absolute) to a short
+   * voice-donor clip used as a `reference_audio_urls` entry (bound in-prompt
+   * as @AudioN) so the character's voice — timbre, accent, pacing — stays
+   * consistent across shots on reference-audio-capable video models
+   * (Seedance 2.0 R2V family, HappyHorse 1.1 R2V). Generated via
+   * `generate-voice-reference` (default source: seed-audio-1-0 from
+   * `voiceDescription`) or supplied by the operator via
+   * `lock-character --voice-reference`. Convention:
+   * `characters/<slug>/voice-reference.mp3`. See CLAUDE.md rule 40.
+   */
+  voiceReferencePath?: string;
+  /** Model that produced the voice reference (e.g. `seed-audio-1-0`), or `user-supplied`. */
+  voiceReferenceModel?: string;
   locked: boolean;
   seed: number;
+}
+
+// ---------------------------------------------------------------------------
+// Location (first-class environment entity with generated reference images)
+//
+// Locations mirror characters: a named entity with a locked description,
+// deterministic seed, and generated reference images (wide / medium / detail
+// angles). They anchor the environment across storyboard panels, starting
+// frames, and video generations the same way character refs anchor identity —
+// serving the lighting-consistency anti-pattern (see CLAUDE.md anti-pattern 7).
+//
+// Reference images are FACELESS by design (generated with nano-banana-pro,
+// provenance hasFace:false) so they flow through the Seedance pre-flight gate
+// without laundering. On Kling O3 R2V they populate `scene_image_urls`; on
+// Seedance / HappyHorse (which lack scene_image_urls) the wide ref folds into
+// `reference_image_urls` with a matching @ImageN environment tag.
+// ---------------------------------------------------------------------------
+
+export interface Location {
+  /** Display name, e.g. "Sietch Workshop". */
+  name: string;
+  /** Filesystem-safe slug; also the directory name under locations/. */
+  slug: string;
+  /** Locked prose description of the environment (drives panel + ref prompts). */
+  description: string;
+  /**
+   * Lighting notes carried into every panel prompt for this location so
+   * consecutive shots in the same place stay lit consistently (anti-pattern 7).
+   */
+  lightingNotes?: string;
+  /**
+   * Optional time-of-day / weather variants keyed by label
+   * (e.g. { "night": "…", "dawn": "…" }). Reserved for future per-shot
+   * variant selection; the base `description` is used when unset.
+   */
+  timeVariants?: Record<string, string>;
+  /** Deterministic seed so the reference angles stay reproducible. */
+  seed: number;
+  /** Image-generation model used for the reference angles (default nano-banana-pro). */
+  referenceModel?: string;
 }
 
 /**
@@ -307,6 +374,12 @@ export interface EpisodeScript {
   totalDuration: string;
   status?: 'draft' | 'approved';
   shots: ShotScript[];
+  /**
+   * First-class locations introduced by this episode's script (from
+   * workshop-episode). Merged into SeriesState.locations on save so their
+   * reference images can be generated once and reused across shots/episodes.
+   */
+  locations?: Location[];
   /**
    * Optional per-act music cues. When set, the assembler renders each cue
    * and ffmpeg-crossfades between adjacent cues at their fade points. The
@@ -438,6 +511,14 @@ export interface ShotScript {
    * Example: a silhouetted figure in a doorway for an establishing shot.
    */
   silhouetteCharacters?: string[];
+  /**
+   * Slug of the Location this shot takes place in (see SeriesState.locations).
+   * When set and the location has generated reference images, the storyboard
+   * folds the location's wide/medium ref into the panel generation and the
+   * video generator folds it into scene_image_urls (Kling O3 R2V) or
+   * reference_image_urls + an @ImageN env tag (Seedance / HappyHorse).
+   */
+  location?: string;
   dialogue: { character: string; line: string; delivery?: string } | null;
   sfx: string | null;
   cameraMovement: string;
@@ -585,27 +666,30 @@ export const KLING_MULTISHOT_MODEL = 'kling-o3-pro-image-to-video';
 export const DEFAULT_LIP_SYNC_MODEL = 'wan-2-7-image-to-video';
 
 /**
- * Default image models used when no face is present in the image.
+ * Default image models for ALL panels — character-bearing and faceless alike.
  *
- * Seedance 2.0 only blocks FACE-BEARING images from non-seedream families,
- * so faceless images (atmosphere, establishing, scene refs, object inserts)
- * can be generated / edited with any model. The harness pairs these with
- * nano-banana-pro for better non-face quality.
+ * Historical note: Seedance 2.0 used to reject face-bearing input images that
+ * weren't produced by `seedream-v5-lite`, so the harness forced seedream on any
+ * panel with a character. **Venice removed that cross-family restriction (2026-07)**
+ * — Seedance now accepts face-bearing images from any image family — so a single
+ * high-quality default is used everywhere. `nano-banana-2` is the global default.
  */
-export const DEFAULT_IMAGE_GENERATION_MODEL = 'nano-banana-pro';
-export const DEFAULT_IMAGE_EDIT_MODEL = 'nano-banana-pro-edit';
+export const DEFAULT_IMAGE_GENERATION_MODEL = 'nano-banana-2';
+export const DEFAULT_IMAGE_EDIT_MODEL = 'nano-banana-2-edit';
 
 /**
- * Required image models when the image contains a human face AND the video
- * target is Seedance. Seedance 2.0 will reject face-bearing images produced
- * by any other family.
+ * @deprecated Venice removed the Seedance seedream-only face restriction (2026-07).
+ * These constants are retained only for backward-compatible imports; the harness
+ * no longer forces seedream on face-bearing panels. Use
+ * `DEFAULT_IMAGE_GENERATION_MODEL` / `DEFAULT_IMAGE_EDIT_MODEL` instead.
  */
 export const SEEDANCE_FACE_GENERATION_MODEL = 'seedream-v5-lite';
 export const SEEDANCE_FACE_EDIT_MODEL = 'seedream-v5-lite-edit';
 
 /**
- * Models whose outputs Seedance 2.0 accepts as face-bearing input images.
- * Updated as Venice expands cross-family compatibility.
+ * @deprecated Venice removed the Seedance face-image family restriction (2026-07).
+ * Seedance now accepts face-bearing images from any image family; these sets are
+ * kept only so older imports keep compiling.
  */
 export const SEEDANCE_COMPATIBLE_GENERATION_MODELS = new Set<string>([
   'seedream-v5-lite',
@@ -709,6 +793,13 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   'wan-2-7-spicy-image-to-video',
   'wan-2-7-text-to-video',
   'wan-2-7-video-to-video',
+  // Seedance 2.0 R2V family — GET /models reports audio_input:false, but a live
+  // queue probe (2026-07-23) accepted top-level `audio_url` on all three R2V
+  // variants (real job completed on Fast R2V); i2v/t2v still reject it. Kept in
+  // sync with the audioInput:true specs in models.ts (registry-coverage test).
+  'seedance-2-0-reference-to-video',
+  'seedance-2-0-enhanced-reference-to-video',
+  'seedance-2-0-fast-reference-to-video',
 ]);
 
 /**
@@ -721,6 +812,25 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
  */
 export const MODELS_SUPPORTING_PER_REFERENCE_AUDIO = new Set([
   'wan-2-7-reference-to-video',
+]);
+
+/**
+ * Models that accept `reference_audio_urls` — voice-donor clips bound
+ * in-prompt as @Audio1, @Audio2, … to keep a character's voice (timbre,
+ * accent, pacing) consistent across shots. Up to 3 clips, 2-15s each,
+ * ≤15s aggregate, wav/mp3, ≤15MB per file, and Venice REQUIRES at least
+ * one reference image alongside them (audio-only is rejected at
+ * validation). Mirror of `MODELS_SUPPORTING_AUDIO_INPUT` — kept here as a
+ * fast lookup set for the video generator. Confirmed live via /video/quote
+ * (HTTP 200) 2026-07-23 on all four; these do NOT set `audio_input: true`
+ * in GET /models, so reference audio is a separate capability from the
+ * lip-sync `audio_url` lane.
+ */
+export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
+  'seedance-2-0-reference-to-video',
+  'seedance-2-0-enhanced-reference-to-video',
+  'seedance-2-0-fast-reference-to-video',
+  'happyhorse-1-1-reference-to-video',
 ]);
 
 // ---------------------------------------------------------------------------

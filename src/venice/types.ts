@@ -145,6 +145,14 @@ export interface VideoQueueRequest {
   reference_image_urls?: string[];
   elements?: VideoElement[];
   scene_image_urls?: string[];
+  /**
+   * Voice-donor reference clips (up to 3, 2-15s each, ≤15s aggregate,
+   * wav/mp3, ≤15MB per file) bound in-prompt as @Audio1, @Audio2, … so a
+   * character's voice stays consistent across shots. Only accepted by the
+   * Seedance 2.0 R2V family and HappyHorse 1.1 R2V, and only alongside at
+   * least one reference image (audio-only is rejected at validation).
+   */
+  reference_audio_urls?: string[];
 }
 
 export interface VideoQueueResponse {

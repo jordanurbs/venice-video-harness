@@ -164,20 +164,16 @@ CHARACTER_CONSISTENCY_MODEL = 'seedance-2-0-reference-to-video'
 KLING_R2V_MODEL           = 'kling-o3-standard-reference-to-video'  (fallback for 3+ chars)
 MULTISHOT_MODEL           = 'kling-o3-pro-image-to-video'
 
-# Image models split by face presence (Seedance only gates face-bearing images)
-FACE_IMAGE_GENERATION     = 'seedream-v5-lite'       # required for Seedance when image has a face
-FACE_MULTI_EDIT           = 'seedream-v5-lite-edit'  # required for Seedance character fixes
-NO_FACE_IMAGE_GENERATION  = 'nano-banana-pro'        # atmosphere / establishing — any family works
-NO_FACE_MULTI_EDIT        = 'nano-banana-pro-edit'   # style-match for non-character panels
+# Single image default for ALL panels (Venice removed the Seedance face restriction, 2026-07)
+IMAGE_GENERATION          = 'nano-banana-2'          # character + faceless panels alike
+MULTI_EDIT                = 'nano-banana-2-edit'      # character fixes + style-match
 ```
 
-### Seedance Face Rule
+### Seedance Face Rule — REMOVED (2026-07)
 
-Seedance 2.0 **only** blocks face-bearing input images that weren't produced by `seedream-v5-lite` / `seedream-v5-lite-edit`. Faceless images (atmosphere, establishing, scene refs, object inserts, silhouettes) are accepted from any family.
+Seedance 2.0 used to reject face-bearing input images that weren't produced by `seedream-v5-lite` / `seedream-v5-lite-edit`. **Venice removed that restriction** — Seedance now accepts face-bearing images from **any** image family. There is no longer a seedream requirement: use the global default (`nano-banana-2`) for character portraits, panels, and references and send them straight to Seedance.
 
-The harness writes a provenance sidecar (`<image>.provenance.json`) on every generation, recording `{ generationModel, editModels[], hasFace }`. Character reference sheets and character-bearing panels are tagged `hasFace: true`; empty atmosphere plates are tagged `hasFace: false`.
-
-Before each Seedance call, `ensureSeedanceCompatibility()` (`src/venice/seedance-preflight.ts`) skips any image marked `hasFace: false` and only validates face-bearing images against the seedream compatibility set. If any face-bearing images are incompatible, the gate prompts the user, reroutes the shot to Kling O3 R2V / Veo 3.1, or launders the offending images through `seedream-v5-lite-edit`. Mode is controlled by `series.videoDefaults.seedanceCompatibility` (`prompt` | `fallback` | `launder`).
+The harness still writes a provenance sidecar (`<image>.provenance.json`) recording `{ generationModel, editModels[], hasFace }` as metadata, but nothing gates on it. `ensureSeedanceCompatibility()` (`src/venice/seedance-preflight.ts`) is now a no-op that always proceeds, and `series.videoDefaults.seedanceCompatibility` is no longer auto-set. (The separate Seedance face *consent* attestation, 409 `needs_consent`, is still handled at queue time.)
 
 ## 2. Video Model Routing Decision
 
@@ -434,7 +430,7 @@ Seedance 2.0 (now the default for both atmosphere and character shots) accepts *
 - **Sending `image_references`/`image_1` to `nano-banana-pro`:** Returns 400. The generation model does not accept reference payloads at all.
 - **Sending invalid durations:** Seedance 2.0 accepts 4s/5s/8s/10s/12s/15s. Veo 3.1 accepts 4s/6s/8s. Duration auto-snap corrects this.
 - **Reference images below 300x300:** R2V models reject `reference_image_urls` and `elements` images smaller than 300x300 pixels. Never downscale character references below this threshold.
-- **Sending face-bearing non-seedream images to Seedance 2.0:** Seedance blocks face-bearing inputs from families other than seedream. Faceless inputs (atmosphere, scene refs, object inserts) pass fine from any family. The pre-flight gate reads each image's `hasFace` flag; face-bearing ones must come from `seedream-v5-lite` / `seedream-v5-lite-edit`. Options when you hit this: keep face images paired with seedream, switch the video target to Kling O3 / Veo, or let the gate launder the images.
+- **Seedance + non-seedream face images (no longer an issue, 2026-07):** Venice removed the restriction that Seedance 2.0 only accepts face-bearing input images from `seedream-v5-lite` / `seedream-v5-lite-edit`. Any image family now works for face-bearing inputs, so there's nothing to pair, reroute, or launder — the pre-flight gate is a no-op.
 
 ### Visual Contamination
 

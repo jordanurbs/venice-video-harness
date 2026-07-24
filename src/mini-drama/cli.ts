@@ -17,6 +17,10 @@ import {
   addEpisode,
   getEpisodeDir,
   getCharacterDir,
+  getLocationDir,
+  getLocation,
+  addLocation,
+  locationSlugify,
   saveEpisodeScript,
   loadEpisodeScript,
 } from '../series/manager.js';
@@ -25,6 +29,7 @@ import type {
   MiniDramaCharacter,
   EpisodeScript,
   ShotScript,
+  Location,
 } from '../series/types.js';
 import {
   FEMALE_BASE_TRAITS,
@@ -32,6 +37,8 @@ import {
   DEFAULT_ACTION_MODEL,
   DEFAULT_ATMOSPHERE_MODEL,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
+  DEFAULT_IMAGE_GENERATION_MODEL,
+  DEFAULT_IMAGE_EDIT_MODEL,
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
@@ -53,6 +60,8 @@ import { getMusicModel } from '../venice/models.js';
 
 import { buildImagePrompt, buildCharacterReferencePromptParts } from './prompt-builder.js';
 import { generateEpisodeVideos } from './video-generator.js';
+import { generateVoiceReference } from './voice-reference.js';
+import { generateLocationReferences } from './location-generator.js';
 import { generateSubtitles, saveSrt } from './subtitle-generator.js';
 import { fixPanel, refineWithReferences, refineStyleConsistency } from './panel-fixer.js';
 import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
@@ -79,6 +88,98 @@ function runCommand(command: string, args: string[]): string {
     throw new Error(`${command} failed: ${detail}`);
   }
   return typeof result.stdout === 'string' ? result.stdout : '';
+}
+
+/**
+ * Merge the locations an episode script introduced into the series, and
+ * generate reference images for any location that doesn't have them yet.
+ * Locations referenced by a shot's `location` slug but absent from the
+ * script's `locations[]` are synthesized as description-only stubs (from the
+ * shot's description) so every tagged slug resolves. Logs generation cost.
+ */
+async function mergeAndGenerateEpisodeLocations(
+  client: VeniceClient,
+  series: SeriesState,
+  script: EpisodeScript,
+): Promise<void> {
+  const scriptLocations = script.locations ?? [];
+
+  // Synthesize stubs for slugs tagged on shots but not declared in locations[].
+  const declaredSlugs = new Set(scriptLocations.map(l => l.slug));
+  const taggedSlugs = new Set(
+    script.shots.map(s => s.location).filter((s): s is string => Boolean(s)),
+  );
+  for (const slug of taggedSlugs) {
+    if (declaredSlugs.has(slug)) continue;
+    if (getLocation(series, slug)) continue; // already a series location
+    const firstShot = script.shots.find(s => s.location === slug);
+    scriptLocations.push({
+      name: slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+      slug,
+      description: firstShot?.description ?? `The ${slug.replace(/-/g, ' ')} location.`,
+    } as Location);
+  }
+
+  if (scriptLocations.length === 0) return;
+
+  const toGenerate: Location[] = [];
+  for (const loc of scriptLocations) {
+    const slug = loc.slug || locationSlugify(loc.name);
+    const existing = getLocation(series, slug);
+    const merged: Location = existing
+      ? { ...existing, description: loc.description || existing.description, lightingNotes: loc.lightingNotes ?? existing.lightingNotes }
+      : {
+          name: loc.name,
+          slug,
+          description: loc.description,
+          ...(loc.lightingNotes ? { lightingNotes: loc.lightingNotes } : {}),
+          seed: Math.abs([...slug].reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0)) % 999_999_999,
+        };
+    addLocation(series, merged);
+
+    const dir = getLocationDir(series, slug);
+    const hasRefs = ['wide.png', 'medium.png', 'detail.png'].some(f => existsSync(join(dir, f)));
+    if (!hasRefs) toGenerate.push(merged);
+  }
+
+  if (toGenerate.length === 0) return;
+  if (!series.aesthetic) {
+    console.warn('  ⚠ Locations introduced but series aesthetic is not set — skipping reference generation.');
+    return;
+  }
+
+  console.log(`\nGenerating reference images for ${toGenerate.length} new location(s) (~$${(toGenerate.length * 3 * 0.04).toFixed(2)} est. — 3 angles each)...`);
+  for (const loc of toGenerate) {
+    console.log(`  Location: ${loc.name} (${loc.slug})`);
+    try {
+      await generateLocationReferences(client, series, loc);
+    } catch (err) {
+      console.warn(`  ⚠ Location reference generation failed for ${loc.name}: ${(err as Error).message}`);
+    }
+  }
+}
+
+/**
+ * Resolve the best on-disk location reference image for a shot, plus a prompt
+ * note carrying the location's locked description + lighting. Closer shot
+ * types prefer the medium angle; everything else prefers the wide establishing
+ * angle. Returns undefined refPath when the shot has no location or no images.
+ */
+function resolveLocationRefForShot(
+  series: SeriesState,
+  shot: ShotScript,
+): { location?: Location; refPath?: string; note: string } {
+  if (!shot.location) return { note: '' };
+  const location = getLocation(series, shot.location);
+  if (!location) return { note: '' };
+  const dir = getLocationDir(series, location.slug);
+  const closer = shot.type === 'close-up' || shot.type === 'reaction' || shot.type === 'insert';
+  const order = closer
+    ? ['medium.png', 'wide.png', 'detail.png']
+    : ['wide.png', 'medium.png', 'detail.png'];
+  const refPath = order.map(f => join(dir, f)).find(p => existsSync(p));
+  const note = ` Location: ${location.description}${location.lightingNotes ? ` Lighting: ${location.lightingNotes}.` : ''}`;
+  return { location, refPath, note };
 }
 
 // ── new-series ────────────────────────────────────────────────────────
@@ -387,7 +488,7 @@ program
           console.warn(`  Failed to read --override-prompt ${opts.overridePrompt}: ${(err as Error).message}`);
         }
       }
-      const sharedModel = override.shared?.model ?? 'seedream-v5-lite';
+      const sharedModel = override.shared?.model ?? DEFAULT_IMAGE_GENERATION_MODEL;
       const sharedCfg = override.shared?.cfg_scale ?? 10;
       const sharedAspect = override.shared?.aspect_ratio ?? '1:1';
       const sharedResolution = override.shared?.resolution ?? '1K';
@@ -543,7 +644,8 @@ program
   .requiredOption('-c, --character <name>', 'Character name')
   .requiredOption('--voice-id <id>', 'Venice voice ID')
   .option('--voice-name <name>', 'Display name for the voice')
-  .action(async (opts: { project: string; character: string; voiceId: string; voiceName?: string }) => {
+  .option('--voice-reference <file>', 'Path to an operator-supplied voice-donor clip (wav/mp3, normalized to 2-15s) used as reference_audio_urls on Seedance/HappyHorse R2V shots')
+  .action(async (opts: { project: string; character: string; voiceId: string; voiceName?: string; voiceReference?: string }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
@@ -553,6 +655,15 @@ program
     char.voiceId = opts.voiceId;
     char.voiceName = opts.voiceName || opts.voiceId;
     char.locked = true;
+
+    if (opts.voiceReference) {
+      const apiKey = getVeniceApiKey();
+      const client = new VeniceClient(apiKey);
+      const { relPath, model } = await generateVoiceReference(client, series, char, { file: opts.voiceReference });
+      char.voiceReferencePath = relPath;
+      char.voiceReferenceModel = model;
+      console.log(`  Voice reference imported: ${relPath} (${model})`);
+    }
 
     const charDir = getCharacterDir(series, char.name);
     if (existsSync(charDir)) {
@@ -566,6 +677,111 @@ program
     await saveSeries(series);
     console.log(`Character locked: ${char.name}`);
     console.log(`  Voice: ${char.voiceName} (${char.voiceId})`);
+  });
+
+// ── generate-voice-reference ──────────────────────────────────────────
+program
+  .command('generate-voice-reference')
+  .description('Generate (or import) a voice-donor reference clip for a character, used as reference_audio_urls (@AudioN) on Seedance/HappyHorse R2V shots')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-c, --character <name>', 'Character name')
+  .option('--text <text>', 'Spoken text to render (defaults to a neutral sample steered by voiceDescription)')
+  .option('--voice <voice>', 'Named seed-audio voice (defaults to describe-in-prompt steering via voiceDescription)')
+  .option('--speed <speed>', 'Playback speed 0.5-2', parseFloat)
+  .option('--file <file>', 'Import an operator-supplied clip verbatim instead of generating')
+  .option('--model <model>', 'Override the seed-audio model id')
+  .action(async (opts: { project: string; character: string; text?: string; voice?: string; speed?: number; file?: string; model?: string }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+
+    const char = getCharacter(series, opts.character);
+    if (!char) { console.error(`Character "${opts.character}" not found.`); process.exit(1); }
+
+    const apiKey = getVeniceApiKey();
+    const client = new VeniceClient(apiKey);
+
+    const { relPath, model } = await generateVoiceReference(client, series, char, {
+      text: opts.text,
+      voice: opts.voice,
+      speed: opts.speed,
+      file: opts.file,
+      model: opts.model,
+    });
+    char.voiceReferencePath = relPath;
+    char.voiceReferenceModel = model;
+
+    const charDir = getCharacterDir(series, char.name);
+    if (existsSync(charDir)) {
+      await writeFile(join(charDir, 'character.json'), JSON.stringify(char, null, 2), 'utf-8');
+    }
+    await saveSeries(series);
+    console.log(`\nVoice reference set for ${char.name}: ${relPath} (${model})`);
+  });
+
+// ── add-location ──────────────────────────────────────────────────────
+program
+  .command('add-location')
+  .description('Add and generate reference images for a location (wide / medium / detail)')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('--name <name>', 'Location name')
+  .requiredOption('--description <desc>', 'Locked prose description of the environment')
+  .option('--lighting <notes>', 'Lighting notes carried into every panel prompt for this location')
+  .option('--model <model>', 'Image-generation model for the reference angles (default nano-banana-pro)')
+  .option('--skip-images', 'Skip reference image generation', false)
+  .action(async (opts: { project: string; name: string; description: string; lighting?: string; model?: string; skipImages: boolean }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+
+    const slug = locationSlugify(opts.name);
+    const seed = Math.abs([...opts.name].reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0)) % 999_999_999;
+
+    const location: Location = {
+      name: opts.name,
+      slug,
+      description: opts.description,
+      ...(opts.lighting ? { lightingNotes: opts.lighting } : {}),
+      seed,
+      ...(opts.model ? { referenceModel: opts.model } : {}),
+    };
+
+    addLocation(series, location);
+
+    if (!opts.skipImages && series.aesthetic) {
+      const apiKey = getVeniceApiKey();
+      const client = new VeniceClient(apiKey);
+      console.log(`Generating reference images for location "${location.name}"...`);
+      const { generated, skipped } = await generateLocationReferences(client, series, location, {
+        model: opts.model,
+      });
+      console.log(`  Generated ${generated.length} angle(s)${skipped.length ? `, skipped ${skipped.length} existing` : ''}`);
+    }
+
+    await saveSeries(series);
+    console.log(`\nLocation added: ${location.name} (${slug})`);
+  });
+
+// ── generate-location-references ──────────────────────────────────────
+program
+  .command('generate-location-references')
+  .description('Generate (or regenerate) reference images for an existing location')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-l, --location <slugOrName>', 'Location slug or name')
+  .option('--model <model>', 'Override the image-generation model')
+  .option('--force', 'Regenerate angles that already exist (archives prior versions)', false)
+  .action(async (opts: { project: string; location: string; model?: string; force: boolean }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+
+    const location = getLocation(series, opts.location);
+    if (!location) { console.error(`Location "${opts.location}" not found.`); process.exit(1); }
+
+    const apiKey = getVeniceApiKey();
+    const client = new VeniceClient(apiKey);
+    const { generated, skipped } = await generateLocationReferences(client, series, location, {
+      model: opts.model,
+      force: opts.force,
+    });
+    console.log(`\nLocation references for ${location.name}: generated ${generated.length}, skipped ${skipped.length}`);
   });
 
 // ── workshop-episode ──────────────────────────────────────────────────
@@ -619,6 +835,12 @@ program
       ? `Style: ${series.aesthetic.style}\nPalette: ${series.aesthetic.palette}\nLighting: ${series.aesthetic.lighting}\nLens: ${series.aesthetic.lensCharacteristics}\nFilm: ${series.aesthetic.filmStock}`
       : 'No aesthetic locked yet.';
 
+    // Build location summary (existing first-class Location entities). The LLM
+    // is asked to reuse these slugs and only introduce new ones when needed.
+    const locationSummaries = (series.locations ?? []).length > 0
+      ? (series.locations ?? []).map(l => `${l.slug}: ${l.name} — ${l.description}${l.lightingNotes ? ` (lighting: ${l.lightingNotes})` : ''}`).join('\n')
+      : 'None defined yet.';
+
     const systemPrompt = `You are a scriptwriter for the mini-drama series "${series.name}".
 
 SERIES CONCEPT: ${series.concept}
@@ -630,6 +852,9 @@ ${aestheticStr}
 
 CHARACTERS:
 ${charSummaries}
+
+LOCATIONS (existing, reuse these slugs):
+${locationSummaries}
 
 PRIOR EPISODES:
 ${priorEpisodes || 'None yet.'}
@@ -670,6 +895,13 @@ The recommended pipeline uses the video model's own native dialogue (Seedance / 
 NO MUSIC / NO SFX FROM THE VIDEO MODEL:
 Every shot "description" MUST end with the literal phrase: "No background music, no sound effects, no soundtrack, dry recording." The harness adds music and ambient/SFX in post via separate Venice audio calls; baked-in music or SFX from the video model fights the assembler's mix. The "sfx" field in the schema below describes what the harness should generate in post — it does NOT instruct the video model to produce sound effects.
 
+LOCATIONS — TAG EVERY SHOT WITH A LOCATION:
+Define the physical place(s) this episode happens in as first-class locations, and tag every shot with the location it plays in. Locations anchor the environment across shots (consistent architecture, set dressing, and lighting) the same way character references anchor identity.
+- Emit a top-level "locations" array. Each entry: {"name": "<Display Name>", "slug": "<kebab-case-slug>", "description": "<locked prose description of the environment — architecture, materials, set dressing, scale>", "lightingNotes": "<the established lighting for this place>"}.
+- REUSE the existing location slugs listed above when the scene is in a place already defined; only introduce a new location entry when the place is genuinely new.
+- Give every shot a "location" field set to the slug of the location it plays in.
+- Since an episode uses "one scene, one location" by default, you will usually define exactly ONE location and tag all shots with its slug.
+
 IMPORTANT: Every shot MUST include an "environment" field. This controls whether the pipeline uses the series' dark/rainy aesthetic or adapts it for bright daytime scenes. Values:
 - "DAY_INTERIOR" -- bright indoor scene (café, office, apartment in daylight)
 - "DAY_EXTERIOR" -- bright outdoor scene (street, park in daylight)
@@ -683,11 +915,15 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
   "seriesName": "${series.name}",
   "totalDuration": "<estimated total>",
   "status": "draft",
+  "locations": [
+    {"name": "<Display Name>", "slug": "<kebab-case-slug>", "description": "<locked environment description>", "lightingNotes": "<established lighting>"}
+  ],
   "shots": [
     {
       "shotNumber": 1,
       "type": "establishing|dialogue|action|reaction|close-up|insert",
       "environment": "DAY_INTERIOR|DAY_EXTERIOR|NIGHT_INTERIOR|NIGHT_EXTERIOR",
+      "location": "<slug of a location defined in the top-level locations array>",
       "duration": "3s|4s|...|15s (PREFER 15s; use shorts only for deliberate quick beats)",
       "videoModel": "action|atmosphere",
       "description": "<full visual description, ending with 'No background music, no sound effects, no soundtrack, dry recording.'>",
@@ -753,6 +989,12 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
         addEpisode(series, script.title || `Episode ${opts.episode}`);
       }
 
+      // Merge any locations the LLM introduced into the series, then generate
+      // reference images for locations that don't have them yet. Locations
+      // tagged on shots but missing from the script's locations[] are also
+      // synthesized as stubs so every referenced slug resolves.
+      await mergeAndGenerateEpisodeLocations(client, series, script);
+
       const savedPath = await saveEpisodeScript(series, script);
       await saveSeries(series);
 
@@ -816,7 +1058,7 @@ program
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--no-refine', 'Skip the multi-edit refinement pass (refinement is ON by default)')
-  .option('--edit-model <model>', 'Model for multi-edit refinement (default: seedream-v5-lite-edit, required for Seedance 2.0 compatibility)', 'seedream-v5-lite-edit')
+  .option('--edit-model <model>', 'Model for multi-edit refinement (default: nano-banana-2-edit)', DEFAULT_IMAGE_EDIT_MODEL)
   .option('--cfg-scale <number>', 'Prompt adherence (1-10, higher = stricter)', parseFloat)
   .option('--debug', 'Save prompt payloads as shot-NNN.prompt.json for debugging', false)
   .option('--skip-approval', 'Skip script approval check', false)
@@ -880,13 +1122,21 @@ program
 
       const imagePrompt = buildImagePrompt(shot, series);
 
+      // Fold in the shot's location: inject its locked description + lighting
+      // into the panel prompt (anti-pattern 7) and use its reference image as
+      // an environment anchor alongside character faces.
+      const locInfo = resolveLocationRefForShot(series, shot);
+      const effectivePrompt = imagePrompt.prompt + locInfo.note;
+
       if (opts.debug) {
         const debugPath = join(sceneDir, `shot-${shotNum}.prompt.json`);
         await writeFile(debugPath, JSON.stringify({
           shotNumber: shot.shotNumber,
           type: shot.type,
           characters: shot.characters,
-          prompt: imagePrompt.prompt,
+          location: shot.location ?? null,
+          locationRef: locInfo.refPath ?? null,
+          prompt: effectivePrompt,
           negativePrompt: imagePrompt.negativePrompt,
           seed: imagePrompt.seed,
           cfgScale,
@@ -901,17 +1151,14 @@ program
         let imgBuffer: Buffer;
 
         // For character shots, use generateWithReferences for identity anchoring.
-        // Panels with characters historically forced seedream-v5-lite so the
-        // output could be sent to Seedance 2.0 video. When the series runs
-        // seedanceCompatibility 'launder', that constraint is handled at video
-        // time (non-seedream panels are laundered through a seedream edit
-        // pass), so the operator's imageDefaults.generationModel wins for ALL
-        // panels — e.g. a gpt-image-2 bakeoff winner.
+        // Panels used to force seedream-v5-lite whenever a character was present,
+        // because Seedance 2.0 rejected face-bearing images from other families.
+        // Venice removed that restriction (2026-07), so ALL panels — character
+        // and faceless alike — use the operator's imageDefaults.generationModel
+        // (default nano-banana-2), the higher-quality general default.
         const hasChars = shot.characters && shot.characters.length > 0;
-        const launders = series.videoDefaults.seedanceCompatibility === 'launder';
-        const panelModel = hasChars && !launders
-          ? 'seedream-v5-lite'
-          : (series.videoDefaults.imageDefaults?.generationModel ?? (hasChars ? 'seedream-v5-lite' : 'nano-banana-pro'));
+        const panelModel = series.videoDefaults.imageDefaults?.generationModel
+          ?? DEFAULT_IMAGE_GENERATION_MODEL;
 
         const charRefPaths: string[] = [];
         if (hasChars) {
@@ -931,10 +1178,26 @@ program
             })
             .filter(Boolean) as import('../venice/types.js').CharacterReference[];
 
+          // Location environment reference: appended AFTER the face refs so it
+          // never consumes a face slot (faceSlots stays = character count).
+          // generateWithReferences concatenates all refs; the extra one is used
+          // as a general environment/style anchor.
+          const charRefsWithLocation = [...charRefs];
+          let locationPromptSuffix = '';
+          if (locInfo.refPath) {
+            charRefsWithLocation.push({
+              name: 'LOCATION',
+              role: 'environment reference — setting, architecture, lighting',
+              base64Image: readFileSync(locInfo.refPath).toString('base64'),
+            } as import('../venice/types.js').CharacterReference);
+            charRefPaths.push(locInfo.refPath);
+            locationPromptSuffix = ` The final reference image is the location environment — match its setting, architecture, and lighting; it is not a character.`;
+          }
+
           if (charRefs.length > 0) {
             const result = await generateWithReferences(client, {
               model: panelModel,
-              prompt: imagePrompt.prompt,
+              prompt: effectivePrompt + locationPromptSuffix,
               negative_prompt: imagePrompt.negativePrompt,
               resolution: '1K',
               aspect_ratio: storyboardAR,
@@ -943,14 +1206,14 @@ program
               seed: imagePrompt.seed,
               safe_mode: false,
               hide_watermark: true,
-              referenceImages: charRefs,
+              referenceImages: charRefsWithLocation,
               faceSlots: Math.min(charRefs.length, 2),
             });
             imgBuffer = Buffer.from(result.base64, 'base64');
           } else {
             const response = await generateImage(client, {
               model: panelModel,
-              prompt: imagePrompt.prompt,
+              prompt: effectivePrompt,
               negative_prompt: imagePrompt.negativePrompt,
               resolution: '1K',
               aspect_ratio: storyboardAR,
@@ -962,10 +1225,34 @@ program
             });
             imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
           }
+        } else if (locInfo.refPath) {
+          // No characters, but a location ref exists — anchor the establishing
+          // panel to the location environment via generateWithReferences
+          // (faceSlots 0 → the ref is a pure environment/style anchor).
+          charRefPaths.push(locInfo.refPath);
+          const result = await generateWithReferences(client, {
+            model: panelModel,
+            prompt: effectivePrompt + ` This reference image is the location environment — match its setting, architecture, and lighting.`,
+            negative_prompt: imagePrompt.negativePrompt,
+            resolution: '1K',
+            aspect_ratio: storyboardAR,
+            steps: 30,
+            cfg_scale: cfgScale,
+            seed: imagePrompt.seed,
+            safe_mode: false,
+            hide_watermark: true,
+            referenceImages: [{
+              name: 'LOCATION',
+              role: 'environment reference',
+              base64Image: readFileSync(locInfo.refPath).toString('base64'),
+            } as import('../venice/types.js').CharacterReference],
+            faceSlots: 0,
+          });
+          imgBuffer = Buffer.from(result.base64, 'base64');
         } else {
           const response = await generateImage(client, {
             model: panelModel,
-            prompt: imagePrompt.prompt,
+            prompt: effectivePrompt,
             negative_prompt: imagePrompt.negativePrompt,
             resolution: '1K',
             aspect_ratio: storyboardAR,
@@ -1005,7 +1292,7 @@ program
             role: 'content',
             model: panelModel,
             label: 'base panel',
-            prompt: imagePrompt.prompt,
+            prompt: effectivePrompt,
             negativePrompt: imagePrompt.negativePrompt,
             seed: imagePrompt.seed,
             cfgScale,
@@ -1077,7 +1364,8 @@ program
 
         const refStart = Date.now();
         try {
-          await refineWithReferences(client, series, imgPath, shot, editModel);
+          const locRef = resolveLocationRefForShot(series, shot).refPath;
+          await refineWithReferences(client, series, imgPath, shot, editModel, locRef);
           const elapsed = ((Date.now() - refStart) / 1000).toFixed(1);
           console.log(`  ${progress} Shot ${shotNum}: character-refined (${elapsed}s)`);
         } catch (err) {
@@ -1103,7 +1391,12 @@ program
           continue;
         }
 
-        if (styleAnchorPath && existsSync(styleAnchorPath)) {
+        // Prefer the shot's location reference as the environment/style anchor
+        // (keeps every shot in a place looking like that place); fall back to
+        // the episode's character-shot style anchor when there's no location.
+        const locRef = resolveLocationRefForShot(series, shot).refPath;
+        const anchorForShot = locRef ?? styleAnchorPath;
+        if (anchorForShot && existsSync(anchorForShot)) {
           const refStart = Date.now();
           try {
             const aestheticStr = [
@@ -1111,9 +1404,9 @@ program
               series.aesthetic!.palette,
               series.aesthetic!.lighting,
             ].join(', ');
-            await refineStyleConsistency(client, imgPath, styleAnchorPath, aestheticStr, editModel, shot.environment);
+            await refineStyleConsistency(client, imgPath, anchorForShot, aestheticStr, editModel, shot.environment);
             const elapsed = ((Date.now() - refStart) / 1000).toFixed(1);
-            console.log(`  ${progress} Shot ${shotNum}: style-refined (${elapsed}s)`);
+            console.log(`  ${progress} Shot ${shotNum}: style-refined (${elapsed}s${locRef ? ', location anchor' : ''})`);
           } catch (err) {
             console.warn(`  ${progress} Shot ${shotNum}: refinement FAILED - ${err}`);
           }
@@ -1231,7 +1524,7 @@ program
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .requiredOption('-s, --shot <number>', 'Shot number to fix', parseInt)
   .option('-c, --characters <names>', 'Character names to fix (comma-separated)')
-  .option('--edit-model <model>', 'Multi-edit model (default: seedream-v5-lite-edit, required for Seedance 2.0 compatibility)', 'seedream-v5-lite-edit')
+  .option('--edit-model <model>', 'Multi-edit model (default: nano-banana-2-edit)', DEFAULT_IMAGE_EDIT_MODEL)
   .option('--prompt <prompt>', 'Custom edit prompt (overrides auto-generated)')
   .action(async (opts: {
     project: string; episode: number; shot: number;

@@ -19,20 +19,27 @@ import {
   MODELS_SUPPORTING_END_IMAGE,
   MODELS_SUPPORTING_AUDIO_INPUT,
   MODELS_SUPPORTING_PER_REFERENCE_AUDIO,
+  MODELS_SUPPORTING_REFERENCE_AUDIO,
   MODELS_USING_IMAGE_TAGS,
   isSeedanceVideoModel,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
 } from '../series/types.js';
-import { padAudioForModel } from '../venice/audio-preflight.js';
+import { padAudioForModel, probeAudioDurationSec } from '../venice/audio-preflight.js';
 import { generateSpeech } from '../venice/audio.js';
-import { getCharacterDir } from '../series/manager.js';
+import { getCharacterDir, getLocationDir, getLocation } from '../series/manager.js';
 import {
   buildKlingMultiShotPrompt,
   buildVideoPrompt,
+  resolveVideoModel,
   type MiniDramaVideoPrompt,
 } from './prompt-builder.js';
+import {
+  generateVoiceReference,
+  resolveVoiceReferenceAbsPath,
+  VOICE_REF_MIN_SEC,
+  VOICE_REF_MAX_SEC,
+} from './voice-reference.js';
 import { parseShotDuration } from './generation-planner.js';
-import { ensureSeedanceCompatibility } from '../venice/seedance-preflight.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
 import { getVideoModel, modelSupportsDuration } from '../venice/models.js';
 import { appendRecipePass } from '../venice/recipe.js';
@@ -273,6 +280,123 @@ function imageToDataUri(imagePath: string, mimeType = 'image/png'): string {
   return `data:${mimeType};base64,${buffer.toString('base64')}`;
 }
 
+/**
+ * Resolve the best location reference image for a shot. Closer shot types
+ * (close-up / reaction / insert) prefer the medium ref; everything else
+ * prefers the wide establishing ref. Falls back through the other angles.
+ * Returns undefined when the shot has no location or no ref images exist.
+ */
+function getLocationRefPath(series: SeriesState, shot: ShotScript): string | undefined {
+  if (!shot.location) return undefined;
+  const loc = getLocation(series, shot.location);
+  if (!loc) return undefined;
+  const dir = getLocationDir(series, loc.slug);
+  const closer = shot.type === 'close-up' || shot.type === 'reaction' || shot.type === 'insert';
+  const order = closer
+    ? ['medium.png', 'wide.png', 'detail.png']
+    : ['wide.png', 'medium.png', 'detail.png'];
+  for (const f of order) {
+    const p = join(dir, f);
+    if (existsSync(p)) return p;
+  }
+  return undefined;
+}
+
+/**
+ * Fold a location reference into the character reference_image_urls for a
+ * Seedance / HappyHorse R2V shot. Characters come first (one ref per
+ * character to keep the @ImageN mapping aligned with the prompt's
+ * characterElements), then the location takes the last free slot within the
+ * 4-image cap. Dropped with a warning when there's no room (3+ characters).
+ */
+function foldLocationIntoReferences(
+  series: SeriesState,
+  shot: ShotScript,
+  prompt: MiniDramaVideoPrompt,
+  locationRefPath: string,
+  existingCharRefs: string[] | undefined,
+): string[] {
+  // One image per character, ordered to match the prompt's @Image1..@ImageN.
+  const slotNames = (prompt.characterElements && prompt.characterElements.length > 0)
+    ? prompt.characterElements.map(s => s.characterName)
+    : shot.characters;
+  const charRefs = slotNames
+    .map(name => {
+      const dir = getCharacterDir(series, name);
+      return ['front.png', 'three-quarter.png']
+        .map(f => join(dir, f))
+        .find(p => existsSync(p));
+    })
+    .filter((p): p is string => Boolean(p));
+
+  if (charRefs.length >= 4) {
+    console.warn(`  ⚠ Location ref for "${shot.location}" dropped: character refs already fill the 4-image cap.`);
+    return existingCharRefs ?? charRefs.slice(0, 4);
+  }
+  console.log(`  Location ref -> reference_image_urls slot @Image${charRefs.length + 1} (${shot.location})`);
+  return [...charRefs, locationRefPath].slice(0, 4);
+}
+
+async function persistCharacterJson(series: SeriesState, character: SeriesState['characters'][number]): Promise<void> {
+  const dir = getCharacterDir(series, character.name);
+  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'character.json'), JSON.stringify(character, null, 2), 'utf-8');
+}
+
+/**
+ * Ensure the dialogue speaker for a shot has a voice-donor reference clip when
+ * the shot routes to a reference-audio-capable model and voice references
+ * aren't disabled. Auto-generates one via seed-audio-1-0 (mirrors the inline
+ * TTS pattern in ensureDialogueAudio) and persists it to character.json so the
+ * prompt builder picks it up. Best-effort — a failure just skips the ref.
+ */
+async function ensureVoiceReferenceForShot(
+  client: VeniceClient,
+  series: SeriesState,
+  shot: ShotScript,
+  previousShot: ShotScript | undefined,
+): Promise<void> {
+  if (series.videoDefaults.voiceReferenceForDialogue === false) return;
+  if (!shot.dialogue) return;
+  const speaker = shot.dialogue.character.toUpperCase();
+  if (speaker === 'NARRATOR' || speaker === 'V.O.' || speaker === 'VO') return;
+
+  const resolution = resolveVideoModel(shot, series, previousShot);
+  if (!MODELS_SUPPORTING_REFERENCE_AUDIO.has(resolution.modelId)) return;
+
+  const character = series.characters.find(c => c.name.toUpperCase() === speaker);
+  if (!character) return;
+
+  const abs = resolveVoiceReferenceAbsPath(series, character);
+  if (character.voiceReferencePath && abs && existsSync(abs)) return; // already present
+
+  try {
+    const { relPath, model } = await generateVoiceReference(client, series, character);
+    character.voiceReferencePath = relPath;
+    character.voiceReferenceModel = model;
+    await persistCharacterJson(series, character);
+  } catch (err) {
+    console.warn(`  ⚠ Voice reference generation failed for ${character.name} (${(err as Error).message}); shot will fall back to the [Char, voiceDesc] text.`);
+  }
+}
+
+function resolveVoiceReferencePaths(
+  series: SeriesState,
+  prompt: MiniDramaVideoPrompt,
+): string[] {
+  if (!prompt.voiceReferenceSlots || prompt.voiceReferenceSlots.length === 0) return [];
+  return [...prompt.voiceReferenceSlots]
+    .sort((a, b) => a.audioIndex - b.audioIndex)
+    .map(slot => {
+      const char = series.characters.find(
+        c => c.name.toUpperCase() === slot.characterName.toUpperCase(),
+      );
+      const abs = char ? resolveVoiceReferenceAbsPath(series, char) : undefined;
+      return abs && existsSync(abs) ? abs : undefined;
+    })
+    .filter((p): p is string => Boolean(p));
+}
+
 function getVideoDuration(path: string): number {
   const out = runCommand('ffprobe', [
     '-v',
@@ -368,6 +492,13 @@ interface RenderVideoOptions {
   aspectRatio?: string;
   /** Seedance compatibility strategy when images aren't seedream-originated. */
   seedanceCompatibility?: 'prompt' | 'fallback' | 'launder';
+  /**
+   * Voice-donor reference clips (on-disk paths), ordered to match the prompt's
+   * @Audio1, @Audio2, … bindings. Sent as `reference_audio_urls` only when the
+   * effective model supports reference audio AND at least one reference image
+   * is present (Venice rejects audio-only reference audio).
+   */
+  voiceReferencePaths?: string[];
 }
 
 function fileToDataUri(filePath: string, mimeType = 'image/png'): string | undefined {
@@ -382,40 +513,17 @@ async function renderVideoFile(
 ): Promise<string> {
   const { prompt, anchorImagePath, outputPath, endFrameImagePath,
     elements, referenceImagePaths, sceneImagePaths,
-    negativePrompt, audioUrl, audioPath, videoUrl } = options;
+    negativePrompt, audioUrl, audioPath, videoUrl, voiceReferencePaths } = options;
   await mkdir(dirname(outputPath), { recursive: true });
 
-  // ── Seedance 2.0 pre-flight ─────────────────────────────────────────────
-  // Seedance blocks requests whose input images were not produced by
-  // seedream-v5-lite / seedream-v5-lite-edit. We check provenance against
-  // every file path being sent before the body is built — if the user has
-  // pre-existing (e.g. nano-banana-generated) assets, we either reroute
-  // the shot or launder the images through seedream-v5-lite-edit.
-  let effectiveModel = prompt.model;
-  if (isSeedanceVideoModel(prompt.model)) {
-    const elementsFrontalPaths = (elements ?? [])
-      .map(el => el.frontalImageUrl)
-      .filter((p): p is string => typeof p === 'string' && !p.startsWith('data:'));
-    const elementsReferencePaths = (elements ?? [])
-      .flatMap(el => el.referenceImageUrls ?? [])
-      .filter(p => !p.startsWith('data:'));
-
-    const action = await ensureSeedanceCompatibility(client, prompt.model, {
-      imageUrl: anchorImagePath,
-      endImageUrl: endFrameImagePath,
-      referenceImagePaths: referenceImagePaths?.filter(p => !p.startsWith('data:')),
-      sceneImagePaths: sceneImagePaths?.filter(p => !p.startsWith('data:')),
-      elementsFrontalPaths,
-      elementsReferencePaths,
-    }, { mode: options.seedanceCompatibility });
-
-    if (action.type === 'fallback') {
-      console.warn(`  ${action.reason}`);
-      effectiveModel = action.newModel;
-    } else if (action.type === 'laundered') {
-      console.log(`  Laundered ${action.lauderedPaths.length} image(s); proceeding with ${prompt.model}.`);
-    }
-  }
+  // NOTE: the former Seedance seedream-provenance pre-flight gate was removed
+  // (2026-07). Venice dropped the restriction that Seedance 2.0 only accepts
+  // face-bearing input images produced by seedream-v5-lite / -edit — it now
+  // accepts face-bearing images from any image family — so there is nothing to
+  // check, reroute, or launder before building the body. The Seedance face
+  // *consent* attestation (409 needs_consent) is a separate mechanism and is
+  // still handled at queue time below.
+  const effectiveModel = prompt.model;
 
   const body: Record<string, unknown> = {
     model: effectiveModel,
@@ -551,6 +659,54 @@ async function renderVideoFile(
     console.log(`  Scene images: ${(body.scene_image_urls as string[]).length}`);
   }
 
+  // Voice-donor reference audio (@Audio1, @Audio2, …). Gated on model support
+  // AND the presence of ≥1 reference image (Venice rejects audio-only). Each
+  // clip must be 2-15s with an aggregate ≤15s across ≤3 clips; out-of-budget
+  // clips are dropped with a warning so the render still proceeds.
+  if (voiceReferencePaths && voiceReferencePaths.length > 0
+    && MODELS_SUPPORTING_REFERENCE_AUDIO.has(effectiveModel)) {
+    const hasReferenceImage = Array.isArray(body.reference_image_urls)
+      && (body.reference_image_urls as string[]).length > 0;
+    if (!hasReferenceImage) {
+      console.warn('  ⚠ Voice references present but no reference image — dropping (Venice rejects audio-only reference audio).');
+    } else {
+      const accepted: string[] = [];
+      let aggregateSec = 0;
+      for (const p of voiceReferencePaths) {
+        if (accepted.length >= 3) {
+          console.warn(`  ⚠ Voice reference budget: >3 clips, dropping extras.`);
+          break;
+        }
+        if (p.startsWith('data:')) { accepted.push(p); continue; }
+        if (!existsSync(p)) { console.warn(`  ⚠ Voice reference missing on disk, skipping: ${p}`); continue; }
+        let durSec: number;
+        try {
+          durSec = await probeAudioDurationSec(p);
+        } catch (err) {
+          console.warn(`  ⚠ Could not probe voice reference (${(err as Error).message}); skipping ${p}`);
+          continue;
+        }
+        if (durSec < VOICE_REF_MIN_SEC || durSec > VOICE_REF_MAX_SEC) {
+          console.warn(`  ⚠ Voice reference ${p} is ${durSec.toFixed(2)}s (must be ${VOICE_REF_MIN_SEC}-${VOICE_REF_MAX_SEC}s); skipping.`);
+          continue;
+        }
+        if (aggregateSec + durSec > VOICE_REF_MAX_SEC) {
+          console.warn(`  ⚠ Voice reference aggregate would exceed ${VOICE_REF_MAX_SEC}s; skipping ${p}.`);
+          continue;
+        }
+        const mime = p.toLowerCase().endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
+        const uri = fileToDataUri(p, mime);
+        if (uri) { accepted.push(uri); aggregateSec += durSec; }
+      }
+      if (accepted.length > 0) {
+        body.reference_audio_urls = accepted;
+        console.log(`  Reference audio (@Audio1..@Audio${accepted.length}): ${accepted.length} voice clip(s), ${aggregateSec.toFixed(2)}s total`);
+      }
+    }
+  } else if (voiceReferencePaths && voiceReferencePaths.length > 0) {
+    console.warn(`  ⚠ Model ${effectiveModel} does not support reference_audio_urls; dropping ${voiceReferencePaths.length} voice reference(s).`);
+  }
+
   if (options.aspectRatio && body.aspect_ratio && body.aspect_ratio !== options.aspectRatio) {
     console.warn(`  ⚠ Aspect ratio mismatch: sending ${body.aspect_ratio} but series expects ${options.aspectRatio}`);
   }
@@ -662,6 +818,8 @@ async function renderVideoFile(
           referenceImagePaths: referenceImagePaths?.filter(isPath),
           extra: {
             audio: prompt.audio,
+            ...(voiceReferencePaths && voiceReferencePaths.length > 0
+              ? { voiceReferencePaths: voiceReferencePaths.filter(isPath) } : {}),
             ...(sceneImagePaths && sceneImagePaths.length > 0
               ? { sceneImagePaths: sceneImagePaths.filter(isPath) } : {}),
             ...(elements && elements.length > 0
@@ -928,6 +1086,10 @@ async function renderSingleShotUnit(
     return [videoPath];
   }
 
+  // Ensure the dialogue speaker has a voice-donor reference clip before the
+  // prompt is built, so buildVideoPrompt can emit the @AudioN binding (A2/A3).
+  await ensureVoiceReferenceForShot(client, series, shot, previousShot);
+
   const videoPrompt = buildVideoPrompt(shot, series, previousShot, episodeAudioMix);
   if (!videoPrompt.audio && shot.dialogue) {
     const reason = shot.nativeAudio === 'mute'
@@ -951,8 +1113,31 @@ async function renderSingleShotUnit(
   let anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath, panelPath);
   const endFramePath = chooseEndFrameImagePath(unit, sceneDir, nextShotNumber);
 
-  const { elements, referenceImagePaths } = resolveCharacterElements(series, shot, videoPrompt);
-  const sceneImagePaths = shot.sceneImagePaths?.filter(p => existsSync(p));
+  let { elements, referenceImagePaths } = resolveCharacterElements(series, shot, videoPrompt);
+  let sceneImagePaths = shot.sceneImagePaths?.filter(p => existsSync(p));
+
+  // --- Location environment references (B5) ---
+  // Kling O3 R2V takes environment refs via scene_image_urls; Seedance /
+  // HappyHorse (no scene_image_urls) fold the location wide.png into
+  // reference_image_urls at the slot the prompt tagged (@ImageN). Hand-set
+  // sceneImagePaths always win as an override.
+  const locationRefPath = getLocationRefPath(series, shot);
+  if (locationRefPath) {
+    if (MODELS_SUPPORTING_SCENE_IMAGES.has(videoPrompt.model)) {
+      if (!sceneImagePaths || sceneImagePaths.length === 0) {
+        sceneImagePaths = [locationRefPath];
+        console.log(`  Location ref -> scene_image_urls (${shot.location})`);
+      }
+    } else if (videoPrompt.locationEnvSlot) {
+      referenceImagePaths = foldLocationIntoReferences(
+        series, shot, videoPrompt, locationRefPath, referenceImagePaths,
+      );
+    }
+  }
+
+  // Resolve voice-donor clips in the exact order the prompt's @AudioN slots
+  // expect (A3). Only used by reference-audio-capable models with ≥1 ref image.
+  const voiceReferencePaths = resolveVoiceReferencePaths(series, videoPrompt);
 
   // --- CLAUDE.md rule 32: Seedance R2V → Wan 2.7 keyframe pipeline ---
   // Wan 2.7 i2v has no `reference_image_urls`; its only identity anchor is
@@ -1000,6 +1185,7 @@ async function renderSingleShotUnit(
     referenceImagePaths,
     sceneImagePaths,
     audioPath: dialogueAudioPath,
+    voiceReferencePaths,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
   });

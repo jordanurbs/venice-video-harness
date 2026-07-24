@@ -123,15 +123,16 @@ const DEFAULT_RESOLUTION = "1K";
 const DEFAULT_ASPECT_RATIO = "16:9";
 
 /**
- * Models used for generation, chosen per-shot based on face presence.
+ * Image-generation model for panels.
  *
- * Seedance 2.0 only blocks face-bearing images from non-seedream families,
- * so faceless panels can use the higher-quality nano-banana-pro, while
- * face-bearing panels must use seedream-v5-lite to remain Seedance-
- * compatible downstream.
+ * Seedance 2.0 used to reject face-bearing images from non-seedream families,
+ * so face-bearing panels were forced onto seedream-v5-lite. Venice removed that
+ * restriction (2026-07), so all panels — character and faceless alike — use a
+ * single high-quality default (`nano-banana-2`). FACE_MODEL / NO_FACE_MODEL are
+ * kept as aliases so the per-shot selection call sites don't need to change.
  */
-const FACE_MODEL = "seedream-v5-lite";
-const NO_FACE_MODEL = "nano-banana-pro";
+const FACE_MODEL = "nano-banana-2";
+const NO_FACE_MODEL = "nano-banana-2";
 
 /** Diffusion steps -- higher = better quality, slower. */
 const DEFAULT_STEPS = 30;
