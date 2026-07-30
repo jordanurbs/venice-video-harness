@@ -23,6 +23,7 @@ import {
   MODELS_USING_IMAGE_TAGS,
   isSeedanceVideoModel,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
+  getMaxReferenceImages,
 } from '../series/types.js';
 import { padAudioForModel, probeAudioDurationSec } from '../venice/audio-preflight.js';
 import { generateSpeech } from '../venice/audio.js';
@@ -259,20 +260,25 @@ async function renderSeedanceKeyframe(
   };
 }
 
-function collectReferenceImagePathsForShot(series: SeriesState, shot: ShotScript): string[] {
+function collectReferenceImagePathsForShot(
+  series: SeriesState,
+  shot: ShotScript,
+  modelId: string = DEFAULT_CHARACTER_CONSISTENCY_MODEL,
+): string[] {
+  const budget = getMaxReferenceImages(modelId);
   const resolved = shot.characters
     .map(name => series.characters.find(c => c.name.toUpperCase() === name.toUpperCase()))
     .filter(Boolean) as typeof series.characters;
   if (resolved.length === 0) return [];
   return resolved
-    .slice(0, 4)
+    .slice(0, budget)
     .flatMap(c => {
       const dir = getCharacterDir(series, c.name);
       return ['front.png', 'three-quarter.png']
         .map(f => join(dir, f))
         .filter(p => existsSync(p));
     })
-    .slice(0, 4);
+    .slice(0, budget);
 }
 
 function imageToDataUri(imagePath: string, mimeType = 'image/png'): string {
@@ -307,7 +313,11 @@ function getLocationRefPath(series: SeriesState, shot: ShotScript): string | und
  * Seedance / HappyHorse R2V shot. Characters come first (one ref per
  * character to keep the @ImageN mapping aligned with the prompt's
  * characterElements), then the location takes the last free slot within the
- * 4-image cap. Dropped with a warning when there's no room (3+ characters).
+ * per-model budget (9 on Seedance R2V / HappyHorse 1.1 R2V).
+ *
+ * LEGACY fallback: shots whose prompt carries a full `referenceSlots` plan
+ * (the normal path on @Image-tag models) never reach this — the slot plan
+ * already interleaves characters, storyboard plates, and location angles.
  */
 function foldLocationIntoReferences(
   series: SeriesState,
@@ -316,6 +326,7 @@ function foldLocationIntoReferences(
   locationRefPath: string,
   existingCharRefs: string[] | undefined,
 ): string[] {
+  const budget = getMaxReferenceImages(prompt.model);
   // One image per character, ordered to match the prompt's @Image1..@ImageN.
   const slotNames = (prompt.characterElements && prompt.characterElements.length > 0)
     ? prompt.characterElements.map(s => s.characterName)
@@ -329,12 +340,12 @@ function foldLocationIntoReferences(
     })
     .filter((p): p is string => Boolean(p));
 
-  if (charRefs.length >= 4) {
-    console.warn(`  ⚠ Location ref for "${shot.location}" dropped: character refs already fill the 4-image cap.`);
-    return existingCharRefs ?? charRefs.slice(0, 4);
+  if (charRefs.length >= budget) {
+    console.warn(`  ⚠ Location ref for "${shot.location}" dropped: character refs already fill the ${budget}-image budget.`);
+    return existingCharRefs ?? charRefs.slice(0, budget);
   }
   console.log(`  Location ref -> reference_image_urls slot @Image${charRefs.length + 1} (${shot.location})`);
-  return [...charRefs, locationRefPath].slice(0, 4);
+  return [...charRefs, locationRefPath].slice(0, budget);
 }
 
 async function persistCharacterJson(series: SeriesState, character: SeriesState['characters'][number]): Promise<void> {
@@ -525,13 +536,44 @@ async function renderVideoFile(
   // still handled at queue time below.
   const effectiveModel = prompt.model;
 
+  // Pure reference mode (2026-07-30): on @Image-tag R2V models with a full
+  // slot plan, the references carry ALL consistency — character sheets,
+  // storyboard blocking plates, and location angles. No start image is sent;
+  // a start frame would fight the blocking plate for compositional authority
+  // and re-introduce the panel-drift problem R2V exists to solve. Shots with
+  // no references at all (rare: no characters, no location, no storyboard)
+  // still anchor on the panel.
+  const hasSlotPlan = (prompt.referenceSlots?.length ?? 0) > 0;
+  const refsOnly = hasSlotPlan
+    && MODELS_USING_IMAGE_TAGS.has(effectiveModel)
+    && Boolean(referenceImagePaths && referenceImagePaths.length > 0);
+
   const body: Record<string, unknown> = {
     model: effectiveModel,
     prompt: prompt.prompt,
     duration: prompt.duration,
-    image_url: imageToDataUri(anchorImagePath),
     audio: prompt.audio,
   };
+
+  // Models with audioConfigurable:false (e.g. HappyHorse 1.1) return HTTP 400
+  // when the `audio` field is present with a non-default value — probed
+  // 2026-07-30 (`audio: false` 400'd on happyhorse-1-1-reference-to-video).
+  // Omit the field entirely for those models.
+  const modelSpecForAudio = getVideoModel(effectiveModel);
+  if (modelSpecForAudio && modelSpecForAudio.audioConfigurable === false) {
+    if (prompt.audio === false) {
+      console.warn(`  ⚠ ${effectiveModel} does not support audio toggling; omitting audio:false (model output will include native audio).`);
+    }
+    delete body.audio;
+  }
+
+  if (refsOnly) {
+    console.log('  Start frame: none (pure reference mode — refs carry consistency)');
+  } else if (anchorImagePath && existsSync(anchorImagePath)) {
+    body.image_url = imageToDataUri(anchorImagePath);
+  } else {
+    console.warn(`  ⚠ No start image available (${anchorImagePath ?? 'none'}) and not in reference mode — request may fail on i2v models.`);
+  }
 
   if (negativePrompt) {
     body.negative_prompt = negativePrompt;
@@ -643,11 +685,15 @@ async function renderVideoFile(
 
   if (referenceImagePaths && referenceImagePaths.length > 0
     && MODELS_SUPPORTING_REFERENCE_IMAGES.has(effectiveModel)) {
+    const refBudget = getMaxReferenceImages(effectiveModel);
+    if (referenceImagePaths.length > refBudget) {
+      console.warn(`  ⚠ ${referenceImagePaths.length} reference images exceed ${effectiveModel}'s ${refBudget}-image budget; truncating (check the slot allocator).`);
+    }
     body.reference_image_urls = referenceImagePaths
-      .slice(0, 4)
+      .slice(0, refBudget)
       .map(p => p.startsWith('data:') ? p : (fileToDataUri(p) ?? p))
       .filter(Boolean);
-    console.log(`  Reference images: ${(body.reference_image_urls as string[]).length}`);
+    console.log(`  Reference images (@Image1..@Image${(body.reference_image_urls as string[]).length}): ${(body.reference_image_urls as string[]).length}`);
   }
 
   if (sceneImagePaths && sceneImagePaths.length > 0
@@ -852,6 +898,20 @@ function resolveCharacterElements(
   shot: ShotScript,
   prompt: MiniDramaVideoPrompt,
 ): { elements?: VideoElement[]; referenceImagePaths?: string[] } {
+  // @Image-tag models with a slot plan: the plan IS the reference array.
+  // Push in exactly the slot order so the prompt's @ImageN bindings match
+  // (characters, storyboard blocking plate, location angles, extra angles).
+  if (prompt.referenceSlots && prompt.referenceSlots.length > 0
+    && MODELS_SUPPORTING_REFERENCE_IMAGES.has(prompt.model)) {
+    const paths = prompt.referenceSlots
+      .map(slot => slot.path)
+      .filter(p => existsSync(p));
+    if (paths.length !== prompt.referenceSlots.length) {
+      console.warn('  ⚠ Reference slot images missing on disk — @ImageN bindings may misalign; regenerate refs.');
+    }
+    return { referenceImagePaths: paths.length > 0 ? paths : undefined };
+  }
+
   if (!shot.characters || shot.characters.length === 0) return {};
 
   const resolvedChars = shot.characters
@@ -892,15 +952,16 @@ function resolveCharacterElements(
 
   if ((shot.useReferenceImages || autoRefs)
     && MODELS_SUPPORTING_REFERENCE_IMAGES.has(prompt.model)) {
+    const budget = getMaxReferenceImages(prompt.model);
     const paths = resolvedChars
-      .slice(0, 4)
+      .slice(0, budget)
       .flatMap(c => {
         const dir = charDirFn(c.name);
         return ['front.png', 'three-quarter.png']
           .map(f => join(dir, f))
           .filter(p => existsSync(p));
       })
-      .slice(0, 4);
+      .slice(0, budget);
     return { referenceImagePaths: paths.length > 0 ? paths : undefined };
   }
 
@@ -1068,10 +1129,10 @@ async function renderSingleShotUnit(
   // "video exists".
   const shotId = resolveDialogueShotId(shot);
   const panelPath = getShotPanelPath(sceneDir, shotId);
-  if (!existsSync(panelPath)) {
-    console.warn(`  Panel not found: ${panelPath}, skipping shot ${shotId}`);
-    return [];
-  }
+  // A missing panel is only fatal for shots that will actually anchor on it.
+  // Refs-only shots (Seedance R2V slot plan) don't send a start image, so the
+  // decision to skip is deferred until after the prompt/references resolve.
+  const panelExists = existsSync(panelPath);
 
   const videoPath = getShotVideoPath(sceneDir, shotId);
   if (existsSync(videoPath)) {
@@ -1110,16 +1171,25 @@ async function renderSingleShotUnit(
     if (res.autoUseReferenceImages) console.log('  Auto-enabled: reference images');
   }
 
+  let { elements, referenceImagePaths } = resolveCharacterElements(series, shot, videoPrompt);
+  let sceneImagePaths = shot.sceneImagePaths?.filter(p => existsSync(p));
+  const hasSlotPlan = (videoPrompt.referenceSlots?.length ?? 0) > 0
+    && (referenceImagePaths?.length ?? 0) > 0;
+
+  // Refs-only shots (Seedance R2V slot plan) don't anchor on the panel, so a
+  // missing panel is fine there. Everything else still requires it.
+  if (!panelExists && !hasSlotPlan) {
+    console.warn(`  Panel not found: ${panelPath}, skipping shot ${shotId}`);
+    return [];
+  }
+
   let anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath, panelPath);
   const endFramePath = chooseEndFrameImagePath(unit, sceneDir, nextShotNumber);
 
-  let { elements, referenceImagePaths } = resolveCharacterElements(series, shot, videoPrompt);
-  let sceneImagePaths = shot.sceneImagePaths?.filter(p => existsSync(p));
-
   // --- Location environment references (B5) ---
-  // Kling O3 R2V takes environment refs via scene_image_urls; Seedance /
-  // HappyHorse (no scene_image_urls) fold the location wide.png into
-  // reference_image_urls at the slot the prompt tagged (@ImageN). Hand-set
+  // The slot plan (referenceSlots) already interleaves location angles for
+  // @Image-tag models; this legacy fold only runs when no plan exists.
+  // Kling O3 R2V takes environment refs via scene_image_urls. Hand-set
   // sceneImagePaths always win as an override.
   const locationRefPath = getLocationRefPath(series, shot);
   if (locationRefPath) {
@@ -1128,7 +1198,7 @@ async function renderSingleShotUnit(
         sceneImagePaths = [locationRefPath];
         console.log(`  Location ref -> scene_image_urls (${shot.location})`);
       }
-    } else if (videoPrompt.locationEnvSlot) {
+    } else if (!hasSlotPlan && videoPrompt.locationEnvSlot) {
       referenceImagePaths = foldLocationIntoReferences(
         series, shot, videoPrompt, locationRefPath, referenceImagePaths,
       );

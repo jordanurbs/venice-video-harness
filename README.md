@@ -231,15 +231,15 @@ const refModels = listVideoModels({ supportsElements: true });
 
 The harness defaults are opinionated because consistency is the point:
 
-**Seedance R2V by default. Kling O3 R2V fallback for 3+ character scenes. Seedance i2v for establishing shots.**
+**Seedance 2.0 R2V Enhanced for ALL lanes (reference-first, 2026-07-30). Kling O3 R2V fallback only when characters overflow the 9-reference budget.**
 
-Seedance 2.0 (#1 ranked on [Artificial Analysis Video Arena](https://artificialanalysis.ai/)) is the default for both character shots and establishing/atmosphere shots. It uses flat `reference_image_urls` with `@Image` prompt tags for identity anchoring. For scenes with 3+ characters, the system automatically falls back to Kling O3 R2V, which provides structured `elements` for better per-character identity separation.
+Every shot renders in **pure reference mode** — no start image — from an ordered `@ImageN` reference stack of up to 9 images: one primary angle per character, the scene beat's composed **storyboard blocking plate** (where the characters stand in the location relative to each other), multiple location angles (wide/medium/detail), and second character angles. Overflow drops second character angles first, then extra location angles; blocking plates are protected. Voice-donor clips ride alongside as `reference_audio_urls` (`@AudioN`) so each character's voice stays right take to take.
 
 | Role | Default Model | When Used |
 |------|--------------|-----------|
-| **Character shots (1-2 characters)** | `seedance-2-0-reference-to-video` | Default R2V — flat `reference_image_urls` with `@Image` tags, up to 15s, native stereo audio |
-| **Character shots (3+ characters)** | `kling-o3-standard-reference-to-video` | Auto-fallback — structured `elements` for multi-character identity |
-| **Establishing / mood / action** | `seedance-2-0-image-to-video` | No characters — epic cinematic quality, physics-aware, up to 15s |
+| **Character shots (up to ~6 characters)** | `seedance-2-0-enhanced-reference-to-video` | Default R2V — up to 9 `reference_image_urls` with `@Image` tags (chars + blocking plate + location angles), 1080p, up to 15s, native stereo audio |
+| **Character shots (budget overflow)** | `kling-o3-standard-reference-to-video` | Auto-fallback — structured `elements` for multi-character identity |
+| **Establishing / mood / action** | `seedance-2-0-enhanced-reference-to-video` | Anchors to location reference angles via `@Image` tags |
 
 These defaults are overridable per-project via `series.json` → `videoDefaults`. To target a non-Seedance family (e.g. for accounts that lack Seedance access, or projects that need a different look), set `videoDefaults` to `kling-o3-standard-reference-to-video` (character consistency) and `veo3.1-fast-image-to-video` (atmosphere). Image models default to `nano-banana-2` / `nano-banana-2-edit` for all panels regardless of video family.
 
@@ -260,9 +260,9 @@ Defaults are configurable per-project under `series.json`:
 ```json
 {
   "videoDefaults": {
-    "actionModel": "seedance-2-0-image-to-video",
-    "atmosphereModel": "seedance-2-0-image-to-video",
-    "characterConsistencyModel": "seedance-2-0-reference-to-video",
+    "actionModel": "seedance-2-0-enhanced-reference-to-video",
+    "atmosphereModel": "seedance-2-0-enhanced-reference-to-video",
+    "characterConsistencyModel": "seedance-2-0-enhanced-reference-to-video",
     "imageDefaults": {
       "generationModel": "nano-banana-2",
       "editModel": "nano-banana-2-edit"

@@ -248,6 +248,35 @@ export function locationSlugify(name: string): string {
   return slugify(name);
 }
 
+/**
+ * Directory for composed storyboard blocking plates (StoryboardReference).
+ * Plates are series-level assets keyed by slug — slugs are conventionally
+ * prefixed with the episode (e.g. "e01-courtyard-chalice-fight") so beats
+ * from different episodes never collide.
+ */
+export function getStoryboardDir(series: SeriesState): string {
+  return join(series.outputDir, 'storyboards');
+}
+
+/**
+ * Absolute path to a storyboard blocking plate by slug. Returns the first
+ * existing candidate (slugified, then raw name — mirroring getLocationDir's
+ * tolerance for files created outside the CLI), falling back to the
+ * canonical slugified path (the write target) when none exists yet.
+ * Callers deciding whether to USE the plate should existsSync() the result.
+ */
+export function getStoryboardRefPath(series: SeriesState, slug: string): string {
+  const dir = getStoryboardDir(series);
+  const safe = slug
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  for (const candidate of [join(dir, `${safe}.png`), join(dir, `${slug}.png`)]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return join(dir, `${safe}.png`);
+}
+
 /** Find a location by slug (preferred) or display name. */
 export function getLocation(series: SeriesState, slugOrName: string): Location | undefined {
   const needle = slugOrName.toLowerCase();

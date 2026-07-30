@@ -225,10 +225,13 @@ export function resolveVideoFamilyDefaults(
     case 'seedance':
     case 'auto':
     default:
+      // Enhanced R2V for all three lanes (2026-07-30): reference-first
+      // generation. Every shot — action, atmosphere, character — renders on
+      // the R2V lane with the full reference stack; no start image needed.
       return {
-        actionModel: 'seedance-2-0-image-to-video',
-        atmosphereModel: 'seedance-2-0-image-to-video',
-        characterConsistencyModel: 'seedance-2-0-reference-to-video',
+        actionModel: 'seedance-2-0-enhanced-reference-to-video',
+        atmosphereModel: 'seedance-2-0-enhanced-reference-to-video',
+        characterConsistencyModel: 'seedance-2-0-enhanced-reference-to-video',
       };
   }
 }
@@ -352,6 +355,39 @@ export interface Location {
   referenceModel?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Storyboard reference (composed blocking plate)
+//
+// A storyboard reference is a COMPOSED image showing multiple characters
+// positioned in a location, in relation to each other — e.g. "Bob and Alice
+// fighting over the golden chalice inside the courtyard". It is NOT a start
+// frame: it is sent as one of the reference_image_urls with an @ImageN role
+// clause that tells the model "use this for composition, blocking, and
+// spatial relationships; take each character's appearance from their own
+// reference". Generated per scene BEAT (key moment) during storyboarding and
+// reused by every shot in that beat, so consecutive shots agree about where
+// everyone is standing across space and time even as camera angles change.
+// ---------------------------------------------------------------------------
+
+export interface StoryboardReference {
+  /** Filesystem-safe slug; also the file stem under storyboards/<episode>/. */
+  slug: string;
+  /** Prose description of the moment: who is where, doing what, with what. */
+  description: string;
+  /** Character names composed into the plate (drives face refs at gen time). */
+  characters: string[];
+  /** Location slug the moment takes place in (drives the env ref at gen time). */
+  location?: string;
+  /** Episode this beat belongs to. */
+  episode: number;
+  /** Shot numbers (or suffixed ids like "3b") this plate anchors. */
+  shotIds: Array<number | string>;
+  /** Deterministic seed for reproducible regeneration. */
+  seed: number;
+  /** Image model used to compose the plate. */
+  referenceModel?: string;
+}
+
 /**
  * @deprecated Use Character instead. Kept for backward compatibility.
  */
@@ -380,6 +416,12 @@ export interface EpisodeScript {
    * reference images can be generated once and reused across shots/episodes.
    */
   locations?: Location[];
+  /**
+   * Composed storyboard blocking plates for this episode's key beats
+   * (see StoryboardReference). Planned during workshop/storyboard, generated
+   * per beat, and referenced by shots via ShotScript.storyboardRef.
+   */
+  storyboardRefs?: StoryboardReference[];
   /**
    * Optional per-act music cues. When set, the assembler renders each cue
    * and ffmpeg-crossfades between adjacent cues at their fade points. The
@@ -519,6 +561,15 @@ export interface ShotScript {
    * reference_image_urls + an @ImageN env tag (Seedance / HappyHorse).
    */
   location?: string;
+  /**
+   * Slug of the StoryboardReference (composed blocking plate) for this shot's
+   * scene beat. When set and the plate exists on disk, the video generator
+   * appends it to reference_image_urls with an @ImageN blocking role clause —
+   * PROTECTED in the budget allocator (dropped last, after extra character
+   * angles and extra location angles). Set by the beat planner during
+   * storyboarding or by hand.
+   */
+  storyboardRef?: string;
   dialogue: { character: string; line: string; delivery?: string } | null;
   sfx: string | null;
   cameraMovement: string;
@@ -650,9 +701,14 @@ export interface GenerationPlan {
 // These are sensible defaults. Override per-project via series.json videoDefaults.
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_ACTION_MODEL = 'seedance-2-0-image-to-video';
-export const DEFAULT_ATMOSPHERE_MODEL = 'seedance-2-0-image-to-video';
-export const DEFAULT_CHARACTER_CONSISTENCY_MODEL = 'seedance-2-0-reference-to-video';
+// Seedance 2.0 R2V Enhanced is the default for ALL THREE lanes (2026-07-30).
+// Reference-first generation: consistency comes from the full reference stack
+// (character sheets, location angles, storyboard blocking plates) rather than
+// a start image. Enhanced R2V is delisted from GET /models but live on
+// queue/quote (probed 2026-07-15); 1080p-capable, ~1.5x standard R2V price.
+export const DEFAULT_ACTION_MODEL = 'seedance-2-0-enhanced-reference-to-video';
+export const DEFAULT_ATMOSPHERE_MODEL = 'seedance-2-0-enhanced-reference-to-video';
+export const DEFAULT_CHARACTER_CONSISTENCY_MODEL = 'seedance-2-0-enhanced-reference-to-video';
 export const KLING_R2V_MODEL = 'kling-o3-standard-reference-to-video';
 export const KLING_MULTISHOT_MODEL = 'kling-o3-pro-image-to-video';
 
@@ -779,6 +835,12 @@ export const MODELS_USING_IMAGE_TAGS = new Set([
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
   'grok-imagine-reference-to-video',
+  // HappyHorse 1.1 R2V honors @ImageN prompt mentions — probed 2026-07-30
+  // (quote accepted @ImageN prompt + 9 refs + reference_audio_urls with no
+  // image_url; paid 3s render placed both tagged characters correctly per
+  // the prompt's @Image1/@Image2 assignments). NOTE: quote did NOT reject a
+  // 10th ref, but we keep the documented 9-image budget.
+  'happyhorse-1-1-reference-to-video',
 ]);
 
 export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
@@ -832,6 +894,28 @@ export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
   'seedance-2-0-fast-reference-to-video',
   'happyhorse-1-1-reference-to-video',
 ]);
+
+/**
+ * Per-model reference_image_urls budget. The Venice API cap is 9 (per the
+ * venice-video SKILL.md params table); models not listed here fall back to
+ * the legacy conservative cap of 4. The old universal `.slice(0, 4)` was a
+ * harness convention, NOT the API limit — Seedance 2.0 R2V and HappyHorse
+ * 1.1 R2V both accept up to 9 flat reference images, which is what makes the
+ * full reference stack (character sheets + multi-angle locations + storyboard
+ * blocking plates) possible.
+ */
+export const MAX_REFERENCE_IMAGES_BY_MODEL: Record<string, number> = {
+  'seedance-2-0-reference-to-video': 9,
+  'seedance-2-0-enhanced-reference-to-video': 9,
+  'seedance-2-0-fast-reference-to-video': 9,
+  'happyhorse-1-1-reference-to-video': 9,
+};
+
+export const DEFAULT_MAX_REFERENCE_IMAGES = 4;
+
+export function getMaxReferenceImages(modelId: string): number {
+  return MAX_REFERENCE_IMAGES_BY_MODEL[modelId] ?? DEFAULT_MAX_REFERENCE_IMAGES;
+}
 
 // ---------------------------------------------------------------------------
 // Video Element (for elements param)

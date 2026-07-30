@@ -6,12 +6,16 @@
 // throws a sentinel, so we can assert the exact body the harness would send to
 // POST /api/v1/video/queue — WITHOUT any network call or generation budget.
 //
-// Asserts:
+// Asserts (reference-first upgrade, 2026-07-30):
 //   1. Seedance R2V dialogue shot → body.reference_audio_urls carries the
-//      speaker's voice-donor clip, AND the location wide ref lands in
-//      body.reference_image_urls (characters first, location last).
-//   2. Kling O3 R2V shot (3 characters) → location lands in body.scene_image_urls
-//      and NO reference_audio_urls (Kling is not reference-audio-capable).
+//      speaker's voice-donor clip, the FULL slot plan lands in
+//      body.reference_image_urls (character primary, location angles, second
+//      character angle), and NO image_url is sent (pure reference mode).
+//   2. Seedance R2V shot with 3 characters STAYS on Seedance (9-image budget;
+//      the old 3+ → Kling fallback only fires when characters overflow the
+//      budget) with one ref-audio clip for the speaker.
+//   3. Kling O3 R2V (explicit consistency model) → location lands in
+//      body.scene_image_urls and NO reference_audio_urls.
 //
 // Run: `npm run build && node tests/test-queue-body-refs.mjs`. Requires ffmpeg.
 
@@ -171,19 +175,29 @@ ok('Seedance: reference_audio_urls present (1 clip)',
   Array.isArray(seedanceBody?.reference_audio_urls) && seedanceBody.reference_audio_urls.length === 1);
 ok('Seedance: reference audio is an audio data URI',
   /^data:audio\/(mpeg|wav);base64,/.test(seedanceBody?.reference_audio_urls?.[0] ?? ''));
-ok('Seedance: reference_image_urls has char + location (2)',
-  Array.isArray(seedanceBody?.reference_image_urls) && seedanceBody.reference_image_urls.length === 2);
+// Slot plan: @Image1 ARIA front, @Image2 workshop wide, @Image3 workshop
+// medium, @Image4 ARIA three-quarter (second angle) = 4 refs.
+ok('Seedance: reference_image_urls carries the full slot plan (4)',
+  Array.isArray(seedanceBody?.reference_image_urls) && seedanceBody.reference_image_urls.length === 4);
 ok('Seedance: reference images are image data URIs',
   (seedanceBody?.reference_image_urls ?? []).every(u => /^data:image\//.test(u)));
 ok('Seedance: prompt binds @Audio1 for voice identity',
   /Use @Audio1 only for voice identity/.test(seedanceBody?.prompt ?? ''));
+ok('Seedance: prompt declares @Image1 is ARIA',
+  /@Image1 is ARIA/.test(seedanceBody?.prompt ?? ''));
 ok('Seedance: prompt tags @Image2 location environment',
   /@Image2 is the location environment reference/.test(seedanceBody?.prompt ?? ''));
+ok('Seedance: prompt tags @Image3 as a second location angle',
+  /@Image3 is a second angle of the same location/.test(seedanceBody?.prompt ?? ''));
+ok('Seedance: prompt tags @Image4 as a second ARIA angle',
+  /@Image4 is a second angle of ARIA/.test(seedanceBody?.prompt ?? ''));
+ok('Seedance: NO image_url (pure reference mode)',
+  seedanceBody?.image_url === undefined);
 ok('Seedance: no scene_image_urls (not scene-capable)',
   seedanceBody?.scene_image_urls === undefined);
 
-// ── Case 2: Kling O3 R2V shot (3 chars) → location via scene_image_urls ────
-const klingShot = {
+// ── Case 2: Seedance R2V with 3 characters STAYS in-family (9-image budget) ─
+const threeCharShot = {
   shotNumber: 2, type: 'dialogue', duration: '10s', videoModel: 'action',
   environment: 'NIGHT_INTERIOR', description: 'ARIA, BEX and CID argue over the console.',
   characters: ['ARIA', 'BEX', 'CID'], location: 'workshop', motion: 'medium',
@@ -192,9 +206,30 @@ const klingShot = {
   cameraMovement: 'static', transition: 'CUT',
 };
 
-const klingBody = await captureBody(baseSeries, klingShot);
+const threeCharBody = await captureBody(baseSeries, threeCharShot);
+ok('Seedance 3-char: queue body captured', Boolean(threeCharBody));
+ok('Seedance 3-char: stays on Seedance R2V (no Kling fallback under the 9-image budget)',
+  String(threeCharBody?.model).includes('seedance') && String(threeCharBody?.model).includes('reference-to-video'));
+// 3 primaries + 2 location angles + 3 second angles = 8 ≤ 9.
+ok('Seedance 3-char: reference_image_urls carries 8 refs',
+  Array.isArray(threeCharBody?.reference_image_urls) && threeCharBody.reference_image_urls.length === 8);
+ok('Seedance 3-char: speaker voice ref present',
+  Array.isArray(threeCharBody?.reference_audio_urls) && threeCharBody.reference_audio_urls.length === 1);
+
+// ── Case 3: Kling O3 R2V (explicit) → location via scene_image_urls ────────
+const klingSeries = {
+  ...baseSeries,
+  videoDefaults: {
+    ...baseSeries.videoDefaults,
+    actionModel: 'kling-o3-standard-reference-to-video',
+    characterConsistencyModel: 'kling-o3-standard-reference-to-video',
+  },
+};
+const klingShot = { ...threeCharShot, shotNumber: 2 };
+
+const klingBody = await captureBody(klingSeries, klingShot);
 ok('Kling: queue body captured', Boolean(klingBody));
-ok('Kling: 3-character shot fell back to Kling O3 R2V',
+ok('Kling: model is Kling O3 R2V',
   String(klingBody?.model).includes('kling') && String(klingBody?.model).includes('reference-to-video'));
 ok('Kling: location in scene_image_urls (1)',
   Array.isArray(klingBody?.scene_image_urls) && klingBody.scene_image_urls.length === 1);

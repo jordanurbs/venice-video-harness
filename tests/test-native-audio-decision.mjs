@@ -46,13 +46,18 @@ function makeShot(overrides = {}) {
   };
 }
 
-// Narrator shot -> audio defaults to false.
+// Narrator shot -> audio stays TRUE (ambient + SFX wanted; the VO line never
+// reaches the prompt, so there is no competing narrator to suppress — see the
+// audio-decision comment in buildVideoPrompt). Muting requires
+// suppressModelNarration or nativeAudio:'mute'.
 {
   const shot = makeShot({
     dialogue: { character: 'NARRATOR', line: 'Here, in suburban Bellevue...', delivery: '' },
   });
   const p = buildVideoPrompt(shot, series);
-  ok('NARRATOR shot: audio=false (auto)', p.audio === false);
+  ok('NARRATOR shot: audio=true (ambient kept; VO line withheld from prompt)', p.audio === true);
+  ok('NARRATOR shot: prompt withholds the VO line', !p.prompt.includes('suburban Bellevue'));
+  ok('NARRATOR shot: prompt declares no spoken words', /No narration, no voice-over/.test(p.prompt));
 }
 
 // On-camera dialogue -> audio defaults to true (model is expected to lip-sync).

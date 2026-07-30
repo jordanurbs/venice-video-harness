@@ -62,6 +62,10 @@ import { buildImagePrompt, buildCharacterReferencePromptParts } from './prompt-b
 import { generateEpisodeVideos } from './video-generator.js';
 import { generateVoiceReference } from './voice-reference.js';
 import { generateLocationReferences } from './location-generator.js';
+import {
+  ensureEpisodeStoryboardReferences,
+  generateStoryboardReference,
+} from './storyboard-reference-generator.js';
 import { generateSubtitles, saveSrt } from './subtitle-generator.js';
 import { fixPanel, refineWithReferences, refineStyleConsistency } from './panel-fixer.js';
 import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
@@ -784,6 +788,46 @@ program
     console.log(`\nLocation references for ${location.name}: generated ${generated.length}, skipped ${skipped.length}`);
   });
 
+// ── generate-storyboard-refs ──────────────────────────────────────────
+program
+  .command('generate-storyboard-refs')
+  .description('Plan + generate composed storyboard blocking plates (multi-character beats) for an episode')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
+  .option('--slug <slug>', 'Regenerate only this plate (must already be planned in script.json)')
+  .option('--model <model>', 'Override the image-generation model')
+  .option('--force', 'Regenerate plates that already exist (archives prior versions)', false)
+  .action(async (opts: { project: string; episode: number; slug?: string; model?: string; force: boolean }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+
+    const script = await loadEpisodeScript(series, opts.episode);
+    if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
+
+    const apiKey = getVeniceApiKey();
+    const client = new VeniceClient(apiKey);
+
+    if (opts.slug) {
+      const ref = (script.storyboardRefs ?? []).find(r => r.slug === opts.slug);
+      if (!ref) { console.error(`Storyboard ref "${opts.slug}" not planned in this episode.`); process.exit(1); }
+      const result = await generateStoryboardReference(client, series, ref, {
+        model: opts.model, force: opts.force,
+      });
+      console.log(`\nStoryboard plate ${result.skipped ? 'reused' : 'generated'}: ${result.path}`);
+    } else {
+      const { generated, skipped } = await ensureEpisodeStoryboardReferences(client, series, script, {
+        model: opts.model, force: opts.force,
+      });
+      console.log(`\nStoryboard plates: generated ${generated.length}, reused ${skipped.length}`);
+      for (const ref of script.storyboardRefs ?? []) {
+        console.log(`  ${ref.slug}: shots ${ref.shotIds.join(', ')} — ${ref.characters.join(' + ')}${ref.location ? ` @ ${ref.location}` : ''}`);
+      }
+    }
+
+    await saveEpisodeScript(series, script);
+    await saveSeries(series);
+  });
+
 // ── workshop-episode ──────────────────────────────────────────────────
 program
   .command('workshop-episode')
@@ -994,6 +1038,19 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
       // tagged on shots but missing from the script's locations[] are also
       // synthesized as stubs so every referenced slug resolves.
       await mergeAndGenerateEpisodeLocations(client, series, script);
+
+      // Plan storyboard blocking plates per scene beat (multi-character runs
+      // in the same location) and generate them now so the operator can QA
+      // the blocking alongside the script draft. Assignments land on
+      // shot.storyboardRef; plates go to storyboards/<slug>.png.
+      try {
+        const { generated, skipped } = await ensureEpisodeStoryboardReferences(client, series, script);
+        if (generated.length > 0 || skipped.length > 0) {
+          console.log(`  Storyboard blocking plates: ${generated.length} generated, ${skipped.length} reused.`);
+        }
+      } catch (err) {
+        console.warn(`  ⚠ Storyboard plate pass failed: ${(err as Error).message}`);
+      }
 
       const savedPath = await saveEpisodeScript(series, script);
       await saveSeries(series);
@@ -1983,6 +2040,22 @@ program
       }
       return mix;
     })();
+
+    // Storyboard blocking plates (per scene beat): plan beats for the
+    // episode, generate any plates missing on disk, and persist the
+    // storyboardRef assignments so the video prompts can bind them as
+    // @ImageN composition references. Best-effort — a failure just means
+    // the shots render without a blocking plate.
+    try {
+      const { generated, skipped } = await ensureEpisodeStoryboardReferences(client, series, script);
+      if (generated.length > 0 || skipped.length > 0) {
+        console.log(`Storyboard blocking plates: ${generated.length} generated, ${skipped.length} reused.\n`);
+        await saveEpisodeScript(series, script);
+      }
+    } catch (err) {
+      console.warn(`⚠ Storyboard plate pass failed: ${(err as Error).message}\n`);
+    }
+
     const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan, effectiveAudioMix);
     await saveGenerationPlan(episodeDir, plan);
 

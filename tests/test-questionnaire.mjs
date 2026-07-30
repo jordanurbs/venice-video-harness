@@ -14,8 +14,8 @@ function ok(label, cond, detail) {
 // Default (no options) → Seedance defaults, no strategy fields set.
 {
   const s = createSeries('Default Series', 'concept', 'drama', 'somewhere');
-  ok('default actionModel is Seedance i2v', s.videoDefaults.actionModel === 'seedance-2-0-image-to-video');
-  ok('default characterConsistencyModel is Seedance R2V', s.videoDefaults.characterConsistencyModel === 'seedance-2-0-reference-to-video');
+  ok('default actionModel is Seedance R2V Enhanced', s.videoDefaults.actionModel === 'seedance-2-0-enhanced-reference-to-video');
+  ok('default characterConsistencyModel is Seedance R2V Enhanced', s.videoDefaults.characterConsistencyModel === 'seedance-2-0-enhanced-reference-to-video');
   ok('audioStrategy unset by default', s.videoDefaults.audioStrategy === undefined);
   ok('videoFamilyPreference unset by default', s.videoDefaults.videoFamilyPreference === undefined);
 }
@@ -55,7 +55,7 @@ function ok(label, cond, detail) {
   const s = createSeries('Auto Series', 'concept', 'drama', 'somewhere', {
     videoFamilyPreference: 'auto',
   });
-  ok('auto family keeps Seedance defaults', s.videoDefaults.actionModel === 'seedance-2-0-image-to-video');
+  ok('auto family keeps Seedance defaults', s.videoDefaults.actionModel === 'seedance-2-0-enhanced-reference-to-video');
   ok('auto videoFamilyPreference persisted', s.videoDefaults.videoFamilyPreference === 'auto');
 }
 

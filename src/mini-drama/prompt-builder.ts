@@ -19,13 +19,13 @@ import {
   MODELS_SUPPORTING_REFERENCE_AUDIO,
   MODELS_USING_IMAGE_TAGS,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
+  getMaxReferenceImages,
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { parseShotDuration } from './generation-planner.js';
 import { getMaxPositivePromptChars } from '../venice/models.js';
-import { getLocation, getLocationDir } from '../series/manager.js';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { getLocation } from '../series/manager.js';
+import { buildReferenceSlotPlan, type ReferenceSlot } from './reference-slots.js';
 
 export interface MiniDramaImagePrompt {
   prompt: string;
@@ -78,9 +78,21 @@ export interface MiniDramaVideoPrompt {
    * one image per character first, then the location — so @ImageN in the
    * prompt matches the request array. Undefined for Kling (scene_image_urls),
    * when the shot has no location, when refs don't exist on disk, or when the
-   * 4-image cap is already full of characters.
+   * budget is already full of characters.
+   *
+   * @deprecated Superseded by `referenceSlots` on @Image-tag models; kept
+   * for callers that still read it (mirrors the first location slot).
    */
   locationEnvSlot?: { slug: string; imageIndex: number };
+  /**
+   * The FULL ordered @ImageN slot plan for @Image-tag models (see
+   * reference-slots.ts): character primaries, storyboard blocking plates,
+   * location angles, and second character angles, budgeted per model (9 on
+   * Seedance R2V / HappyHorse 1.1 R2V). The video generator pushes
+   * `reference_image_urls` in EXACTLY this order so the prompt's @ImageN
+   * bindings match the request array. Undefined for non-tag models.
+   */
+  referenceSlots?: ReferenceSlot[];
   /** How the model was selected — logged for transparency. */
   modelResolution?: ModelResolution;
 }
@@ -202,13 +214,16 @@ export function resolveVideoModel(
   const hasCharacters = shot.characters.length > 0;
 
   if (!hasCharacters) {
+    // With Enhanced R2V as the default for all lanes, even empty
+    // establishing/atmosphere shots can anchor to location references
+    // (@ImageN env tags) when the base model supports them.
     return {
       modelId: baseModel,
       upgraded: false,
-      reason: 'no characters — prompt-first model',
+      reason: 'no characters — atmosphere model (location refs when supported)',
       autoUseElements: false,
-      autoUseReferenceImages: false,
-      useImageTags: false,
+      autoUseReferenceImages: MODELS_SUPPORTING_REFERENCE_IMAGES.has(baseModel),
+      useImageTags: MODELS_USING_IMAGE_TAGS.has(baseModel),
     };
   }
 
@@ -229,10 +244,13 @@ export function resolveVideoModel(
     };
   }
 
-  // 3+ characters with a flat-ref R2V model (e.g. Seedance) — fall back to
-  // Kling O3 R2V which supports structured elements for better per-character
-  // identity separation when reference image budget is tight.
-  const needsElementsFallback = shot.characters.length >= 3
+  // Kling fallback only when the character count alone would overflow the
+  // flat-reference budget (leaving no room for location/storyboard refs).
+  // With the 9-image budget on Seedance 2.0 R2V / Enhanced, scenes with up
+  // to ~6 characters stay in-family; the old 3+ threshold dated from the
+  // 4-image era.
+  const refBudget = getMaxReferenceImages(consistencyModel);
+  const needsElementsFallback = shot.characters.length > Math.max(2, refBudget - 3)
     && MODELS_USING_IMAGE_TAGS.has(consistencyModel)
     && !MODELS_SUPPORTING_ELEMENTS.has(consistencyModel);
 
@@ -240,7 +258,7 @@ export function resolveVideoModel(
     return {
       modelId: KLING_R2V_MODEL,
       upgraded: true,
-      reason: '3+ characters — falling back to Kling O3 R2V for structured elements',
+      reason: `${shot.characters.length} characters overflow the ${refBudget}-reference budget — falling back to Kling O3 R2V for structured elements`,
       autoUseElements: true,
       autoUseReferenceImages: true,
       useImageTags: false,
@@ -419,9 +437,31 @@ export function buildVideoPrompt(
     .filter((c): c is MiniDramaCharacter => Boolean(c));
 
   let characterElements: CharacterElementSlot[] | undefined;
+  let referenceSlots: ReferenceSlot[] | undefined;
 
-  if ((useElements || useImageTags) && resolvedCharacters.length > 0) {
-    characterElements = resolvedCharacters.slice(0, useImageTags ? 4 : 2).map((char, index) => ({
+  if (useImageTags) {
+    // Central slot allocator: character primaries first, then storyboard
+    // blocking plate (protected), location angles, second character angles —
+    // budgeted per model (9 on Seedance R2V). The @ImageN indices here are
+    // authoritative; the video generator pushes reference_image_urls in
+    // exactly this order.
+    const plan = buildReferenceSlotPlan(series, shot, modelId, {
+      characterNames: resolvedCharacters.map(c => c.name),
+    });
+    referenceSlots = plan.slots;
+    for (const note of plan.dropped) {
+      console.warn(`  ⚠ Reference budget: dropped ${note}`);
+    }
+    if (plan.characterSlotByName.size > 0) {
+      characterElements = resolvedCharacters
+        .filter(char => plan.characterSlotByName.has(char.name.toUpperCase()))
+        .map(char => ({
+          characterName: char.name,
+          elementIndex: plan.characterSlotByName.get(char.name.toUpperCase())!,
+        }));
+    }
+  } else if (useElements && resolvedCharacters.length > 0) {
+    characterElements = resolvedCharacters.slice(0, 2).map((char, index) => ({
       characterName: char.name,
       elementIndex: index + 1,
     }));
@@ -433,6 +473,20 @@ export function buildVideoPrompt(
 
   const cameraTerm = CAMERA_TERMS[shot.cameraMovement.toLowerCase()] ?? shot.cameraMovement;
   parts.push(`${cameraTerm}.`);
+
+  // Up-front identity declarations for @Image-tag models ("@Image1 is Bob").
+  // Restating the invariant identity per shot (rule 37) plus the explicit
+  // tag→name binding keeps multi-reference prompts unambiguous for the model.
+  if (useImageTags && characterElements) {
+    for (const slot of characterElements) {
+      const char = resolvedCharacters.find(
+        c => c.name.toUpperCase() === slot.characterName.toUpperCase(),
+      );
+      if (!char) continue;
+      const wardrobe = shot.episodeWardrobe?.[char.name.toUpperCase()] ?? char.wardrobe;
+      parts.push(`@Image${slot.elementIndex} is ${char.name} — wearing ${wardrobe}.`);
+    }
+  }
 
   if ((useElements || useImageTags) && characterElements) {
     let desc = shot.description;
@@ -460,12 +514,26 @@ export function buildVideoPrompt(
     && MODELS_SUPPORTING_REFERENCE_AUDIO.has(modelId);
   let voiceReferenceSlots: VoiceReferenceSlot[] | undefined;
   if (voiceRefEnabled && shot.dialogue && !isVoiceOverLine) {
-    const speakingChar = series.characters.find(
-      c => c.name.toUpperCase() === shot.dialogue!.character.toUpperCase(),
-    );
+    // Multi-speaker: the dialogue speaker gets @Audio1; every OTHER on-screen
+    // character with a voice-donor clip gets the next slot (Venice budget:
+    // ≤3 clips, ≤15s aggregate — enforced downstream in renderVideoFile).
+    // This keeps each character's voice right even when the model improvises
+    // reactions/off-lines for non-speaking characters.
+    const slots: VoiceReferenceSlot[] = [];
+    const speakerUpper = shot.dialogue.character.toUpperCase();
+    const speakingChar = series.characters.find(c => c.name.toUpperCase() === speakerUpper);
     if (speakingChar?.voiceReferencePath) {
-      voiceReferenceSlots = [{ characterName: speakingChar.name, audioIndex: 1 }];
+      slots.push({ characterName: speakingChar.name, audioIndex: slots.length + 1 });
     }
+    for (const charName of shot.characters) {
+      if (charName.toUpperCase() === speakerUpper) continue;
+      if (slots.length >= 3) break;
+      const char = series.characters.find(c => c.name.toUpperCase() === charName.toUpperCase());
+      if (char?.voiceReferencePath) {
+        slots.push({ characterName: char.name, audioIndex: slots.length + 1 });
+      }
+    }
+    if (slots.length > 0) voiceReferenceSlots = slots;
   }
 
   if (shot.dialogue && !isVoiceOverLine) {
@@ -494,6 +562,18 @@ export function buildVideoPrompt(
         `regenerate clean studio dialogue, do not copy any noise from the reference.`,
       );
     }
+
+    // Bind the remaining voice-donor clips to their characters so any
+    // improvised lines/reactions from non-speaking characters use the
+    // right voice too.
+    for (const other of voiceReferenceSlots ?? []) {
+      if (slot && other.audioIndex === slot.audioIndex) continue;
+      const otherCharSlot = characterElements?.find(
+        s => s.characterName.toUpperCase() === other.characterName.toUpperCase(),
+      );
+      const otherRef = otherCharSlot ? `${tagPrefix}${otherCharSlot.elementIndex}` : other.characterName;
+      parts.push(`@Audio${other.audioIndex} is ${otherRef}'s voice — use it only if ${otherRef} speaks.`);
+    }
   }
 
   if (shot.sfx) {
@@ -508,13 +588,9 @@ export function buildVideoPrompt(
     parts.push(`Scene style references: ${refs.join(', ')}.`);
   }
 
-  // Location environment reference. When the shot is tagged with a location
-  // that has generated reference images, inject its locked description +
-  // lighting so consecutive shots in the same place stay consistent
-  // (anti-pattern 7). On @Image-tag models (Seedance / HappyHorse — no
-  // scene_image_urls) the wide ref folds into reference_image_urls; compute
-  // the env slot so the prompt's @ImageN matches the generator's push order
-  // (one image per character first, then the location).
+  // Location environment description. When the shot is tagged with a location,
+  // inject its locked description + lighting so consecutive shots in the same
+  // place stay consistent (anti-pattern 7).
   let locationEnvSlot: { slug: string; imageIndex: number } | undefined;
   if (shot.location) {
     const loc = getLocation(series, shot.location);
@@ -522,21 +598,29 @@ export function buildVideoPrompt(
       const envNote = [loc.description, loc.lightingNotes ? `Lighting: ${loc.lightingNotes}.` : '']
         .filter(Boolean).join(' ');
       if (envNote) parts.push(`Location: ${envNote}`);
+    }
+  }
 
-      if (useImageTags && !MODELS_SUPPORTING_SCENE_IMAGES.has(modelId)) {
-        const dir = getLocationDir(series, loc.slug);
-        const hasRef = ['wide.png', 'medium.png', 'detail.png']
-          .some(f => existsSync(join(dir, f)));
-        const charCount = characterElements?.length ?? 0;
-        if (hasRef && charCount < 4) {
-          const imageIndex = charCount + 1;
-          locationEnvSlot = { slug: loc.slug, imageIndex };
-          parts.push(
-            `@Image${imageIndex} is the location environment reference — match its setting, ` +
-            `architecture, and lighting; it is not a character.`,
-          );
-        }
-      }
+  // Role clauses for every non-primary-character reference slot (storyboard
+  // blocking plates, location angles, second character angles). The clause
+  // text lives on the slot itself (reference-slots.ts) so the prompt and the
+  // reference_image_urls array can never disagree about what @ImageN means.
+  if (useImageTags && referenceSlots) {
+    for (const slot of referenceSlots) {
+      if (slot.kind === 'character-primary') continue; // named via description substitution
+      parts.push(`@Image${slot.imageIndex} ${slot.roleClause}.`);
+    }
+    const firstLocationSlot = referenceSlots.find(s => s.kind === 'location');
+    if (firstLocationSlot) {
+      locationEnvSlot = { slug: firstLocationSlot.label, imageIndex: firstLocationSlot.imageIndex };
+    }
+    const sbSlot = referenceSlots.find(s => s.kind === 'storyboard');
+    if (sbSlot) {
+      parts.push(
+        'Every reference must stay consistent across space and time: characters keep their ' +
+        'appearance, the location keeps its geography, and the blocking follows ' +
+        `@Image${sbSlot.imageIndex} even as the camera angle changes.`,
+      );
     }
   }
 
@@ -583,6 +667,7 @@ export function buildVideoPrompt(
     sceneImagePaths: shot.sceneImagePaths,
     voiceReferenceSlots,
     locationEnvSlot,
+    referenceSlots,
     referenceImageUrls: useRefs ? [] : undefined,
     modelResolution: resolution,
   };

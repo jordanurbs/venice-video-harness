@@ -204,11 +204,11 @@ Three reference mechanisms exist for video generation, each supported by differe
 
 ### `reference_image_urls` (Flat General)
 
-- **Supported by:** `seedance-2-0-reference-to-video`, `kling-o3-standard-reference-to-video`, `kling-o3-pro-reference-to-video`, `vidu-q3-image-to-video`
-- **Structure:** Flat array of up to 4 reference images
+- **Supported by:** `seedance-2-0-reference-to-video` (+ `-enhanced-` / `-fast-` variants), `happyhorse-1-1-reference-to-video`, `kling-o3-standard-reference-to-video`, `kling-o3-pro-reference-to-video`, `vidu-q3-image-to-video`
+- **Structure:** Flat array — **up to 9** on the Seedance 2.0 R2V family and HappyHorse 1.1 R2V (`getMaxReferenceImages()` in `src/series/types.ts`); legacy 4 elsewhere
 - **Prompt integration:** For Seedance/Grok Imagine R2V, use `@Image1`, `@Image2` tags. For Kling R2V, standard character names or `@Element` tokens (when elements are also active). For Vidu, standard character names.
-- **Typical reference images:** Front-facing + three-quarter per character, capped at 4 total
-- **When to use:** Consistency model selected AND model supports reference images. For Seedance R2V, this is the primary identity mechanism (no elements). For Kling R2V, used alongside `elements` or as a standalone fallback.
+- **Slot order (reference-first, 2026-07-30, `src/mini-drama/reference-slots.ts`):** one primary angle per character → storyboard blocking plate (protected) → location angles (wide/medium/detail) → second character angles. Overflow drops second character angles first, then trailing location angles.
+- **When to use:** Always on the Seedance Enhanced default (pure reference mode — no `image_url`). For Seedance R2V, this is the primary identity mechanism (no elements). For Kling R2V, used alongside `elements` or as a standalone fallback.
 
 ### `image_urls` (Scene/Environment Anchoring)
 
@@ -311,18 +311,21 @@ Generate consistent storyboard panels using two Venice models in sequence:
 
 Construct prompts differently depending on the resolved model's capabilities:
 
-### Image-Tag R2V Models (Seedance 2.0 R2V — default)
+### Image-Tag R2V Models (Seedance 2.0 R2V Enhanced — default for all lanes)
 
 - Replace character names in descriptions with `@Image1`, `@Image2` tokens via regex
+- Declare each character up front: `@Image1 is Bob — wearing …` (rule 37 trait restatement)
 - Dialogue speaker uses image ref: `[@Image1, voice description, delivery]: "dialogue line"`
-- Attach `reference_image_urls` at the API layer (up to 4 flat images, front + three-quarter per character)
-- Keep prompts concise (under 60 words). Use the 5-part structure: Subject, Action, Camera, Style, Constraints.
+- Attach `reference_image_urls` at the API layer in the slot-planner order (up to 9: character primaries → storyboard blocking plate → location angles → second character angles)
+- Emit a role clause per non-character slot: location angles ("@Image4 is a second angle of the same location"), blocking plates ("use ONLY for composition, blocking, and spatial relationships")
+- **Pure reference mode:** no `image_url` start frame when the slot plan is populated — references carry all consistency
+- Keep prompts concise. Use the 5-part structure: Subject, Action, Camera, Style, Constraints.
 - Use physics-aware language: describe forces and materials, not just actions
 - For multi-shot within a single generation, use "lens switch" between scene descriptions
 - Append compact aesthetic + audio exclusion suffix
 - **Important:** Seedance does NOT support `elements`, `scene_image_urls`, or `end_image_url`
 
-### Elements-Capable Models (Kling O3 R2V — 3+ character fallback)
+### Elements-Capable Models (Kling O3 R2V — budget-overflow fallback, 7+ characters)
 
 - Replace character names in descriptions with `@Element1`, `@Element2` tokens via regex
 - Dialogue speaker uses element ref: `@Element1 (voice: low contralto...) says nervously: "..."`
