@@ -200,7 +200,7 @@ export function checkVoTruncation(
       kind: 'vo-truncation',
       atSec: r.lastAlignedSec,
       severity: 'fail',
-      message: `VO ended at ${r.lastAlignedSec.toFixed(2)}s but script has ${r.lostWords.length} unaligned words after: "${preview}${r.lostWords.length > 12 ? '...' : ''}". Likely doubled-ellipsis bug (CLAUDE.md rule 26).`,
+      message: `VO ended at ${r.lastAlignedSec.toFixed(2)}s but script has ${r.lostWords.length} unaligned words after: "${preview}${r.lostWords.length > 12 ? '...' : ''}". Likely doubled-ellipsis bug (AGENTS.md rule 26).`,
     },
   ];
 }

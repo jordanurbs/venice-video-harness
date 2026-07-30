@@ -25,7 +25,7 @@ ffprobe -v error -select_streams v:0 \
   -show_entries stream=width,height -of csv=p=0 <video>
 ```
 
-Compare against `series.storyboardAspectRatio`. Flag `fail` if the rendered width/height ratio deviates from the expected ratio by more than 0.01. (Anti-patterns #5 and #10 in CLAUDE.md — R2V models silently defaulted to 9:16 in the past.)
+Compare against `series.storyboardAspectRatio`. Flag `fail` if the rendered width/height ratio deviates from the expected ratio by more than 0.01. (Anti-patterns #5 and #10 in AGENTS.md — R2V models silently defaulted to 9:16 in the past.)
 
 ### 2. Visual Jump at Cut Boundaries
 
@@ -130,4 +130,4 @@ Next: applying 3 fixes -> re-render -> iteration 2.
 - `.claude/skills/burn-in-subtitles/SKILL.md` — caption derivation the agent may trigger re-runs of
 - `scripts/timeline-view.ts` — the composite tool this agent uses
 - `src/editing/types.ts` → `CutQaFinding`, `CutQaReport`
-- `CLAUDE.md` anti-patterns #5, #7, #10, rule 26
+- `AGENTS.md` anti-patterns #5, #7, #10, rule 26

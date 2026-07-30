@@ -281,4 +281,4 @@ Even with silence-detect-derived timings, verify by extracting a frame at each p
 
 - `.claude/skills/venice-api/SKILL.md` — Venice TTS endpoints and voice catalog
 - `.claude/skills/venice-video-model-routing/SKILL.md` — model selection for the underlying video
-- `CLAUDE.md` § "Learned Anti-Patterns" — broader harness lessons
+- `AGENTS.md` § "Learned Anti-Patterns" — broader harness lessons

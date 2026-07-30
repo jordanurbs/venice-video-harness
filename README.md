@@ -2,7 +2,7 @@
 
 Agent-first, Venice-optimized tooling for **consistency-first video creation** at any length.
 
-This harness is built for creators who want an IDE agent (Claude Code, Cursor, etc.) to operate a reusable Venice production system for:
+This harness is built for creators who want a coding agent (opencode, Claude Code, Cursor, Codex, etc.) to operate a reusable Venice production system for:
 
 - **Character-consistent video projects** (any genre, any length)
 - **Visual-style-locked series or campaigns**
@@ -17,7 +17,7 @@ This harness is built for creators who want an IDE agent (Claude Code, Cursor, e
 
 Most Venice integrations are thin wrappers around API calls. This harness is the higher-level layer:
 
-- **Orchestration rules** in `CLAUDE.md`
+- **Orchestration rules** in `AGENTS.md`
 - **Reusable playbooks** in `.claude/commands/`
 - **Specialized agents** in `.claude/agents/`
 - **Venice production skills** in `.claude/skills/`
@@ -93,7 +93,7 @@ New since the last sync: `grok-imagine-image`, `grok-imagine-image-quality`, `lu
 ## Project Structure
 
 ```
-CLAUDE.md                        Agent orchestration hub
+AGENTS.md                        Agent orchestration hub
 .claude/
   commands/                      19 workflow playbooks (see below)
   agents/                        6 specialized agent roles (see below)
@@ -185,7 +185,7 @@ npm run clean                     # Remove dist/
 
 ### In Agent Chat
 
-Open the project in Cursor or VS Code. The agent reads `CLAUDE.md` and the playbooks to operate the harness.
+Open the project with your coding agent of choice (opencode, Claude Code, Cursor, etc.). The agent reads `AGENTS.md` and the playbooks to operate the harness.
 
 Good first messages:
 
@@ -360,7 +360,7 @@ Hard cap at 3 fix iterations before surfacing to the user with the persisting fi
 
 Branded motion graphics (lower-thirds, title cards, chapter markers, logo bugs) are a post-process on top of the delivered cut — never baked into the EDL render. The `overlay-designer` agent plans the overlays, spawns Remotion / ffmpeg workers in parallel, and composites via `scripts/render-overlay.ts`.
 
-Venice-logo safety rules (CLAUDE.md rule 17, anti-pattern #11) are enforced at manifest validation time — manifests that contain "VVV" / "triple-V" or pass mostly-transparent PNGs are rejected before rendering.
+Venice-logo safety rules (AGENTS.md rule 17, anti-pattern #11) are enforced at manifest validation time — manifests that contain "VVV" / "triple-V" or pass mostly-transparent PNGs are rejected before rendering.
 
 ### Editing pipeline commands
 
@@ -510,7 +510,7 @@ git clone https://github.com/emily2040/seedance-2.0 .claude/skills/seedance-20
 
 ## Production Anti-Patterns
 
-The harness documents 13 production anti-patterns learned from real shoots in `CLAUDE.md`. These cover:
+The harness documents 13 production anti-patterns learned from real shoots in `AGENTS.md`. These cover:
 
 - Multi-shot grouping bugs (wrong character overlap checks)
 - Character reference style drift across angles
@@ -522,7 +522,7 @@ The harness documents 13 production anti-patterns learned from real shoots in `C
 - Seedance 2.0's former seedream-only face-image restriction (removed by Venice 2026-07; gate now neutralized)
 - And more
 
-See `CLAUDE.md` > "Learned Anti-Patterns" for the full list with root causes and fixes.
+See `AGENTS.md` > "Learned Anti-Patterns" for the full list with root causes and fixes.
 
 ## API Coverage
 

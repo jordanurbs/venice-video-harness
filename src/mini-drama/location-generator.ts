@@ -5,7 +5,7 @@
 // src/series/types.ts). Their reference images anchor the environment across
 // storyboard panels, starting frames, and video generations — mirroring how
 // character references anchor identity, and directly serving the
-// lighting-consistency anti-pattern (CLAUDE.md anti-pattern 7).
+// lighting-consistency anti-pattern (AGENTS.md anti-pattern 7).
 //
 // Reference angles: wide (establishing), medium (mid-distance), detail
 // (distinctive feature). Generated FACELESS with nano-banana-pro (default) and

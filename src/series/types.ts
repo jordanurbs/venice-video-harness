@@ -58,7 +58,7 @@ export interface VideoModelDefaults {
    * lip-sync from the dialogue MP3. Doubles per-shot cost (~$0.85 total).
    * Skip per-shot with `ShotScript.disableSeedanceKeyframe = true`.
    *
-   * See CLAUDE.md rule 32 for the underlying motivation.
+   * See AGENTS.md rule 32 for the underlying motivation.
    */
   seedanceKeyframeForWan?: boolean;
   /**
@@ -84,7 +84,7 @@ export interface VideoModelDefaults {
    * accent, pacing — across shots so the native model dialogue doesn't drift
    * take to take. Defaults to `true`. Set `false` to disable series-wide;
    * `generate-videos --no-voice-reference` disables for one run. See
-   * CLAUDE.md rule 40.
+   * AGENTS.md rule 40.
    */
   voiceReferenceForDialogue?: boolean;
 }
@@ -303,7 +303,7 @@ export interface Character {
    * `generate-voice-reference` (default source: seed-audio-1-0 from
    * `voiceDescription`) or supplied by the operator via
    * `lock-character --voice-reference`. Convention:
-   * `characters/<slug>/voice-reference.mp3`. See CLAUDE.md rule 40.
+   * `characters/<slug>/voice-reference.mp3`. See AGENTS.md rule 40.
    */
   voiceReferencePath?: string;
   /** Model that produced the voice reference (e.g. `seed-audio-1-0`), or `user-supplied`. */
@@ -319,7 +319,7 @@ export interface Character {
 // deterministic seed, and generated reference images (wide / medium / detail
 // angles). They anchor the environment across storyboard panels, starting
 // frames, and video generations the same way character refs anchor identity —
-// serving the lighting-consistency anti-pattern (see CLAUDE.md anti-pattern 7).
+// serving the lighting-consistency anti-pattern (see AGENTS.md anti-pattern 7).
 //
 // Reference images are FACELESS by design (generated with nano-banana-pro,
 // provenance hasFace:false) so they flow through the Seedance pre-flight gate
@@ -630,7 +630,7 @@ export interface GenerationUnit {
   /**
    * When true, render the keyframe via Seedance R2V first and use it as the
    * Wan 2.7 `image_url`. Set by the planner when the unit routes to the
-   * lip-sync model on a single-character dialogue shot. See CLAUDE.md
+   * lip-sync model on a single-character dialogue shot. See AGENTS.md
    * rule 32.
    */
   useSeedanceKeyframe?: boolean;

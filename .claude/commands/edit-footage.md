@@ -193,4 +193,4 @@ Report back to the user with:
 - [`.claude/skills/burn-in-subtitles/SKILL.md`](../skills/burn-in-subtitles/SKILL.md) — caption derivation
 - [`.claude/agents/cut-qa.md`](../agents/cut-qa.md) — the QA agent invoked in step 5
 - [`src/editing/types.ts`](../../src/editing/types.ts) — EDL, Take, Session type definitions
-- `CLAUDE.md` rule 26 — VO truncation cause and cure
+- `AGENTS.md` rule 26 — VO truncation cause and cure

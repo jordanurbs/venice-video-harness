@@ -173,7 +173,7 @@ interface SeedanceKeyframeArtifacts {
 }
 
 /**
- * Stage A + Stage B of CLAUDE.md rule 32: render a Seedance R2V identity-
+ * Stage A + Stage B of AGENTS.md rule 32: render a Seedance R2V identity-
  * lock pass (no audio, all character refs) and extract frame 1 as a PNG.
  * Returns paths for both the intermediate video and the keyframe so the
  * caller can wire them into the Wan 2.7 i2v stage and the saved metadata.
@@ -1139,7 +1139,7 @@ async function renderSingleShotUnit(
   // expect (A3). Only used by reference-audio-capable models with ≥1 ref image.
   const voiceReferencePaths = resolveVoiceReferencePaths(series, videoPrompt);
 
-  // --- CLAUDE.md rule 32: Seedance R2V → Wan 2.7 keyframe pipeline ---
+  // --- AGENTS.md rule 32: Seedance R2V → Wan 2.7 keyframe pipeline ---
   // Wan 2.7 i2v has no `reference_image_urls`; its only identity anchor is
   // the single `image_url` keyframe. We render a Seedance R2V identity-lock
   // pass first, extract frame 1, and use that frame for the Wan 2.7 i2v

@@ -129,12 +129,12 @@ function planRoute(routing: Routing): {
 
 /**
  * Build the final video prompt string. For Seedance R2V, characters are
- * already represented in the prompt as @Image1 / @Image2 (per CLAUDE.md
+ * already represented in the prompt as @Image1 / @Image2 (per AGENTS.md
  * learning #19). For Kling O3 R2V we keep character names; the model uses
  * elements[] to anchor identity. For i2v we just front-load STYLE_BLOCK.
  */
 function buildVideoPrompt(shot: ShotSpec): string {
-  // Front-load style per CLAUDE.md learning #11.
+  // Front-load style per AGENTS.md learning #11.
   return `${STYLE_BLOCK} ${shot.videoPrompt}`;
 }
 
@@ -206,7 +206,7 @@ async function generateOne(client: VeniceClient, shot: ShotSpec): Promise<void> 
     audio: false, // we'll mix our own VO/music/SFX
   };
 
-  // R2V models need explicit aspect_ratio (per CLAUDE.md learning #13).
+  // R2V models need explicit aspect_ratio (per AGENTS.md learning #13).
   // i2v models derive aspect from the panel image — sending aspect_ratio
   // here causes a 400 (`{ details: { aspect_ratio: ... }, issues: [...] }`).
   if (route.model.includes("reference-to-video")) {

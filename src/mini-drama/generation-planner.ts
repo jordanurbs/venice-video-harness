@@ -156,7 +156,7 @@ function chooseEndFrameStrategy(
  * does the planner expect this shot to render with the Seedance
  * R2V → Wan 2.7 keyframe pipeline? True when the shot must stay as a Wan 2.7
  * lip-sync clip, has at least one character, and neither the series nor the
- * shot opts out. See CLAUDE.md rule 32.
+ * shot opts out. See AGENTS.md rule 32.
  */
 export function shouldUseSeedanceKeyframe(
   shot: ShotScript,

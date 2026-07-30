@@ -196,7 +196,7 @@ export function alignScriptToWords(
 /**
  * Detect VO truncation: returns the portion of the script (if any) that
  * could not be aligned to ASR words because the audio ended before it.
- * Useful as a VO-truncation check (CLAUDE.md anti-pattern, rule 26).
+ * Useful as a VO-truncation check (AGENTS.md anti-pattern, rule 26).
  */
 export function detectTruncation(
   script: string,

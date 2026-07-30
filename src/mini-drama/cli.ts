@@ -1928,7 +1928,7 @@ program
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--skip-qa', 'Skip QA approval check', false)
-  .option('--no-seedance-keyframe', 'Disable the automatic Seedance R2V → Wan 2.7 keyframe pipeline for this run (see CLAUDE.md rule 32).')
+  .option('--no-seedance-keyframe', 'Disable the automatic Seedance R2V → Wan 2.7 keyframe pipeline for this run (see AGENTS.md rule 32).')
   .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -1968,7 +1968,7 @@ program
     }
     const seedanceKeyframeCount = generationPlan.units.filter(unit => unit.useSeedanceKeyframe).length;
     if (seedanceKeyframeCount > 0) {
-      console.log(`Seedance R2V → Wan 2.7 keyframe units: ${seedanceKeyframeCount} (~$0.85 each; CLAUDE.md rule 32)`);
+      console.log(`Seedance R2V → Wan 2.7 keyframe units: ${seedanceKeyframeCount} (~$0.85 each; AGENTS.md rule 32)`);
     }
     console.log('');
 

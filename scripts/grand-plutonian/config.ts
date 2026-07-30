@@ -34,7 +34,7 @@ export const MODELS = {
 // ---- Aesthetic bible ------------------------------------------------------
 
 /**
- * Front-loaded style block. Per CLAUDE.md learning #2, this MUST appear at the
+ * Front-loaded style block. Per AGENTS.md learning #2, this MUST appear at the
  * START of every prompt, not buried at the end. Keep it tight (<60 words for
  * Seedance prompts per learning #20, but image prompts can be slightly longer).
  */

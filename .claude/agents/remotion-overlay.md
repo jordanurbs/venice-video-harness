@@ -19,7 +19,7 @@ One invocation = one overlay. The parent agent spawns multiple in parallel.
    - `lower-third` — slide-in from left, name + title stacked, semi-opaque rounded-rect background, drop shadow
    - `chapter-marker` — bold number + title, centered, short hold + fade
    - `title-card` — full-frame card with heading / subheading, background per payload (`black` / `white` / `blur` / hex)
-   - `logo-bug` — procedurally drawn (SVG in React) — NEVER render from a mostly-transparent PNG (CLAUDE.md anti-pattern #11)
+   - `logo-bug` — procedurally drawn (SVG in React) — NEVER render from a mostly-transparent PNG (AGENTS.md anti-pattern #11)
 3. Configure the composition with:
    - Width/height matching the base video (read `series.storyboardAspectRatio` if available)
    - Duration = `endSec - startSec` in frames (respect the project's fps)
@@ -101,4 +101,4 @@ On failure, return `{ "id": "...", "error": "<message>" }` — the parent decide
 - `~/.claude/skills/remotion-best-practices/SKILL.md` — deeper patterns
 - `.claude/agents/overlay-designer.md` — parent agent
 - `.claude/agents/ffmpeg-overlay.md` — sibling worker for static overlays
-- CLAUDE.md rules 17, anti-patterns #9, #11
+- AGENTS.md rules 17, anti-patterns #9, #11

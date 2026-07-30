@@ -5,7 +5,7 @@
 // generation as a `reference_audio_urls` entry (bound in-prompt as @AudioN)
 // so a character's voice — timbre, accent, pacing — stays consistent across
 // shots on reference-audio-capable models (Seedance 2.0 R2V family,
-// HappyHorse 1.1 R2V). See CLAUDE.md rule 40.
+// HappyHorse 1.1 R2V). See AGENTS.md rule 40.
 //
 // Default source: seed-audio-1-0 (BytePlus Seed Audio 1.0), steered by the
 // character's `voiceDescription`. Operators can override the spoken text, the

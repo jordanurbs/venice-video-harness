@@ -67,7 +67,7 @@ export interface LogoBugPayload {
   kind: 'logo-bug';
   /**
    * Describe the logo geometry in text — NEVER pass the Venice AI logo PNG
-   * as a composite source (CLAUDE.md anti-pattern #11 — mostly-transparent
+   * as a composite source (AGENTS.md anti-pattern #11 — mostly-transparent
    * logos render as overlays, not references). For the Venice crossed-keys
    * logo the renderer draws it procedurally in Remotion or via ffmpeg
    * drawgeometry from a pre-rendered branded PNG asset.
@@ -130,7 +130,7 @@ export function validateOverlayManifest(manifest: OverlayManifest): OverlayValid
         errs.push({
           overlayId: o.id,
           message:
-            'Venice logo description uses "VVV" / "triple-V". Per CLAUDE.md rule 17 the logo is a crossed-keys design — describe as "two ornate skeleton keys crossed in an X with a chevron/open-book at the top".',
+            'Venice logo description uses "VVV" / "triple-V". Per AGENTS.md rule 17 the logo is a crossed-keys design — describe as "two ornate skeleton keys crossed in an X with a chevron/open-book at the top".',
         });
       }
     }
