@@ -518,6 +518,40 @@ Issues discovered during production and their fixes. The agent should internaliz
 **Fix:** Re-anchor every shot to the identical canonical refs and restate fixed traits inline in every prompt, including **relative size** and any in-story state change (track a `sizeState`/`presence` per shot). Prefer Seedance native multi-shot (rule 21) for consecutive beats so identity/scale/lighting hold within one generation. Before assembly, render a contact sheet of each shot's first frame and scan for drift; re-roll offenders. See rule 37.
 **Files:** prompt builders (`src/mini-drama/prompt-builder.ts`) and project render scripts; first-frame contact-sheet check belongs in the storyboard/QA step.
 
+### 21. Film-Stock Names In Style Prompts Trigger Seedance Film-Burn Flares
+**Symptom:** `seedance-2-0-enhanced-*` renders showed persistent orange film-burn / light-leak flares in frame corners — not just at shot boundaries but through entire shots. (The Salt Book, 5 attempts on one shot.)
+**Root cause:** The style block named a film stock ("35mm anamorphic, Kodak Portra 400 pushed"). The stock name is the trigger; `negative_prompt` alone does NOT suppress it.
+**Fix:** Remove film-stock names from the style block (keep the *look* words: overexposed, chalky, bone white) AND add positive in-prompt language: "Clean pristine frame from edge to edge — absolutely no film burn, no light leaks, no orange or red flares at any frame edge or corner, no vignetting." Keep the negative_prompt too, but it is secondary.
+
+### 22. Prop-Ref Contamination: The Model Re-Stages The Reference Image's Whole Composition
+**Symptom:** A prop reference (charred page lying on the ground with a corpse's roped hand on it, yellow sack behind) kept re-staging its own composition into gens — the page returned to the ground, the corpse's hand landed on it, yellow cloth appeared on the living character's wrist — across 4+ re-rolls, *regardless of prompt text forbidding all of it*. Cropping the ref was not enough (leftover corner objects still leaked).
+**Root cause:** Seedance treats the entire reference image as staging truth, not just the object it's bound to. Refs are stronger than negative text.
+**Fix:** Every prop ref must be a **clean plate**: the prop alone on neutral ground — no hands, no wardrobe, no scene furniture. Build one with `POST /image/edit` (qwen-edit, "Remove the X completely…", multiple passes if needed) — one $0.0x edit call beats fighting the video model. Also add a ref-role clause in the prompt: "@ImageN defines ONLY what the prop LOOKS like; it does NOT define where the prop is." Same technique for staging refs that contain elements which must not recur (e.g. remove the corpse for a character-alone scene).
+
+### 23. Hand/Limb Ownership In Close-Up Inserts Goes To The Wrong Body
+**Symptom:** In a hands-only close-up, the folding action was performed by the nearby corpse's roped, yellow-sleeved hands instead of the detective's.
+**Root cause:** In an insert shot the model picks WHOSE hands from scene context; any nearby body competes for the limbs.
+**Fix:** (a) Stage the insert away from the other body entirely ("he is STANDING, hands at chest height… nothing else in frame: no ground, no body"). (b) Give each character a wrist-level wardrobe signature and ban the wrong one by name ("grey linen sleeves + white shirt cuffs" vs "mustard-yellow sleeves + rope — must NOT appear in this close-up"). (c) Declare the non-actor fully inert ("hands NEVER touch, hold, or fold anything"). Continuity bible character entries should carry a `wrist_signature` field; gen-qa should check inserts for sleeve/cuff mismatches.
+
+### 24. Dialogue Accent Casting Drifts Per Generation
+**Symptom:** One gen rendered Greek-accented English while every neighboring gen was standard American — jarring at cuts.
+**Root cause:** Seedance infers accent from setting/character context (Greek island → Greek accent). A weak one-liner ("neutral American accent") did not fix it.
+**Fix:** A dedicated VOICE DIRECTION block with (a) explicit nationality ("Both actors are AMERICAN"), (b) a concrete anchor ("flat Midwestern… like classic 1950s Hollywood film-noir actors"), (c) per-character voice register descriptions, and (d) "speaks in a flat American accent" repeated inline in each dialogue shot paragraph. Continuity bible should carry a per-character `voice` field injected into every dialogue gen. QA: whisper-transcribe every dialogue gen (catches wrong words); accent needs a human ear — export a review MP3 per dialogue gen.
+
+### 25. Face-Down Bodies Flip Supine (Or Act) Across Re-Rolls
+**Symptom:** A corpse staged face-down flipped face-up in ~50% of gens; in others it moved or its face became visible.
+**Root cause:** "face down" alone is too weak an anchor; the model prefers showing faces.
+**Fix:** Stack redundant prone language: "FACE DOWN, ON HIS STOMACH, his BACK to the sky, the BACK of his head toward camera… NEVER supine, NEVER rolls over… we never see his eyes, nose, mouth" — in the continuity rules AND inline in every shot paragraph where the body appears. Bind a staging reference frame showing the correct position and mark it "must match this image exactly."
+
+### 26. Seedance Replaces Scripted Hard Cuts With Dissolves
+**Symptom:** A multi-shot gen rendered one transition as a slow dissolve/superimposition (a face ghosted over an insert) even though the prompt said "separated by hard cuts."
+**Root cause:** One mention of "hard cuts" at the top of a multi-shot prompt is not binding per-transition.
+**Fix:** Add to the style block: "ALL transitions between shots are instant HARD CUTS — never dissolves, never cross-fades, never superimpositions, never double-exposures." Keep the "CUT TO:" separators between shot paragraphs.
+
+### 27. Seedance Face-Media Consent 409 And Queue-Attempt Rate Limit
+**Symptom:** (a) R2V/i2v requests with human-face references returned 409 `needs_consent`. (b) After ~20 failed queue attempts, the account tripped a 30s 429.
+**Fix:** (a) Attach `consents.seedance: { confirmed_terms_and_privacy: true, confirmed_legal_right: true, confirmed_screening_acknowledged: true }` to `/video/queue` for face-bearing requests — surface the policy text once per session for the user to ack, then auto-attach. (b) Back off on repeated 4xx; don't hammer the queue endpoint.
+
 ## Output
 
 Generated project output belongs in:
