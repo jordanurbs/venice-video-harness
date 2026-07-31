@@ -38,6 +38,7 @@ Live catalog as of **2026-05-20** (synced against `GET /api/v1/models?type=video
 | **Seedance 1.5 Pro** | i2v | t2v | 12s | Yes | Older Seedance line; kept for parity. |
 | **HappyHorse 1.1** | i2v, R2V (up to 9 refs) | t2v | 15s | Yes (joint single-pass, 7-lang phoneme lip-sync) | **#1 blind-preference T2V + I2V** (Alibaba 15B). 3-15s, 720p/1080p, nine aspect ratios. Best for talking characters + multilingual localization; SFW/commercial-leaning. The `happyhorse` video-family now routes here. |
 | **HappyHorse 1.0** | i2v, R2V | t2v | 15s | Yes | Prior line, kept for back-compat. Livelier hand-camera realism / cinematic grain vs Seedance. |
+| **MiniMax H3** | i2v, R2V (up to 9 refs) | t2v | 15s (**5s floor**) | Yes (native stereo, not toggleable) | Open-weight omni-modal model — one net covers T2V/I2V/reference. **2K is the only resolution** (no draft tier) at ~1/3 the per-second cost of other families; 24fps, 2500-char prompts. The `minimax-h3` video-family routes here. Sub-5s durations are a hard 400. |
 | **Wan 2.7** | i2v, R2V, V2V, Spicy | t2v | 15s | Wan i2v has no audio; lip-syncs via `audio_url` input | **Lip-sync flagship.** Only Venice model with proper `audio_url`-driven mouth motion. R2V exposes per-element `audio_url` for multi-speaker. Spicy = uncensored i2v variant. |
 | **Wan 2.6** | Standard, Flash, R2V | Standard | 15s | Yes (i2v/t2v); R2V capped at 10s | Now has R2V variant with `audio_url` input. 1080p. |
 | **Wan 2.5 Preview** | i2v | t2v | 10s | Yes | `audio_url` input. |
@@ -269,6 +270,21 @@ Every shot renders in **pure reference mode** — no start image — from an ord
 | **Establishing / mood / action** | `seedance-2-0-enhanced-reference-to-video` | Anchors to location reference angles via `@Image` tags |
 
 These defaults are overridable per-project via `series.json` → `videoDefaults`. To target a non-Seedance family (e.g. for accounts that lack Seedance access, or projects that need a different look), set `videoDefaults` to `kling-o3-standard-reference-to-video` (character consistency) and `veo3.1-fast-image-to-video` (atmosphere). Image models default to `nano-banana-2` / `nano-banana-2-edit` for all panels regardless of video family.
+
+### Picking a family at project creation
+
+`venice-video new` asks which family to use, and `venice-video new-series` asks too when it's run on a terminal without `--video-family`. Both write the answer to `series.json` → `videoDefaults.videoFamilyPreference` and swap the action / atmosphere / character-consistency models to match. `lipSyncModel` stays on Wan 2.7 whatever you pick — it's the only Venice model with real lip-sync.
+
+| Family | Picks | Trade-off |
+|--------|-------|-----------|
+| `seedance` | Seedance 2.0 Enhanced R2V for all three lanes | The default. Strongest identity anchoring, 720p drafts, 4-15s. |
+| `minimax-h3` | H3 i2v (action/atmosphere) + H3 R2V (identity) | 2K with native stereo audio at ~1/3 the per-second cost. But 2K is the only resolution, so there's no cheap draft pass, and the 5s floor means 3-4s beats have to be re-scripted. |
+| `happyhorse` | HappyHorse 1.1 i2v + R2V | Best lip-sync (7 languages, phoneme-level), 3-15s, 720p/1080p. |
+| `grok-imagine` | Grok Imagine i2v + R2V | Atmosphere-forward look; R2V durations stepped at 5s/8s/10s. |
+| `kling-o3` | Kling O3 Standard i2v + R2V | Stylized and illustrated aesthetics; `elements` + `scene_image_urls`. |
+| `auto` | Whatever the harness currently defaults to | Tracks the default as it moves; Seedance Enhanced today. |
+
+Non-interactive callers (the MCP, CI) pass `--video-family` explicitly; when it's omitted without a TTY the harness defaults stay in place.
 
 ## Image / Video Family Pairing
 

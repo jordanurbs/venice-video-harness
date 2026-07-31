@@ -31,6 +31,18 @@ function ok(label, cond, detail) {
   ok('videoFamilyPreference persisted', s.videoDefaults.videoFamilyPreference === 'happyhorse');
 }
 
+// Family 'minimax-h3' → H3 i2v for action/atmosphere + H3 R2V for identity.
+{
+  const s = createSeries('H3 Series', 'concept', 'drama', 'somewhere', {
+    videoFamilyPreference: 'minimax-h3',
+  });
+  ok('minimax-h3 actionModel', s.videoDefaults.actionModel === 'minimax-h3-image-to-video');
+  ok('minimax-h3 atmosphereModel', s.videoDefaults.atmosphereModel === 'minimax-h3-image-to-video');
+  ok('minimax-h3 characterConsistencyModel', s.videoDefaults.characterConsistencyModel === 'minimax-h3-reference-to-video');
+  ok('minimax-h3 lipSyncModel stays Wan 2.7', s.videoDefaults.lipSyncModel === 'wan-2-7-image-to-video');
+  ok('videoFamilyPreference persisted', s.videoDefaults.videoFamilyPreference === 'minimax-h3');
+}
+
 // Family 'grok-imagine' → Grok i2v + Grok R2V (Grok now ships R2V).
 {
   const s = createSeries('Grok Series', 'concept', 'drama', 'somewhere', {
@@ -78,7 +90,7 @@ for (const strategy of ['native', 'lip-sync', 'narrator-vo']) {
 }
 
 // resolveVideoFamilyDefaults: each family returns a complete triplet.
-for (const family of ['auto', 'seedance', 'happyhorse', 'grok-imagine', 'kling-o3']) {
+for (const family of ['auto', 'seedance', 'happyhorse', 'minimax-h3', 'grok-imagine', 'kling-o3']) {
   const d = resolveVideoFamilyDefaults(family);
   ok(`resolveVideoFamilyDefaults(${family}).actionModel`, typeof d.actionModel === 'string' && d.actionModel.length > 0);
   ok(`resolveVideoFamilyDefaults(${family}).characterConsistencyModel`, typeof d.characterConsistencyModel === 'string');

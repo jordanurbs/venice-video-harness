@@ -100,8 +100,20 @@ The full model registry lives in `src/venice/models.ts` with typed specs for eve
 - `seedance-2-0-enhanced-reference-to-video` (**THE default for all three lanes** — action, atmosphere, character. 4-15s, 1080p-capable, `reference_image_urls` up to **9**, `@Image` tags, `reference_audio_urls`, native audio, ~1.5x standard R2V price. Delisted from GET /models but live on queue/quote.)
 - `seedance-2-0-reference-to-video` (standard R2V, 4-15s, `reference_image_urls` up to 9, `@Image` tags, native audio)
 - `happyhorse-1-1-reference-to-video` (R2V, 3-15s, `reference_image_urls` up to 9, per-reference audio, phoneme-level lip-sync)
+- `minimax-h3-reference-to-video` (R2V, **5-15s**, `reference_image_urls` up to 9, `audio_url` input, native stereo audio, **2K only**)
 - `kling-o3-standard-reference-to-video` (fallback only when characters alone overflow the 9-ref budget; 3-15s, `elements`, `reference_image_urls`, `scene_image_urls`)
 - `kling-o3-pro-reference-to-video` (3-15s, full reference support)
+
+**MiniMax H3 (open-weight omni-modal, added 2026-07-31):**
+- `minimax-h3-text-to-video` / `minimax-h3-image-to-video` / `minimax-h3-reference-to-video`
+- One model covers T2V, I2V, and multimodal reference, with native stereo audio in the render. 24fps, 2500-char prompt limit.
+- **2K is the only resolution.** `resolution: '720p'` is a hard HTTP 400 — there is no cheap draft tier, so every H3 take is a finish-quality spend. The generator pins `resolution: '2K'` for any `minimax-h3-*` model.
+- **The duration ladder starts at 5s.** 3s and 4s both 400. Script H3 episodes on a 5-15s grid; the duration preflight rejects off-ladder shots before anything is queued.
+- Pricing at time of sync: $0.81 for 5s, $2.44 for 15s (~$0.16/s at 2K) — roughly a third of what the other families cost per second.
+- `audio` is not configurable (like HappyHorse), so the generator omits the field entirely.
+- i2v inherits aspect from the start image and exposes no `aspect_ratios`; t2v and R2V accept `16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9`.
+- **R2V is pure-reference-only.** Sending `image_url` (or `end_image_url`) alongside `reference_image_urls` is a hard 400: *"image_url and end_image_url cannot be combined with reference media for this model."* `minimax-h3-reference-to-video` is therefore in `MODELS_USING_IMAGE_TAGS`, which is what puts the generator in pure reference mode. It honors `@ImageN` tags — verified by paid render, both tagged characters landed on their assigned `@Image1` / `@Image2` slots.
+- **Reference aspect influences output orientation, so keep a 16:9 plate in the stack.** With the harness's normal slot plan (1:1 character sheets + the 16:9 storyboard blocking plate) and `aspect_ratio: '16:9'`, a paid render returned a true 2560×1440. But a stack of uniformly portrait references returned 1440×1920 *despite* `aspect_ratio: '16:9'` — the requested ratio did not override them. Character-only H3 shots with no blocking plate are the orientation risk; check the first-frame contact sheet before assembling.
 
 **Long Duration:**
 - `longcat-image-to-video` / `longcat-distilled-image-to-video` (up to **30s**, no audio)
@@ -118,13 +130,15 @@ The full model registry lives in `src/venice/models.ts` with typed specs for eve
 | Capability | Models |
 |-----------|--------|
 | `elements` (structured @Element refs) | Kling O3 R2V (standard + pro) |
-| `reference_image_urls` (flat ref array) | Seedance 2.0 R2V family (**up to 9**), HappyHorse 1.1 R2V (**up to 9**), Kling O3 R2V, Vidu Q3 (legacy 4-image budget on non-Seedance/HappyHorse) |
+| `reference_image_urls` (flat ref array) | Seedance 2.0 R2V family (**up to 9**), HappyHorse 1.1 R2V (**up to 9**), MiniMax H3 R2V (**up to 9**), Kling O3 R2V, Vidu Q3 (legacy 4-image budget elsewhere) |
 | `scene_image_urls` (environment refs) | Kling O3 R2V (standard + pro) |
 | `end_image_url` (frame targeting) | All Kling image-to-video, PixVerse Transition |
-| `audio_url` (background audio input) | Wan 2.6, Wan 2.5 Preview, Seedance 2.0 R2V family |
+| `audio_url` (background audio input) | Wan 2.6, Wan 2.5 Preview, Seedance 2.0 R2V family, MiniMax H3 R2V |
 | `reference_audio_urls` (voice-donor clips, @AudioN) | Seedance 2.0 R2V / Enhanced R2V / Fast R2V, HappyHorse 1.1 R2V (≤3 clips, 2-15s each, ≤15s aggregate, needs ≥1 reference image) |
 | `@Image` tags (flat ref prompt syntax) | Seedance 2.0 R2V, Grok Imagine R2V |
 | Native stereo audio with lip-sync | Seedance 2.0 (8+ languages) |
+| Native stereo audio, not toggleable | HappyHorse 1.1, MiniMax H3 (omit the `audio` field or the request 400s) |
+| 2K output | MiniMax H3 (2K is its ONLY resolution) |
 | 4K output | Veo 3.1, LTX 2.0 |
 | 30s duration | Longcat |
 | 20s duration | LTX 2.0 Fast, LTX 2.0 v2.3 Fast |

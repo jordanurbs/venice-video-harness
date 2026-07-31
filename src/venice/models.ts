@@ -460,6 +460,55 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 15, perReferenceAudio: true, supportsReferenceAudio: true,
     privacy: 'anonymized', offline: false,
   },
+  // -- MiniMax H3 (live registry sync 2026-07-31) --
+  // Open-weight omni-modal generator: one model covers T2V, I2V, and
+  // multimodal reference, with native stereo audio baked into the render.
+  // Two traits make it different from every other family in this registry:
+  //
+  //   1. 2K is the ONLY resolution. Sending `resolution: '720p'` is a hard
+  //      HTTP 400 ("Invalid enum value. Expected '2K'") — probed 2026-07-31.
+  //      There is no draft tier, so every H3 shot is a finish-quality render.
+  //   2. The duration ladder STARTS AT 5s. 3s and 4s both 400 — so shots
+  //      scripted at Seedance/HappyHorse's short end fail preflight rather
+  //      than silently rounding up.
+  //
+  // Pricing at the time of sync: $0.81 for 5s, $2.44 for 15s (~$0.16/s at 2K),
+  // which is why it is the cheap-2K option in the family questionnaire.
+  // Prompt limit is 2500 characters on all three variants.
+  {
+    id: 'minimax-h3-text-to-video', name: 'MiniMax H3', type: 'text-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['2K'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'minimax-h3-image-to-video', name: 'MiniMax H3', type: 'image-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    // Aspect is inherited from the start image; the live constraints report an
+    // empty aspect_ratios list, so don't send the field on this variant.
+    resolutions: ['2K'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'minimax-h3-reference-to-video', name: 'MiniMax H3 R2V', type: 'image-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['2K'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+    // audio_input:true here (and false on t2v/i2v) per the live constraints —
+    // the R2V lane is the one that accepts a top-level `audio_url`.
+    //
+    // PURE REFERENCE ONLY: `image_url`/`end_image_url` alongside
+    // `reference_image_urls` is a hard 400 ("cannot be combined with reference
+    // media for this model"), which is why this id is in
+    // MODELS_USING_IMAGE_TAGS — that set is what drops the start frame.
+    // supportsEndImage stays false for the same reason.
+    audio: true, audioConfigurable: false, audioInput: true, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
   // -- Kling V3 --
   {
     id: 'kling-v3-pro-text-to-video', name: 'Kling V3 Pro', type: 'text-to-video',

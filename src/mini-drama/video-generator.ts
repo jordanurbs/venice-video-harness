@@ -585,6 +585,9 @@ async function renderVideoFile(
 
   if (effectiveModel.includes('seedance')) {
     body.resolution = '720p';
+  } else if (effectiveModel.includes('minimax-h3')) {
+    // 2K is H3's only resolution — anything else is a hard 400.
+    body.resolution = '2K';
   } else if (effectiveModel.includes('veo')) {
     body.resolution = '720p';
   } else if (effectiveModel.includes('wan-2.6') || effectiveModel.includes('wan-2.5')) {

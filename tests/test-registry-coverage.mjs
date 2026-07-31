@@ -57,6 +57,10 @@ const REQUIRED_VIDEO_IDS = [
   'happyhorse-1-1-text-to-video',
   'happyhorse-1-1-image-to-video',
   'happyhorse-1-1-reference-to-video',
+  // MiniMax H3 (added 2026-07-31)
+  'minimax-h3-text-to-video',
+  'minimax-h3-image-to-video',
+  'minimax-h3-reference-to-video',
   // PixVerse C1 (new) + v5.6 (legacy)
   'pixverse-c1-image-to-video',
   'pixverse-c1-reference-to-video',
@@ -90,6 +94,30 @@ for (const id of REQUIRED_VIDEO_IDS) {
 const sora2pro = getVideoModel('sora-2-pro-image-to-video');
 ok('sora-2-pro maxDurationSec is 20', sora2pro?.maxDurationSec === 20);
 ok('sora-2-pro durations includes 20s', sora2pro?.durations.includes('20s'));
+
+// ---- MiniMax H3: the two constraints that differ from every other family ----
+// Both are hard HTTP 400s at queue time, so the registry has to carry them:
+// 2K is the only resolution, and the duration ladder starts at 5s.
+for (const id of ['minimax-h3-text-to-video', 'minimax-h3-image-to-video', 'minimax-h3-reference-to-video']) {
+  const m = getVideoModel(id);
+  ok(`${id} offers 2K only`, JSON.stringify(m?.resolutions) === JSON.stringify(['2K']));
+  ok(`${id} duration ladder starts at 5s`, m?.durations[0] === '5s');
+  ok(`${id} rejects sub-5s durations`, !m?.durations.includes('3s') && !m?.durations.includes('4s'));
+  ok(`${id} maxDurationSec is 15`, m?.maxDurationSec === 15);
+  ok(`${id} audio is on and not configurable`, m?.audio === true && m?.audioConfigurable === false);
+}
+// Only the R2V lane takes reference images and a top-level audio_url.
+ok('minimax-h3 R2V supports reference images',
+  getVideoModel('minimax-h3-reference-to-video')?.supportsReferenceImages === true);
+ok('minimax-h3 i2v does not claim reference images',
+  getVideoModel('minimax-h3-image-to-video')?.supportsReferenceImages === false);
+ok('minimax-h3 R2V accepts audio input',
+  getVideoModel('minimax-h3-reference-to-video')?.audioInput === true);
+ok('minimax-h3 i2v does not accept audio input',
+  getVideoModel('minimax-h3-image-to-video')?.audioInput === false);
+// i2v inherits aspect from the start image — sending aspect_ratio would 400.
+ok('minimax-h3 i2v exposes no aspect ratios',
+  getVideoModel('minimax-h3-image-to-video')?.aspectRatios.length === 0);
 
 // ---- Capability sets are consistent with the registry ----
 // Every registry entry that has supportsReferenceImages: true must be in

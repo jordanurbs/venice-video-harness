@@ -238,6 +238,47 @@ ok('Kling: scene image is an image data URI',
 ok('Kling: NO reference_audio_urls (not reference-audio-capable)',
   klingBody?.reference_audio_urls === undefined);
 
+// ── Case 4: MiniMax H3 R2V → 2K pinned, `audio` omitted, refs carried ──────
+// H3's two hard constraints are enforced in the body, not just documented:
+// 2K is its only resolution, and `audio` is not configurable so the field
+// must not be sent at all (same shape as HappyHorse 1.1).
+const h3Series = {
+  ...baseSeries,
+  videoDefaults: {
+    ...baseSeries.videoDefaults,
+    actionModel: 'minimax-h3-image-to-video',
+    atmosphereModel: 'minimax-h3-image-to-video',
+    characterConsistencyModel: 'minimax-h3-reference-to-video',
+    videoFamilyPreference: 'minimax-h3',
+  },
+};
+const h3Shot = { ...seedanceShot, shotNumber: 1, duration: '10s' };
+
+const h3Body = await captureBody(h3Series, h3Shot);
+ok('MiniMax H3: queue body captured', Boolean(h3Body));
+ok('MiniMax H3: routes to the H3 R2V lane',
+  h3Body?.model === 'minimax-h3-reference-to-video');
+ok('MiniMax H3: resolution pinned to 2K', h3Body?.resolution === '2K');
+ok('MiniMax H3: `audio` field omitted entirely (not configurable)',
+  !Object.prototype.hasOwnProperty.call(h3Body ?? {}, 'audio'));
+ok('MiniMax H3: aspect_ratio sent on the R2V lane', h3Body?.aspect_ratio === '16:9');
+ok('MiniMax H3: duration stays on the 5-15s ladder',
+  /^(5|6|7|8|9|10|11|12|13|14|15)s$/.test(h3Body?.duration ?? ''));
+ok('MiniMax H3: reference_image_urls carried',
+  Array.isArray(h3Body?.reference_image_urls) && h3Body.reference_image_urls.length > 0);
+// Venice rejects image_url alongside reference media on this model, so pure
+// reference mode is mandatory, not an optimization.
+ok('MiniMax H3: NO image_url (pure reference mode is required, not optional)',
+  h3Body?.image_url === undefined);
+ok('MiniMax H3: NO end_image_url (same rejection rule)',
+  h3Body?.end_image_url === undefined);
+ok('MiniMax H3: prompt binds the @Image tags',
+  /@Image1 is ARIA/.test(h3Body?.prompt ?? ''));
+ok('MiniMax H3: no scene_image_urls (not scene-capable)',
+  h3Body?.scene_image_urls === undefined);
+ok('MiniMax H3: no elements (not elements-capable)',
+  h3Body?.elements === undefined);
+
 rmSync(dir, { recursive: true, force: true });
 
 if (failed > 0) {

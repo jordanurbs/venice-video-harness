@@ -31,6 +31,7 @@ import type {
   EpisodeScript,
   ShotScript,
   Location,
+  VideoFamilyPreference,
 } from '../series/types.js';
 import {
   FEMALE_BASE_TRAITS,
@@ -90,6 +91,49 @@ program
   .description('Standalone consistency-first video production with Venice AI')
   .version('2.4.0')
   .option('--workspace <dir>', 'Workspace containing Venice Video projects');
+
+/**
+ * The video-model question asked when a project is created, shared by the
+ * interactive `new` wizard and the `--video-family` validation on both `new`
+ * and `new-series`. The three headline families lead; the remaining options
+ * are still selectable but sit below them.
+ */
+const VIDEO_FAMILY_CHOICES: ReadonlyArray<{
+  label: string; value: VideoFamilyPreference; description?: string;
+}> = [
+  {
+    label: 'Seedance 2.0',
+    value: 'seedance',
+    description: 'Reference-first default — strongest identity anchoring, 720p drafts, 4-15s',
+  },
+  {
+    label: 'MiniMax H3',
+    value: 'minimax-h3',
+    description: 'Open-weight omni-modal — 2K + native stereo audio at ~1/3 the cost, 5-15s (no 3-4s beats, no draft tier)',
+  },
+  {
+    label: 'HappyHorse 1.1',
+    value: 'happyhorse',
+    description: 'Best lip-sync across 7 languages, 720p/1080p, 3-15s',
+  },
+  {
+    label: 'Grok Imagine',
+    value: 'grok-imagine',
+    description: 'Atmosphere-forward look; R2V durations stepped at 5s/8s/10s',
+  },
+  {
+    label: 'Kling O3',
+    value: 'kling-o3',
+    description: 'Stylized and illustrated aesthetics; accepts non-seedream reference images',
+  },
+  {
+    label: 'Automatic',
+    value: 'auto',
+    description: 'Track whatever the harness currently defaults to (Seedance Enhanced today)',
+  },
+];
+
+const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
 
 function runCommand(command: string, args: string[]): string {
   const result = spawnSync(command, args, {
@@ -300,7 +344,7 @@ program
   .option('-g, --genre <genre>', 'Genre')
   .option('--setting <setting>', 'General setting description')
   .option('--audio-strategy <strategy>', 'native | lip-sync | narrator-vo')
-  .option('--video-family <family>', 'auto | seedance | happyhorse | grok-imagine | kling-o3')
+  .option('--video-family <family>', 'auto | seedance | happyhorse | minimax-h3 | grok-imagine | kling-o3')
   .action(async (opts: {
     type?: string; name?: string; concept?: string; genre?: string; setting?: string;
     audioStrategy?: string; videoFamily?: string;
@@ -331,13 +375,12 @@ program
       { label: 'Lip-sync', value: 'lip-sync', description: 'Use Venice speech plus Wan 2.7 lip-sync' },
       { label: 'Narrator voice-over', value: 'narrator-vo', description: 'Mute model narration and own the VO lane' },
     ]) : 'native')) as 'native' | 'lip-sync' | 'narrator-vo';
-    const videoFamily = (opts.videoFamily ?? (stdin.isTTY ? await promptChoice('Video model family', [
-      { label: 'Automatic', value: 'auto', description: 'Current reference-first Seedance Enhanced defaults' },
-      { label: 'Seedance', value: 'seedance' },
-      { label: 'HappyHorse', value: 'happyhorse' },
-      { label: 'Grok Imagine', value: 'grok-imagine' },
-      { label: 'Kling O3', value: 'kling-o3' },
-    ]) : 'auto')) as 'auto' | 'seedance' | 'happyhorse' | 'grok-imagine' | 'kling-o3';
+    const videoFamily = (opts.videoFamily ?? (stdin.isTTY
+      ? await promptChoice('Video model family', VIDEO_FAMILY_CHOICES)
+      : 'auto')) as VideoFamilyPreference;
+    if (!VIDEO_FAMILIES.has(videoFamily)) {
+      throw new Error(`--video-family must be one of: ${[...VIDEO_FAMILIES].join(', ')}`);
+    }
 
     const workspace = await getWorkspaceDir(program.opts().workspace);
     await mkdir(workspace, { recursive: true });
@@ -376,9 +419,10 @@ program
   .option(
     '--video-family <family>',
     'Preferred video model family: ' +
-    'auto (default Seedance 2.0), seedance, happyhorse, grok-imagine, kling-o3. ' +
+    'auto (default Seedance 2.0), seedance, happyhorse, minimax-h3, grok-imagine, kling-o3. ' +
     'Swaps actionModel/atmosphereModel/characterConsistencyModel to that family. ' +
-    'lipSyncModel stays on Wan 2.7 regardless.',
+    'lipSyncModel stays on Wan 2.7 regardless. ' +
+    'Omit it on an interactive terminal and you will be asked.',
   )
   .action(async (opts: {
     name: string; concept: string; genre: string; setting: string;
@@ -389,15 +433,20 @@ program
       console.error(`--audio-strategy must be one of: ${[...allowedAudio].join(', ')}`);
       process.exit(2);
     }
-    const allowedFamily = new Set(['auto', 'seedance', 'happyhorse', 'grok-imagine', 'kling-o3']);
-    if (opts.videoFamily && !allowedFamily.has(opts.videoFamily)) {
-      console.error(`--video-family must be one of: ${[...allowedFamily].join(', ')}`);
+    if (opts.videoFamily && !VIDEO_FAMILIES.has(opts.videoFamily)) {
+      console.error(`--video-family must be one of: ${[...VIDEO_FAMILIES].join(', ')}`);
       process.exit(2);
     }
+    // Ask on a real terminal; stay silent for the MCP and CI, which spawn this
+    // command without a TTY and rely on the harness defaults when the flag is
+    // absent.
+    const videoFamily = opts.videoFamily
+      ?? (stdin.isTTY ? await promptChoice('Video model family', VIDEO_FAMILY_CHOICES) : undefined);
+
     const series = createSeries(opts.name, opts.concept, opts.genre, opts.setting, {
       workspace: await getWorkspaceDir(program.opts().workspace),
       audioStrategy: opts.audioStrategy as 'native' | 'lip-sync' | 'narrator-vo' | undefined,
-      videoFamilyPreference: opts.videoFamily as 'auto' | 'seedance' | 'happyhorse' | 'grok-imagine' | 'kling-o3' | undefined,
+      videoFamilyPreference: videoFamily as VideoFamilyPreference | undefined,
     });
     await saveSeries(series);
 

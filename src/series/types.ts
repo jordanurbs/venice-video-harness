@@ -172,6 +172,14 @@ export type AudioStrategy = 'native' | 'lip-sync' | 'narrator-vo';
  *                      multilingual localization; SFW/commercial-leaning (for
  *                      mature work prefer Seedance 2.0 or Wan 2.7). The 1.0 IDs
  *                      remain in the registry for back-compat.
+ *   - 'minimax-h3'   — MiniMax H3, the open-weight omni-modal model. Renders
+ *                      2K with native stereo audio for roughly a third of what
+ *                      other families cost per second, and its R2V lane takes
+ *                      the same 9-image reference stack as Seedance. Two hard
+ *                      constraints: 2K is the only resolution (no draft tier,
+ *                      so every take is a finish-quality spend) and the
+ *                      duration ladder starts at 5s, so 3-4s beats have to be
+ *                      re-scripted or routed elsewhere.
  *   - 'grok-imagine' — Grok Imagine i2v + R2V (R2V durations stepped at
  *                      5s/8s/10s only). Pick for atmosphere-rich shots or
  *                      when the user wants Grok's signature look.
@@ -182,6 +190,7 @@ export type VideoFamilyPreference =
   | 'auto'
   | 'seedance'
   | 'happyhorse'
+  | 'minimax-h3'
   | 'grok-imagine'
   | 'kling-o3';
 
@@ -206,6 +215,15 @@ export function resolveVideoFamilyDefaults(
         actionModel: 'happyhorse-1-1-image-to-video',
         atmosphereModel: 'happyhorse-1-1-image-to-video',
         characterConsistencyModel: 'happyhorse-1-1-reference-to-video',
+      };
+    case 'minimax-h3':
+      // MiniMax H3 (2026-07-31): reference-first like Seedance, but every
+      // render is 2K with native stereo audio. i2v carries action/atmosphere;
+      // R2V carries identity with up to 9 reference images.
+      return {
+        actionModel: 'minimax-h3-image-to-video',
+        atmosphereModel: 'minimax-h3-image-to-video',
+        characterConsistencyModel: 'minimax-h3-reference-to-video',
       };
     case 'grok-imagine':
       // Grok Imagine now ships its own R2V variant (2026-05+). Stays in-family.
@@ -794,6 +812,8 @@ export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   'happyhorse-1-0-reference-to-video',
   // HappyHorse 1.1 R2V accepts up to 9 reference images (flat reference_image_urls).
   'happyhorse-1-1-reference-to-video',
+  // MiniMax H3 R2V takes a flat reference_image_urls array (9-image budget).
+  'minimax-h3-reference-to-video',
   'pixverse-c1-reference-to-video',
   'grok-imagine-reference-to-video',
   // Wan 2.7 R2V uses per_reference_audio (elements[].audio_url) for lip-sync;
@@ -836,6 +856,13 @@ export const MODELS_USING_IMAGE_TAGS = new Set([
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
   'grok-imagine-reference-to-video',
+  // MiniMax H3 R2V REQUIRES pure reference mode: sending `image_url` alongside
+  // `reference_image_urls` is a hard 400 ("image_url and end_image_url cannot
+  // be combined with reference media for this model", probed 2026-07-31), so
+  // it has to be in this set or every H3 character shot fails at queue time.
+  // It honors @ImageN tags — same probe, a paid 5s render placed both tagged
+  // characters exactly per their @Image1/@Image2 assignments.
+  'minimax-h3-reference-to-video',
   // HappyHorse 1.1 R2V honors @ImageN prompt mentions — probed 2026-07-30
   // (quote accepted @ImageN prompt + 9 refs + reference_audio_urls with no
   // image_url; paid 3s render placed both tagged characters correctly per
@@ -863,6 +890,9 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   'seedance-2-0-reference-to-video',
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
+  // MiniMax H3 R2V — GET /models reports audio_input:true on the R2V variant
+  // only; the t2v/i2v lanes report false and are deliberately left out.
+  'minimax-h3-reference-to-video',
 ]);
 
 /**
@@ -910,6 +940,7 @@ export const MAX_REFERENCE_IMAGES_BY_MODEL: Record<string, number> = {
   'seedance-2-0-enhanced-reference-to-video': 9,
   'seedance-2-0-fast-reference-to-video': 9,
   'happyhorse-1-1-reference-to-video': 9,
+  'minimax-h3-reference-to-video': 9,
 };
 
 export const DEFAULT_MAX_REFERENCE_IMAGES = 4;
