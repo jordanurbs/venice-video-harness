@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.5.1 — 2026-07-31
+
+- Replaced the vague “What should the finished project accomplish?” workshop prompt with concrete, project-specific audience-outcome questions.
+- Film asks what the audience should feel, understand, or keep thinking about when it ends.
+- Product video asks what viewers should understand, believe, and do next; music video, screenplay adaptation, and series receive similarly specific questions.
+- Added examples directly in the interactive prompt and renamed the noninteractive flag to `--outcome` while retaining `--objective` as a deprecated alias.
+
 ## 2.5.0 — 2026-07-31
 
 - Integrated the Topaz 2x/4x video-upscale engine into the standalone CLI.

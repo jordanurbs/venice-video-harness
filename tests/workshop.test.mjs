@@ -48,6 +48,7 @@ test('workshop prompt develops the complete project, not only shots', () => {
   assert.match(user, /existingAesthetic/);
   assert.match(user, /existingCharacters/);
   assert.match(user, /productionNotes/);
+  assert.match(user, /intendedAudienceResponse/);
 });
 
 test('workshop draft saves a readable review and approval materializes production state', async () => {

@@ -202,6 +202,7 @@ After `new`, the CLI hands the project to one guided control center:
 
 ```bash
 venice-video workshop -p ~/VeniceVideos/my-film
+# Noninteractive: --outcome "Leave viewers exhilarated, then unsettled by the signal"
 ```
 
 The workshop develops the complete project—not only a shot list:

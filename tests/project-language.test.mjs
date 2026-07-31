@@ -10,6 +10,8 @@ test('Film language does not impose episode assumptions', () => {
   assert.equal(language.scriptNoun, 'Film script');
   assert.equal(language.segmentNoun, 'Part');
   assert.equal(language.defaultDuration, '300s');
+  assert.match(language.outcomeQuestion, /feel, understand, or still be thinking about/);
+  assert.match(language.outcomeHelp, /Example:/);
   assert.doesNotMatch(language.targetDurationGuidance, /60-second episode/i);
   assert.doesNotMatch(language.endingGuidance, /next episode/i);
 
@@ -29,4 +31,20 @@ test('Series language preserves episode guidance', () => {
   assert.match(prompt, /Episode 2/);
   assert.match(prompt, /58-75 seconds/);
   assert.match(prompt, /next episode/);
+});
+
+
+test('each project type asks a concrete outcome question', () => {
+  const cases = [
+    ['product-video', /understand, believe, and do next/],
+    ['music-video', /emotion or visual idea/],
+    ['screenplay', /must survive from the screenplay/],
+    ['series', /keep watching this series/],
+  ];
+  for (const [projectType, pattern] of cases) {
+    const language = getProjectLanguage({ ...film, projectType });
+    assert.match(language.outcomeQuestion, pattern);
+    assert.ok(language.outcomeHelp.length > 20);
+    assert.doesNotMatch(language.outcomeQuestion, /accomplish/i);
+  }
 });

@@ -100,7 +100,7 @@ const program = new Command();
 program
   .name('venice-video')
   .description('Standalone consistency-first video production with Venice AI')
-  .version('2.5.0')
+  .version('2.5.1')
   .option('--workspace <dir>', 'Workspace containing Venice Video projects');
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
@@ -368,7 +368,8 @@ program
   .command('workshop')
   .description('Develop the complete project: story, aesthetic, cast, locations, script, and production plan')
   .requiredOption('-p, --project <dir>', 'Project output directory')
-  .option('--objective <text>', 'What the completed project should accomplish')
+  .option('--outcome <text>', 'Intended audience response or next action')
+  .option('--objective <text>', '[Deprecated alias] Same as --outcome')
   .option('--duration <duration>', 'Target runtime, e.g. "8 minutes" or "90 seconds"')
   .option('--audience <text>', 'Intended audience')
   .option('--must-include <text>', 'Required story, visual, character, or product elements')
@@ -380,7 +381,7 @@ program
   .option('--approve', 'Approve the current workshop and materialize its production state', false)
   .option('--status', 'Show current workshop status without generating', false)
   .action(async (opts: {
-    project: string; objective?: string; duration?: string; audience?: string;
+    project: string; outcome?: string; objective?: string; duration?: string; audience?: string;
     mustInclude?: string; avoid?: string; references?: string; delivery?: string; feedback?: string;
     model: string; approve: boolean; status: boolean;
   }) => {
@@ -424,9 +425,13 @@ program
     const ask = async (label: string, value: string | undefined, fallback = '') =>
       value ?? (stdin.isTTY ? await promptText(label, { defaultValue: fallback, required: false }) : fallback);
     const inputs: WorkshopInputs = {
-      objective: await ask('What should the finished project accomplish?', opts.objective, previousInputs?.objective ?? series.concept),
+      objective: await ask(
+        `${language.outcomeQuestion}\n${language.outcomeHelp}\nYour answer`,
+        opts.outcome ?? opts.objective,
+        previousInputs?.objective ?? '',
+      ),
       targetDuration: await ask('Target runtime', opts.duration, previousInputs?.targetDuration ?? language.defaultDuration),
-      audience: await ask('Intended audience', opts.audience, previousInputs?.audience ?? ''),
+      audience: await ask(language.audienceQuestion, opts.audience, previousInputs?.audience ?? ''),
       mustInclude: await ask('What must be included?', opts.mustInclude, previousInputs?.mustInclude ?? ''),
       avoid: await ask('What should it avoid?', opts.avoid, previousInputs?.avoid ?? ''),
       references: await ask('Creative references', opts.references, previousInputs?.references ?? ''),

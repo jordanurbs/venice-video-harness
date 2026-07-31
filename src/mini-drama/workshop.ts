@@ -134,7 +134,10 @@ export function buildWorkshopUserPrompt(
       audioStrategy: series.videoDefaults.audioStrategy ?? 'native',
       videoFamily: series.videoDefaults.videoFamilyPreference ?? 'auto',
     },
-    inputs,
+    inputs: {
+      ...inputs,
+      intendedAudienceResponse: inputs.objective,
+    },
     existingAesthetic: series.aesthetic,
     existingCharacters: series.characters,
     existingLocations: series.locations ?? [],
