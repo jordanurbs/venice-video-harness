@@ -141,6 +141,30 @@ export class VeniceClient {
 
   // ---- Public API ---------------------------------------------------------
 
+  /** Send a GET request and return parsed JSON. Used by setup/doctor checks. */
+  async get<T = unknown>(path: string): Promise<T> {
+    await this.applyRateLimit();
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+    });
+    this.lastRequestAt = Date.now();
+    reportVeniceDeprecation(response.headers, path);
+    if (response.ok) return (await response.json()) as T;
+
+    let errorBody: unknown;
+    try {
+      errorBody = await response.json();
+    } catch {
+      errorBody = { raw: await response.text().catch(() => '') };
+    }
+    const apiError = errorBody as Partial<VeniceApiError>;
+    throw new VeniceRequestError(
+      apiError?.error?.message ?? `Venice API returned HTTP ${response.status}`,
+      response.status,
+      errorBody,
+    );
+  }
+
   /**
    * Send a POST request to `path` with a JSON body and return the parsed
    * response.

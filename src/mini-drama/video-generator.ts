@@ -817,17 +817,13 @@ async function renderVideoFile(
     elapsed += POLL_INTERVAL_MS;
 
     try {
-      const response = await fetch(`https://api.venice.ai/api/v1/video/retrieve`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
-        },
-        body: JSON.stringify({ model, queue_id }),
-      });
+      const result = await client.postBinaryOrJson<{ status: string; execution_duration?: number }>(
+        VIDEO_RETRIEVE_PATH,
+        { model, queue_id },
+      );
 
-      if (response.headers.get('content-type')?.includes('video/mp4')) {
-        const videoBuffer = Buffer.from(await response.arrayBuffer());
+      if (Buffer.isBuffer(result.value)) {
+        const videoBuffer = result.value;
 
         archiveExisting(outputPath);
 
@@ -882,7 +878,7 @@ async function renderVideoFile(
         return outputPath;
       }
 
-      const status = (await response.json()) as { status: string; execution_duration?: number };
+      const status = result.value as { status: string; execution_duration?: number };
       const pct = status.execution_duration
         ? `${(status.execution_duration / 1000).toFixed(0)}s elapsed`
         : '';

@@ -104,7 +104,7 @@ program
       process.exit(1);
     }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const refManager = new ReferenceManager(project.outputDir);
 
@@ -203,7 +203,7 @@ program
     }
 
     const aesthetic = project.aesthetic || createDefaultAesthetic();
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
 
     console.log(`\nGenerating storyboard for Scene ${scene.number}: ${scene.heading}`);
@@ -275,7 +275,7 @@ program
     }
 
     const aesthetic = project.aesthetic || createDefaultAesthetic();
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const assembler = new StoryboardAssembler(project.outputDir);
 

@@ -10,6 +10,7 @@ export interface SeriesState {
   concept: string;
   genre: string;
   setting: string;
+  projectType?: 'film' | 'series' | 'product-video' | 'music-video' | 'screenplay';
   aesthetic: AestheticProfile | null;
   aestheticSeed?: number;
   characters: Character[];

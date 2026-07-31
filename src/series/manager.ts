@@ -20,8 +20,6 @@ import {
   type VideoFamilyPreference,
 } from './types.js';
 
-const OUTPUT_BASE = resolve('output');
-
 function slugify(name: string): string {
   return name
     .toLowerCase()
@@ -34,6 +32,10 @@ export interface CreateSeriesOptions {
   audioStrategy?: AudioStrategy;
   /** Upfront questionnaire: preferred video model family. */
   videoFamilyPreference?: VideoFamilyPreference;
+  /** Directory that contains every series project. */
+  workspace?: string;
+  /** Broad standalone-CLI creation type. */
+  projectType?: 'film' | 'series' | 'product-video' | 'music-video' | 'screenplay';
 }
 
 export function createSeries(
@@ -44,7 +46,7 @@ export function createSeries(
   options?: CreateSeriesOptions,
 ): SeriesState {
   const slug = slugify(name);
-  const outputDir = join(OUTPUT_BASE, slug);
+  const outputDir = join(resolve(options?.workspace ?? 'output'), slug);
   const now = new Date().toISOString();
 
   const family = options?.videoFamilyPreference ?? 'auto';
@@ -56,6 +58,7 @@ export function createSeries(
     concept,
     genre,
     setting,
+    ...(options?.projectType ? { projectType: options.projectType } : {}),
     aesthetic: null,
     characters: [],
     episodes: [],
@@ -163,14 +166,15 @@ export async function loadSeries(outputDir: string): Promise<SeriesState | null>
   return JSON.parse(raw) as SeriesState;
 }
 
-export async function listSeries(): Promise<{ name: string; slug: string; dir: string }[]> {
+export async function listSeries(workspace = resolve('output')): Promise<{ name: string; slug: string; dir: string }[]> {
+  const outputBase = resolve(workspace);
   const results: { name: string; slug: string; dir: string }[] = [];
-  if (!existsSync(OUTPUT_BASE)) return results;
+  if (!existsSync(outputBase)) return results;
 
-  const entries = await readdir(OUTPUT_BASE, { withFileTypes: true });
+  const entries = await readdir(outputBase, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const dir = join(OUTPUT_BASE, entry.name);
+    const dir = join(outputBase, entry.name);
     const seriesFile = join(dir, 'series.json');
     if (!existsSync(seriesFile)) continue;
     try {

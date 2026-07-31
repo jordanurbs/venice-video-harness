@@ -5,6 +5,7 @@ import type { Scene } from './parsers/scene-extractor.js';
 import type { CharacterDescription } from './characters/describer.js';
 import type { CharacterLock } from './characters/reference-manager.js';
 import type { AestheticProfile } from './storyboard/prompt-builder.js';
+import { hydrateEnvironmentFromUserConfig } from './user-config.js';
 
 export interface ProjectState {
   name: string;
@@ -80,10 +81,11 @@ export async function loadProject(outputDir: string): Promise<ProjectState | nul
   return JSON.parse(data) as ProjectState;
 }
 
-export function getVeniceApiKey(): string {
+export async function getVeniceApiKey(): Promise<string> {
+  await hydrateEnvironmentFromUserConfig();
   const key = process.env.VENICE_API_KEY;
   if (!key) {
-    throw new Error('VENICE_API_KEY environment variable is required. Set it in .env or export it.');
+    throw new Error('Venice API key is required. Run `venice-video setup` or set VENICE_API_KEY.');
   }
   return key;
 }

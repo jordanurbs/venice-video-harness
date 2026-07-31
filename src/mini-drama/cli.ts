@@ -6,6 +6,7 @@ import { resolve, join, basename } from 'node:path';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import { stdin } from 'node:process';
 
 import {
   createSeries,
@@ -46,6 +47,16 @@ import { generateImage, generateWithReferences } from '../venice/generate.js';
 import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { appendRecipePass } from '../venice/recipe.js';
 import { getVeniceApiKey } from '../config.js';
+import { promptChoice, promptText } from '../interactive.js';
+import {
+  getConfigPath,
+  getDefaultSetupWorkspace,
+  getWorkspaceDir,
+  maskApiKey,
+  readUserConfig,
+  updateUserConfig,
+  validateVeniceApiKey,
+} from '../user-config.js';
 import { listVoices, filterVoices, auditionVoices } from '../venice/voices.js';
 import {
   generateDialogueForShots,
@@ -75,9 +86,10 @@ import { buildGenerationPlan, saveGenerationPlan } from './generation-planner.js
 
 const program = new Command();
 program
-  .name('mini-drama')
-  .description('Mini-Drama creation pipeline using Venice AI')
-  .version('1.0.0');
+  .name('venice-video')
+  .description('Standalone consistency-first video production with Venice AI')
+  .version('2.4.0')
+  .option('--workspace <dir>', 'Workspace containing Venice Video projects');
 
 function runCommand(command: string, args: string[]): string {
   const result = spawnSync(command, args, {
@@ -186,6 +198,161 @@ function resolveLocationRefForShot(
   return { location, refPath, note };
 }
 
+// ── setup / config / doctor / new ─────────────────────────────────────
+program
+  .command('setup')
+  .description('Configure the Venice API key and default project workspace')
+  .option('--api-key <key>', 'Venice API key (prefer the hidden prompt in an interactive terminal)')
+  .option('--workspace <dir>', 'Default directory for Venice Video projects')
+  .option('--skip-validation', 'Store the API key without contacting Venice', false)
+  .action(async (opts: { apiKey?: string; workspace?: string; skipValidation: boolean }) => {
+    const current = await readUserConfig();
+    const apiKey = opts.apiKey
+      ?? process.env.VENICE_API_KEY
+      ?? await promptText('Venice API key', { hidden: true, required: true });
+    const workspace = opts.workspace
+      ?? program.opts().workspace
+      ?? await promptText('Default project workspace', {
+        defaultValue: current.workspace ?? getDefaultSetupWorkspace(),
+        required: true,
+      });
+
+    if (!opts.skipValidation) {
+      process.stdout.write('Validating API key... ');
+      await validateVeniceApiKey(apiKey);
+      console.log('ok');
+    }
+    const resolvedWorkspace = await getWorkspaceDir(workspace);
+    await mkdir(resolvedWorkspace, { recursive: true });
+    await updateUserConfig({ apiKey, workspace: resolvedWorkspace });
+    process.env.VENICE_API_KEY = apiKey;
+
+    console.log('Venice Video is configured.');
+    console.log(`  API key: ${maskApiKey(apiKey)}`);
+    console.log(`  Workspace: ${resolvedWorkspace}`);
+    console.log(`  Config: ${getConfigPath()}`);
+    console.log('\nNext: run `venice-video new`.');
+  });
+
+const configCommand = program.command('config').description('Show or change standalone CLI configuration');
+
+configCommand
+  .command('show')
+  .description('Show configuration with the API key masked')
+  .action(async () => {
+    const config = await readUserConfig();
+    console.log(`API key: ${maskApiKey(process.env.VENICE_API_KEY || config.apiKey)}`);
+    console.log(`Workspace: ${await getWorkspaceDir()}`);
+    console.log(`Config file: ${getConfigPath()}`);
+  });
+
+configCommand
+  .command('set-workspace <dir>')
+  .description('Set the default project workspace')
+  .action(async (dir: string) => {
+    const workspace = await getWorkspaceDir(dir);
+    await mkdir(workspace, { recursive: true });
+    await updateUserConfig({ workspace });
+    console.log(`Workspace set to: ${workspace}`);
+  });
+
+configCommand
+  .command('unset-api-key')
+  .description('Remove the stored API key')
+  .action(async () => {
+    await updateUserConfig({ apiKey: undefined });
+    console.log('Stored API key removed.');
+  });
+
+program
+  .command('doctor')
+  .description('Check API credentials and local media dependencies')
+  .action(async () => {
+    let failed = false;
+    const checkCommand = (name: string, args: string[] = ['-version']) => {
+      const result = spawnSync(name, args, { stdio: 'ignore' });
+      const ok = result.status === 0;
+      console.log(`${ok ? '✓' : '✗'} ${name}`);
+      if (!ok) failed = true;
+    };
+
+    console.log(`✓ Node ${process.versions.node}`);
+    checkCommand('ffmpeg');
+    checkCommand('ffprobe');
+    try {
+      const apiKey = await getVeniceApiKey();
+      await validateVeniceApiKey(apiKey);
+      console.log(`✓ Venice API key ${maskApiKey(apiKey)}`);
+    } catch (error) {
+      failed = true;
+      console.log(`✗ Venice API key: ${(error as Error).message}`);
+    }
+    console.log(`✓ Workspace ${await getWorkspaceDir(program.opts().workspace)}`);
+    if (failed) process.exitCode = 1;
+  });
+
+program
+  .command('new')
+  .description('Create a project with an interactive wizard; Film is the general-purpose option')
+  .option('--type <type>', 'film | series | product-video | music-video | screenplay')
+  .option('-n, --name <name>', 'Project name')
+  .option('--concept <concept>', 'Project concept or premise')
+  .option('-g, --genre <genre>', 'Genre')
+  .option('--setting <setting>', 'General setting description')
+  .option('--audio-strategy <strategy>', 'native | lip-sync | narrator-vo')
+  .option('--video-family <family>', 'auto | seedance | happyhorse | grok-imagine | kling-o3')
+  .action(async (opts: {
+    type?: string; name?: string; concept?: string; genre?: string; setting?: string;
+    audioStrategy?: string; videoFamily?: string;
+  }) => {
+    if (!stdin.isTTY && (!opts.type || !opts.name || !opts.concept)) {
+      throw new Error('`venice-video new` needs an interactive terminal, or pass --type, --name, and --concept.');
+    }
+    const types = ['film', 'series', 'product-video', 'music-video', 'screenplay'] as const;
+    const type = (opts.type ?? await promptChoice('What are you making?', [
+      { label: 'Film', value: 'film', description: 'A film of any length; multi-shot and continuity-first' },
+      { label: 'Series', value: 'series', description: 'Recurring episodes, characters, and locations' },
+      { label: 'Product video', value: 'product-video', description: 'Branded launch, demo, or campaign film' },
+      { label: 'Music video', value: 'music-video', description: 'Music-led visual production' },
+      { label: 'Screenplay', value: 'screenplay', description: 'Start from a Fountain or PDF screenplay' },
+    ])) as typeof types[number];
+    if (!types.includes(type)) throw new Error(`--type must be one of: ${types.join(', ')}`);
+
+    const name = opts.name ?? await promptText('Project name', { required: true });
+    const concept = opts.concept ?? await promptText('Concept or premise', { required: true });
+    const genre = opts.genre ?? (stdin.isTTY
+      ? await promptText('Genre', { defaultValue: 'drama', required: true })
+      : 'drama');
+    const setting = opts.setting ?? (stdin.isTTY
+      ? await promptText('Setting', { defaultValue: '', required: false })
+      : '');
+    const audioStrategy = (opts.audioStrategy ?? (stdin.isTTY ? await promptChoice('Audio strategy', [
+      { label: 'Native model audio', value: 'native', description: 'Generate dialogue and ambience in the video model' },
+      { label: 'Lip-sync', value: 'lip-sync', description: 'Use Venice speech plus Wan 2.7 lip-sync' },
+      { label: 'Narrator voice-over', value: 'narrator-vo', description: 'Mute model narration and own the VO lane' },
+    ]) : 'native')) as 'native' | 'lip-sync' | 'narrator-vo';
+    const videoFamily = (opts.videoFamily ?? (stdin.isTTY ? await promptChoice('Video model family', [
+      { label: 'Automatic', value: 'auto', description: 'Current reference-first Seedance Enhanced defaults' },
+      { label: 'Seedance', value: 'seedance' },
+      { label: 'HappyHorse', value: 'happyhorse' },
+      { label: 'Grok Imagine', value: 'grok-imagine' },
+      { label: 'Kling O3', value: 'kling-o3' },
+    ]) : 'auto')) as 'auto' | 'seedance' | 'happyhorse' | 'grok-imagine' | 'kling-o3';
+
+    const workspace = await getWorkspaceDir(program.opts().workspace);
+    await mkdir(workspace, { recursive: true });
+    const series = createSeries(name, concept, genre, setting, {
+      audioStrategy,
+      videoFamilyPreference: videoFamily,
+      workspace,
+      projectType: type,
+    });
+    await saveSeries(series);
+    console.log(`\n${type === 'film' ? 'Film' : 'Project'} created: ${series.outputDir}`);
+    console.log(`Reference-first defaults: ${series.videoDefaults.characterConsistencyModel}`);
+    console.log(`Next: venice-video new-episode -p "${series.outputDir}" --title "First episode"`);
+  });
+
 // ── new-series ────────────────────────────────────────────────────────
 program
   .command('new-series')
@@ -228,6 +395,7 @@ program
       process.exit(2);
     }
     const series = createSeries(opts.name, opts.concept, opts.genre, opts.setting, {
+      workspace: await getWorkspaceDir(program.opts().workspace),
       audioStrategy: opts.audioStrategy as 'native' | 'lip-sync' | 'narrator-vo' | undefined,
       videoFamilyPreference: opts.videoFamily as 'auto' | 'seedance' | 'happyhorse' | 'grok-imagine' | 'kling-o3' | undefined,
     });
@@ -292,12 +460,12 @@ program
   .command('list-series')
   .description('List all mini-drama series')
   .action(async () => {
-    const all = await listSeries();
+    const all = await listSeries(await getWorkspaceDir(program.opts().workspace));
     if (all.length === 0) {
-      console.log('No series found. Create one with: mini-drama new-series');
+      console.log('No projects found. Create one with: venice-video new');
       return;
     }
-    console.log('Mini-Drama Series:');
+    console.log('Venice Video projects:');
     for (const s of all) {
       console.log(`  ${s.name} (${s.slug}) -> ${s.dir}`);
     }
@@ -313,7 +481,7 @@ program
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const count = parseInt(opts.count);
 
@@ -464,7 +632,7 @@ program
     addCharacter(series, character);
 
     if (!opts.skipImages && series.aesthetic) {
-      const apiKey = getVeniceApiKey();
+      const apiKey = await getVeniceApiKey();
       const client = new VeniceClient(apiKey);
       const charDir = getCharacterDir(series, character.name);
       await mkdir(charDir, { recursive: true });
@@ -613,7 +781,7 @@ program
     const char = getCharacter(series, opts.character);
     if (!char) { console.error(`Character "${opts.character}" not found.`); process.exit(1); }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
 
     const sampleText = opts.sampleText || `You crossed the line tonight. I expected better from you.`;
@@ -661,7 +829,7 @@ program
     char.locked = true;
 
     if (opts.voiceReference) {
-      const apiKey = getVeniceApiKey();
+      const apiKey = await getVeniceApiKey();
       const client = new VeniceClient(apiKey);
       const { relPath, model } = await generateVoiceReference(client, series, char, { file: opts.voiceReference });
       char.voiceReferencePath = relPath;
@@ -701,7 +869,7 @@ program
     const char = getCharacter(series, opts.character);
     if (!char) { console.error(`Character "${opts.character}" not found.`); process.exit(1); }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
 
     const { relPath, model } = await generateVoiceReference(client, series, char, {
@@ -751,7 +919,7 @@ program
     addLocation(series, location);
 
     if (!opts.skipImages && series.aesthetic) {
-      const apiKey = getVeniceApiKey();
+      const apiKey = await getVeniceApiKey();
       const client = new VeniceClient(apiKey);
       console.log(`Generating reference images for location "${location.name}"...`);
       const { generated, skipped } = await generateLocationReferences(client, series, location, {
@@ -779,7 +947,7 @@ program
     const location = getLocation(series, opts.location);
     if (!location) { console.error(`Location "${opts.location}" not found.`); process.exit(1); }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const { generated, skipped } = await generateLocationReferences(client, series, location, {
       model: opts.model,
@@ -804,7 +972,7 @@ program
     const script = await loadEpisodeScript(series, opts.episode);
     if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
 
     if (opts.slug) {
@@ -840,7 +1008,7 @@ program
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
 
     // Gather series-level reference docs (*.md in series root)
@@ -1139,7 +1307,7 @@ program
     }
 
     const cfgScale = opts.cfgScale ?? 10;
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const sceneDir = join(episodeDir, 'scene-001');
     await mkdir(sceneDir, { recursive: true });
@@ -1614,7 +1782,7 @@ program
       process.exit(1);
     }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
 
     console.log(`Fixing shot ${shotNum} with character references: ${charNames.join(', ')}`);
@@ -1809,7 +1977,7 @@ program
     const script = await loadEpisodeScript(series, opts.episode);
     if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const episodeDir = getEpisodeDir(series, opts.episode);
     const sceneDir = join(episodeDir, 'scene-001');
@@ -1997,7 +2165,7 @@ program
     const qaPath = join(episodeDir, 'qa-approved.json');
     if (!opts.skipQa && !existsSync(qaPath)) {
       console.error('QA approval required before video generation.');
-      console.error('Run /qa-storyboard to review panels, then: qa-approve -p <project> -e <episode>');
+      console.error('Run qa-storyboard to review panels, then: qa-approve -p <project> -e <episode>');
       console.error('Or bypass with: generate-videos ... --skip-qa');
       process.exit(1);
     }
@@ -2010,7 +2178,7 @@ program
       console.log('Seedance R2V → Wan 2.7 keyframe pipeline DISABLED for this run.\n');
     }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const sceneDir = join(episodeDir, 'scene-001');
     const generationPlan = buildGenerationPlan(script, series);
@@ -2083,7 +2251,7 @@ program
     const script = await loadEpisodeScript(series, opts.episode);
     if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const episodeDir = getEpisodeDir(series, opts.episode);
     const audioDir = join(episodeDir, 'audio');
@@ -2161,7 +2329,7 @@ program
       process.exit(1);
     }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const episodeDir = getEpisodeDir(series, opts.episode);
     const audioDir = join(episodeDir, 'audio');
@@ -2208,7 +2376,7 @@ program
       process.exit(1);
     }
 
-    const apiKey = getVeniceApiKey();
+    const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const episodeDir = getEpisodeDir(series, opts.episode);
     const audioDir = join(episodeDir, 'audio');
@@ -2897,15 +3065,30 @@ program
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--with-tts', 'Add Venice dialogue replacement for voice consistency across episodes', false)
   .option('--skip-music', 'Skip background music generation', false)
-  .action(async (opts: { project: string; episode: number; withTts: boolean; skipMusic: boolean }) => {
+  .option('--resume-after-qa', 'Continue only after qa-approved.json exists', false)
+  .action(async (opts: { project: string; episode: number; withTts: boolean; skipMusic: boolean; resumeAfterQa: boolean }) => {
     console.log('=== Full Episode Production Pipeline ===\n');
 
-    console.log('Step 1: Generating storyboard panels...');
-    await program.parseAsync(['', '', 'storyboard-episode', '-p', opts.project, '-e', String(opts.episode)]);
+    const projectDir = resolve(opts.project);
+    const series = await loadSeries(projectDir);
+    if (!series) throw new Error(`Series not found: ${projectDir}`);
+    const episodeDir = getEpisodeDir(series, opts.episode);
+    const qaApprovedPath = join(episodeDir, 'qa-approved.json');
 
-    console.log('\nStep 2: QA -- Review panels for character/setting consistency');
-    console.log('  >> Run /qa-storyboard now to verify before proceeding to video generation.');
-    console.log('  >> Delete and regenerate any flagged panels, then continue.\n');
+    if (!opts.resumeAfterQa) {
+      console.log('Step 1: Generating storyboard panels...');
+      await program.parseAsync(['', '', 'storyboard-episode', '-p', opts.project, '-e', String(opts.episode)]);
+      console.log('\nStep 2: Running standalone vision QA...');
+      await program.parseAsync(['', '', 'qa-storyboard', '-p', opts.project, '-e', String(opts.episode)]);
+      console.log('\nProduction paused at the QA gate. Review qa-report.json and the panels.');
+      console.log(`Approve with: venice-video qa-approve -p "${projectDir}" -e ${opts.episode}`);
+      console.log(`Then resume: venice-video produce-episode -p "${projectDir}" -e ${opts.episode} --resume-after-qa`);
+      return;
+    }
+
+    if (!existsSync(qaApprovedPath)) {
+      throw new Error(`QA approval is missing: ${qaApprovedPath}. Run qa-approve before --resume-after-qa.`);
+    }
 
     console.log('Step 3: Generating video clips (dialogue + SFX + ambient via native model audio)...');
     await program.parseAsync(['', '', 'generate-videos', '-p', opts.project, '-e', String(opts.episode)]);
@@ -2928,7 +3111,7 @@ program
     console.log('\n=== Production Complete ===');
   });
 
-program.parse();
+await program.parseAsync();
 
 // ── Helpers ───────────────────────────────────────────────────────────
 

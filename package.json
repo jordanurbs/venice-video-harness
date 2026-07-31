@@ -1,7 +1,7 @@
 {
   "name": "venice-video-harness",
-  "version": "2.3.0",
-  "description": "Agent-first Venice-optimized harness for consistency-first video creation -- series, branded content, narrative, or any multi-shot workflow",
+  "version": "2.4.0",
+  "description": "Standalone consistency-first video production CLI powered by the Venice API",
   "homepage": "https://github.com/jordanurbs/venice-video-harness",
   "repository": {
     "type": "git",
@@ -11,7 +11,7 @@
     "url": "https://github.com/jordanurbs/venice-video-harness/issues"
   },
   "type": "module",
-  "main": "dist/mini-drama/cli.js",
+  "main": "dist/index.js",
   "keywords": [
     "venice",
     "venice-ai",
@@ -44,19 +44,37 @@
     "dev:legacy": "tsx src/cli.ts",
     "transcribe": "tsx scripts/transcribe-sources.ts",
     "timeline": "tsx scripts/timeline-view.ts",
-    "clean": "rm -rf dist"
+    "clean": "node -e \"require('node:fs').rmSync('dist', {recursive:true, force:true})\"",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "test:legacy": "npm run build && for f in tests/test-*.mjs; do node \"$f\" || exit 1; done"
   },
   "dependencies": {
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",
     "fountain-js": "^1.1.0",
     "pdf-parse": "^1.1.1",
-    "sharp": "^0.33.5"
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/pdf-parse": "^1.1.4",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
+  },
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
   }
 }

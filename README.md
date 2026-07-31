@@ -146,54 +146,78 @@ output/                          Generated projects (gitignored)
 
 - Node.js 20+
 - `ffmpeg` and `ffprobe` on your PATH
-- A `VENICE_API_KEY` (get one at [venice.ai](https://venice.ai))
-- **Optional (editing pipeline):** `whisper-cpp` on PATH for local transcription. Install with `brew install whisper-cpp`, then download a model:
-  ```bash
-  mkdir -p ~/.cache/whisper.cpp
-  curl -L -o ~/.cache/whisper.cpp/ggml-base.en.bin \
-    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
-  ```
-  Or set `WHISPER_CPP_MODELS_DIR` to a directory that contains the `ggml-*.bin` files.
+- A Venice API key
+- **Optional (editing pipeline):** `whisper-cpp` on PATH for local transcription
 
-### Setup
+### Standalone install
+
+The CLI works directly against the Venice API. Cursor, Claude Code, OpenCode,
+MCP, and other agent harnesses are optional integrations, not runtime requirements.
 
 ```bash
-cp .env.example .env
-# Add your VENICE_API_KEY to .env
+npm install -g venice-video-harness
+venice-video setup
+venice-video doctor
+venice-video new
+```
+
+`venice-video setup` prompts for the API key without echoing it, validates it,
+and stores it in the OS-appropriate user configuration directory with owner-only
+permissions. It also records a default project workspace. Environment variables
+still take precedence for CI or ephemeral use:
+
+```bash
+export VENICE_API_KEY=your_key
+export VENICE_VIDEO_WORKSPACE=~/VeniceVideos
+```
+
+The `new` wizard starts with these production types:
+
+1. **Film** — a film of any length; there is no short-duration assumption
+2. Series
+3. Product video
+4. Music video
+5. Screenplay
+
+A non-interactive Film can also be created explicitly:
+
+```bash
+venice-video new \
+  --type film \
+  --name "Long Horizon" \
+  --concept "A feature-length journey across a flooded world" \
+  --genre adventure \
+  --audio-strategy native \
+  --video-family auto
+```
+
+Useful standalone commands:
+
+```bash
+venice-video config show
+venice-video config set-workspace ~/VeniceVideos
+venice-video config unset-api-key
+venice-video list-series
+venice-video --help
+```
+
+The setup file is intentionally not a replacement for `VENICE_API_KEY` in
+server environments. Credential precedence is environment variable, then stored
+user configuration, then the repository `.env` compatibility path.
+
+### Repository development
+
+```bash
 npm install
 npm run build
+npm test
+npm run test:legacy
+npm run dev -- <command>
 ```
 
-### CLI and npm Scripts
-
-The primary interface is agent chat (see below), but the harness also exposes CLIs:
-
-```bash
-# Development (no build required)
-npm run dev -- <command>          # Run mini-drama CLI via tsx
-npm run dev:legacy -- <command>   # Run legacy storyboard CLI via tsx
-
-# Production (after npm run build)
-npm start -- <command>            # Run mini-drama CLI from dist/
-npx venice-video <command>        # Same as above (bin alias)
-npx storyboard <command>          # Legacy storyboard pipeline
-
-# Maintenance
-npm run build                     # Compile TypeScript
-npm run clean                     # Remove dist/
-```
-
-### In Agent Chat
-
-Open the project with your coding agent of choice (opencode, Claude Code, Cursor, etc.). The agent reads `AGENTS.md` and the playbooks to operate the harness.
-
-Good first messages:
-
-- "Set up this Venice video harness for first use"
-- "Create a new character-consistent video series"
-- "Generate a 30-second branded video sequence"
-- "Build a multi-episode narrative with locked characters"
-- "Create a product launch trailer with consistent visual style"
+The repository still includes agent orchestration in `AGENTS.md` and `.claude/`.
+Those layers can operate the same execution engine, but the installed
+`venice-video` command does not depend on them.
 
 ### Programmatic Usage
 
