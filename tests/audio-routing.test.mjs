@@ -44,6 +44,30 @@ test('exact lip-sync explicitly routes a single speaker to Wan 2.7', () => {
   assert.equal(mustStayAsWanLipSync(dialogueShot(), series.videoDefaults), true);
 });
 
+test('narrator-vo never routes a dialogue shot to Wan 2.7', () => {
+  const series = seriesWith('narrator-vo');
+  const resolution = resolveVideoModel(dialogueShot(), series);
+  assert.equal(resolution.modelId, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(mustStayAsWanLipSync(dialogueShot(), series.videoDefaults), false);
+});
+
+// Every series is created with a default lipSyncModel, so an unset strategy
+// must read as native rather than as an invitation to route to Wan.
+test('an unset audio strategy behaves as native despite the default lipSyncModel', () => {
+  const series = createSeries('Routing', 'test', 'drama', 'studio');
+  assert.equal(series.videoDefaults.audioStrategy, undefined);
+  assert.equal(series.videoDefaults.lipSyncModel, 'wan-2-7-image-to-video');
+  assert.equal(resolveVideoModel(dialogueShot(), series).modelId, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(mustStayAsWanLipSync(dialogueShot(), series.videoDefaults), false);
+});
+
+test('high-motion dialogue stays on R2V even under exact lip-sync', () => {
+  const series = seriesWith('lip-sync');
+  const shot = { ...dialogueShot(), motion: 'high' };
+  assert.equal(resolveVideoModel(shot, series).modelId, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(mustStayAsWanLipSync(shot, series.videoDefaults), false);
+});
+
 test('native dialogue may remain grouped while exact lip-sync stays single', () => {
   const shots = [dialogueShot(1), dialogueShot(2)];
   const nativePlan = buildGenerationPlan(script(shots), seriesWith('native'));
