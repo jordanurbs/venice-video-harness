@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.5.3 — 2026-07-31
+
+- Workshop generation now writes a formatted, self-contained `WORKSHOP.html` alongside JSON and Markdown.
+- The HTML presents story, inputs, structure, visual language, cast, locations, production plan, references, open questions, and the shot script in a browser-friendly layout.
+- The CLI opens `WORKSHOP.html` automatically in the default browser after generation/revision when running interactively; failure to open never fails the workshop.
+- Workshop status now lists the HTML path, and all rendered content is HTML-escaped.
+
 ## 2.5.2 — 2026-07-31
 
 - The Creative references prompt now says to drag a file or directory into the terminal.

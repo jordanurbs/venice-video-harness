@@ -101,10 +101,22 @@ const program = new Command();
 program
   .name('venice-video')
   .description('Standalone consistency-first video production with Venice AI')
-  .version('2.5.2')
+  .version('2.5.3')
   .option('--workspace <dir>', 'Workspace containing Venice Video projects');
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
+
+
+function openInDefaultBrowser(path: string): boolean {
+  if (process.env.VENICE_VIDEO_NO_OPEN === '1' || !process.stdout.isTTY) return false;
+  const command = process.platform === 'darwin'
+    ? { name: 'open', args: [path] }
+    : process.platform === 'win32'
+      ? { name: 'cmd', args: ['/c', 'start', '', path] }
+      : { name: 'xdg-open', args: [path] };
+  const result = spawnSync(command.name, command.args, { stdio: 'ignore' });
+  return result.status === 0;
+}
 
 function runCommand(command: string, args: string[]): string {
   const result = spawnSync(command, args, {
@@ -399,7 +411,7 @@ program
         console.log(`  Script: ${existing.script.title} · ${existing.script.totalDuration} · ${existing.script.shots.length} shots`);
         console.log(`  Open questions: ${existing.productionNotes.openQuestions.length}`);
         console.log(`  Delivery: ${existing.productionNotes.delivery === '4k' ? '4K master after assembly' : 'Standard master'}`);
-        console.log(`  Files: ${getWorkshopPath(series)} · ${join(series.outputDir, 'WORKSHOP.md')}`);
+        console.log(`  Files: ${getWorkshopPath(series)} · ${join(series.outputDir, 'WORKSHOP.html')} · ${join(series.outputDir, 'WORKSHOP.md')}`);
       } else {
         console.log(`  Start: venice-video workshop -p "${series.outputDir}"`);
       }
@@ -411,7 +423,9 @@ program
       await approveWorkshop(series, existing);
       console.log(`${language.projectNoun} workshop approved.`);
       console.log('  Aesthetic, characters, locations, and script are now production state.');
-      console.log(`  Review the script and assets listed in ${join(series.outputDir, 'WORKSHOP.md')}.`);
+      const approvedHtmlPath = join(series.outputDir, 'WORKSHOP.html');
+      console.log(`  Review the approved workshop: ${approvedHtmlPath}`);
+      if (openInDefaultBrowser(approvedHtmlPath)) console.log('  Opened workshop in your default browser.');
       console.log('  The workshop remains your control center:');
       console.log(`    venice-video workshop -p "${series.outputDir}" --status`);
       console.log(`    venice-video workshop -p "${series.outputDir}" --feedback "..."`);
@@ -475,7 +489,10 @@ program
     console.log(`  Script: ${draft.script.title} · ${draft.script.totalDuration} · ${draft.script.shots.length} shots`);
     console.log(`  Open questions: ${draft.productionNotes.openQuestions.length}`);
     console.log(`  Delivery: ${draft.productionNotes.delivery === '4k' ? '4K master after assembly' : 'Standard master'}`);
-    console.log(`  Review: ${join(series.outputDir, 'WORKSHOP.md')}`);
+    const htmlPath = join(series.outputDir, 'WORKSHOP.html');
+    console.log(`  Review: ${htmlPath}`);
+    if (openInDefaultBrowser(htmlPath)) console.log('  Opened workshop in your default browser.');
+    else console.log('  Open the HTML file above in your browser.');
     console.log(`  Revise: venice-video workshop -p "${series.outputDir}" --feedback "..."`);
     console.log(`  Approve: venice-video workshop -p "${series.outputDir}" --approve`);
   });

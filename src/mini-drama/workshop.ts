@@ -309,6 +309,76 @@ export function renderWorkshopMarkdown(draft: WorkshopDraft): string {
   return lines.join('\n');
 }
 
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function htmlList(items: string[], empty = 'None'): string {
+  return items.length > 0
+    ? `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+    : `<p class="muted">${escapeHtml(empty)}</p>`;
+}
+
+export function renderWorkshopHtml(draft: WorkshopDraft): string {
+  const structure = draft.structure.map((section, index) => `
+    <article class="card structure-card">
+      <span class="index">${String(index + 1).padStart(2, '0')}</span>
+      <h3>${escapeHtml(section.name)}</h3>
+      <p>${escapeHtml(section.purpose)}</p>
+      ${htmlList(section.beats)}
+    </article>`).join('');
+  const characters = draft.characters.map(character => `
+    <article class="card">
+      <p class="eyebrow">Character</p>
+      <h3>${escapeHtml(character.name)}</h3>
+      <p>${escapeHtml(character.fullDescription)}</p>
+      <dl><dt>Wardrobe</dt><dd>${escapeHtml(character.wardrobe)}</dd><dt>Voice</dt><dd>${escapeHtml(character.voiceDescription)}</dd></dl>
+    </article>`).join('');
+  const locations = draft.locations.map(location => `
+    <article class="card">
+      <p class="eyebrow">Location</p>
+      <h3>${escapeHtml(location.name)}</h3>
+      <p>${escapeHtml(location.description)}</p>
+      <dl><dt>Lighting</dt><dd>${escapeHtml(location.lightingNotes ?? 'Not specified')}</dd></dl>
+    </article>`).join('');
+  const shots = draft.script.shots.map(shot => `
+    <tr>
+      <td class="shot-number">${escapeHtml(shot.shotNumber)}</td>
+      <td><span class="pill">${escapeHtml(shot.type)}</span><br><span class="muted">${escapeHtml(shot.duration)} · ${escapeHtml(shot.location ?? 'No location')}</span></td>
+      <td>${escapeHtml(shot.description)}</td>
+      <td>${shot.dialogue ? `<strong>${escapeHtml(shot.dialogue.character)}</strong><br>“${escapeHtml(shot.dialogue.line)}”` : '<span class="muted">—</span>'}</td>
+    </tr>`).join('');
+  const refs = draft.inputs.referenceSources ?? [];
+  const references = refs.length
+    ? `<div class="reference-list">${refs.map(source => `<div><span class="pill">${escapeHtml(source.kind)}</span> <code>${escapeHtml(source.path)}</code></div>`).join('')}</div>`
+    : '<p class="muted">No references supplied; the workshop proposed the creative direction.</p>';
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(draft.projectName)} — Workshop</title>
+<style>
+:root{color-scheme:dark;--bg:#0c0e12;--panel:#141820;--line:#29303d;--text:#f2efe7;--muted:#9da5b4;--accent:#7cb7ff;--warm:#d6b98c}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 85% 0,#17263d 0,transparent 32%),var(--bg);color:var(--text);font:16px/1.6 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{width:min(1180px,calc(100% - 40px));margin:auto;padding:64px 0 100px}.hero{padding:48px;border:1px solid var(--line);background:linear-gradient(135deg,#151a24e8,#10141be8);border-radius:24px}.eyebrow{text-transform:uppercase;letter-spacing:.16em;font-size:12px;color:var(--accent);font-weight:700;margin:0 0 10px}h1{font:clamp(42px,7vw,82px)/.95 Georgia,serif;margin:0 0 24px;max-width:900px}h2{font:36px/1.1 Georgia,serif;margin:70px 0 24px}h3{font:24px/1.2 Georgia,serif;margin:4px 0 14px}.logline{font-size:22px;max-width:850px;color:#dce4ef}.meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}.pill{display:inline-block;padding:4px 10px;border:1px solid #3b4658;border-radius:999px;color:#cbd7e7;font-size:12px;text-transform:uppercase;letter-spacing:.08em}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}.card{position:relative;padding:24px;border:1px solid var(--line);border-radius:18px;background:var(--panel)}.structure-card{padding-left:64px}.index{position:absolute;left:22px;color:var(--warm);font:18px/1 ui-monospace,monospace}dl{display:grid;grid-template-columns:84px 1fr;gap:6px 12px;margin:18px 0 0}dt{color:var(--muted)}dd{margin:0}.muted{color:var(--muted)}.split{display:grid;grid-template-columns:1.2fr .8fr;gap:18px}.aesthetic{border-left:3px solid var(--warm)}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden}th,td{text-align:left;padding:16px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}.shot-number{font:20px ui-monospace,monospace;color:var(--warm)}code{font-size:12px;word-break:break-all}.reference-list{display:grid;gap:10px}.status{color:${draft.status === 'approved' ? '#8ee6b2' : '#ffd48a'}}@media(max-width:760px){main{width:min(100% - 24px,1180px);padding-top:20px}.hero{padding:28px}.split{grid-template-columns:1fr}table{display:block;overflow:auto}}
+</style></head><body><main>
+<section class="hero"><p class="eyebrow">${escapeHtml(draft.projectType)} workshop · revision ${draft.revision}</p><h1>${escapeHtml(draft.projectName)}</h1><p class="logline">${escapeHtml(draft.logline)}</p><div class="meta"><span class="pill status">${escapeHtml(draft.status)}</span><span class="pill">${escapeHtml(draft.script.totalDuration)}</span><span class="pill">${draft.script.shots.length} shots</span><span class="pill">${draft.productionNotes.delivery === '4k' ? '4K delivery' : 'Standard delivery'}</span></div></section>
+<section class="split"><div><h2>Story</h2><p>${escapeHtml(draft.synopsis)}</p><h3>Themes</h3>${htmlList(draft.themes)}</div><div><h2>Workshop inputs</h2><div class="card"><dl><dt>Outcome</dt><dd>${escapeHtml(draft.inputs.objective || 'Workshop-generated')}</dd><dt>Audience</dt><dd>${escapeHtml(draft.inputs.audience || 'Workshop-generated')}</dd><dt>Runtime</dt><dd>${escapeHtml(draft.inputs.targetDuration)}</dd><dt>Must include</dt><dd>${escapeHtml(draft.inputs.mustInclude || 'Workshop-generated')}</dd><dt>Avoid</dt><dd>${escapeHtml(draft.inputs.avoid || 'None specified')}</dd></dl></div></div></section>
+<h2>Structure</h2><section class="grid">${structure}</section>
+<h2>Visual language</h2><section class="card aesthetic"><dl><dt>Style</dt><dd>${escapeHtml(draft.aesthetic.style)}</dd><dt>Palette</dt><dd>${escapeHtml(draft.aesthetic.palette)}</dd><dt>Lighting</dt><dd>${escapeHtml(draft.aesthetic.lighting)}</dd><dt>Lens</dt><dd>${escapeHtml(draft.aesthetic.lensCharacteristics)}</dd><dt>Texture</dt><dd>${escapeHtml(draft.aesthetic.filmStock)}</dd></dl></section>
+<h2>Cast</h2><section class="grid">${characters || '<p class="muted">No characters.</p>'}</section>
+<h2>Locations</h2><section class="grid">${locations || '<p class="muted">No locations.</p>'}</section>
+<section class="split"><div><h2>Production plan</h2><div class="card"><p><strong>Audio:</strong> ${escapeHtml(draft.productionNotes.audioApproach)}</p><h3>Continuity</h3>${htmlList(draft.productionNotes.continuityPriorities)}<h3>Risks</h3>${htmlList(draft.productionNotes.risks)}</div></div><div><h2>Open questions</h2><div class="card">${htmlList(draft.productionNotes.openQuestions)}</div></div></section>
+<h2>Creative references</h2>${references}
+<h2>Shot script</h2><table><thead><tr><th>#</th><th>Shot</th><th>Direction</th><th>Dialogue</th></tr></thead><tbody>${shots}</tbody></table>
+</main></body></html>`;
+}
+
 export async function saveWorkshop(series: SeriesState, draft: WorkshopDraft): Promise<void> {
   const jsonPath = getWorkshopPath(series);
   if (existsSync(jsonPath)) {
@@ -317,6 +387,7 @@ export async function saveWorkshop(series: SeriesState, draft: WorkshopDraft): P
   }
   await writeFile(jsonPath, `${JSON.stringify(draft, null, 2)}\n`, 'utf-8');
   await writeFile(join(series.outputDir, 'WORKSHOP.md'), renderWorkshopMarkdown(draft), 'utf-8');
+  await writeFile(join(series.outputDir, 'WORKSHOP.html'), renderWorkshopHtml(draft), 'utf-8');
 }
 
 export async function approveWorkshop(series: SeriesState, draft: WorkshopDraft): Promise<WorkshopDraft> {

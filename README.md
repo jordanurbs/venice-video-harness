@@ -215,8 +215,9 @@ The workshop develops the complete project—not only a shot list:
 - dialogue/audio approach and exact-lip-sync decisions
 - production-ready shot script, risks, and open questions
 
-It writes `WORKSHOP.md` for human review and `workshop.json` as the structured
-source. Iterate without losing project context:
+It writes a formatted `WORKSHOP.html` for browser review, `WORKSHOP.md` as a
+portable text version, and `workshop.json` as the structured source. In an
+interactive terminal, the HTML opens automatically in your default browser. Iterate without losing project context:
 
 ```bash
 venice-video workshop -p ~/VeniceVideos/my-film --feedback "Make the middle more tense"

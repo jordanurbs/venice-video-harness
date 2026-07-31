@@ -10,6 +10,7 @@ import {
   inventoryReferencePath,
   loadWorkshop,
   normalizeDroppedPath,
+  renderWorkshopHtml,
   renderWorkshopMarkdown,
   saveWorkshop,
 } from '../dist/mini-drama/workshop.js';
@@ -61,7 +62,12 @@ test('workshop draft saves a readable review and approval materializes productio
   await saveWorkshop(series, workshop);
   assert.deepEqual((await loadWorkshop(series)).logline, workshop.logline);
   const markdown = await readFile(join(series.outputDir, 'WORKSHOP.md'), 'utf-8');
+  const html = await readFile(join(series.outputDir, 'WORKSHOP.html'), 'utf-8');
   assert.match(markdown, /## Logline/);
+  assert.match(html, /<!doctype html>/);
+  assert.match(html, /Rocketship/);
+  assert.match(html, /Shot script/);
+  assert.match(html, /4K delivery/);
   assert.match(markdown, /## Aesthetic/);
   assert.match(markdown, /Delivery: 4K master/);
   assert.match(markdown, /## Characters/);
@@ -104,4 +110,17 @@ test('blank creative fields explicitly ask the workshop to propose answers', () 
   assert.match(prompt, /blanksPolicy/);
   assert.match(prompt, /blank creative field is for the workshop to propose/);
   assert.match(buildWorkshopSystemPrompt(series), /When a workshop input is blank, propose a strong answer/);
+});
+
+test('workshop HTML escapes generated and user-provided content', () => {
+  const series = film('/tmp');
+  const workshop = draft(series);
+  workshop.projectName = '<script>alert(1)</script>';
+  workshop.logline = 'A & B < C';
+  workshop.script.shots[0].description = '<img src=x onerror=alert(1)>';
+  const html = renderWorkshopHtml(workshop);
+  assert.doesNotMatch(html, /<script>alert/);
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /A &amp; B &lt; C/);
 });
