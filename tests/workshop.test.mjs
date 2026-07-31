@@ -23,7 +23,7 @@ function draft(series) {
   return {
     version: 1, status: 'draft', revision: 1, generatedAt: new Date().toISOString(),
     projectName: series.name, projectType: 'film',
-    inputs: { objective: 'Make a complete film', targetDuration: '8 minutes', audience: 'science-fiction fans', mustInclude: 'rocket launch', avoid: 'cliffhanger', references: 'Apollo photography' },
+    inputs: { objective: 'Make a complete film', targetDuration: '8 minutes', audience: 'science-fiction fans', mustInclude: 'rocket launch', avoid: 'cliffhanger', references: 'Apollo photography', delivery: '4k' },
     logline: 'A pilot follows a signal beyond the edge of mapped space.',
     synopsis: 'A complete story with a final resolution.', themes: ['wonder', 'choice'],
     structure: [{ name: 'Launch', purpose: 'Commit to the journey', beats: ['Ignition', 'Signal'] }],
@@ -31,7 +31,7 @@ function draft(series) {
     characters: [{ name: 'MARA', gender: 'female', age: '40s', description: 'disciplined pilot', fullDescription: 'A disciplined veteran pilot carrying quiet grief.', wardrobe: 'white pressure suit', voiceDescription: 'measured low alto', locked: false, seed: 123 }],
     locations: [{ name: 'Orbital Capsule', slug: 'orbital-capsule', description: 'compact worn spacecraft cockpit', lightingNotes: 'amber practicals against hard sunlight', seed: 456 }],
     script: { episode: 1, title: 'Rocketship', seriesName: series.name, totalDuration: '480s', status: 'draft', locations: [], shots: [{ shotNumber: 1, type: 'establishing', environment: 'DAY_EXTERIOR', location: 'orbital-capsule', duration: '15s', videoModel: 'atmosphere', description: 'The rocket clears the tower. No background music, no sound effects, no soundtrack, dry recording.', characters: [], dialogue: null, sfx: null, cameraMovement: 'long-lens tracking', transition: 'CUT' }] },
-    productionNotes: { audioApproach: 'native dialogue with voice donor', continuityPriorities: ['capsule geography'], risks: ['launch scale'], openQuestions: ['How old is the signal?'] },
+    productionNotes: { delivery: '4k', audioApproach: 'native dialogue with voice donor', continuityPriorities: ['capsule geography'], risks: ['launch scale'], openQuestions: ['How old is the signal?'] },
     feedbackHistory: [],
   };
 }
@@ -60,6 +60,7 @@ test('workshop draft saves a readable review and approval materializes productio
   const markdown = await readFile(join(series.outputDir, 'WORKSHOP.md'), 'utf-8');
   assert.match(markdown, /## Logline/);
   assert.match(markdown, /## Aesthetic/);
+  assert.match(markdown, /Delivery: 4K master/);
   assert.match(markdown, /## Characters/);
   assert.match(renderWorkshopMarkdown(workshop), /## Open questions/);
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.5.0 — 2026-07-31
+
+- Integrated the Topaz 2x/4x video-upscale engine into the standalone CLI.
+- Added Standard vs 4K delivery selection to the complete project workshop.
+- Added `venice-video finish`, which finds the assembled project master, estimates cost, requires confirmation, and writes a preserved 4K delivery master under `masters/`.
+- Added advanced `venice-video upscale` for arbitrary finished video files.
+- Large masters are split into upload-safe chunks, processed concurrently and resumably, concatenated without another video encode, and remuxed with the original audio.
+- Registered `topaz-video-upscale` in the model catalog and added finishing/delivery regression tests.
+
 ## 2.4.4 — 2026-07-31
 
 - Added `venice-video workshop` as the project-level creative control center.

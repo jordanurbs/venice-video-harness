@@ -3,7 +3,7 @@
 import 'dotenv/config';
 import { Command } from 'commander';
 import { resolve, join, basename } from 'node:path';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { stdin } from 'node:process';
@@ -44,6 +44,7 @@ import {
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
+import { upscaleVideo, estimateUpscaleCostUsd } from '../venice/upscale.js';
 import { generateImage, generateWithReferences } from '../venice/generate.js';
 import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { appendRecipePass } from '../venice/recipe.js';
@@ -99,7 +100,7 @@ const program = new Command();
 program
   .name('venice-video')
   .description('Standalone consistency-first video production with Venice AI')
-  .version('2.4.4')
+  .version('2.5.0')
   .option('--workspace <dir>', 'Workspace containing Venice Video projects');
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
@@ -373,13 +374,14 @@ program
   .option('--must-include <text>', 'Required story, visual, character, or product elements')
   .option('--avoid <text>', 'Things the project must avoid')
   .option('--references <text>', 'Creative references or influences')
+  .option('--delivery <target>', 'standard | 4k delivery master')
   .option('--feedback <text>', 'Revision feedback for the existing workshop')
   .option('--model <model>', 'Venice chat model', 'llama-3.3-70b')
   .option('--approve', 'Approve the current workshop and materialize its production state', false)
   .option('--status', 'Show current workshop status without generating', false)
   .action(async (opts: {
     project: string; objective?: string; duration?: string; audience?: string;
-    mustInclude?: string; avoid?: string; references?: string; feedback?: string;
+    mustInclude?: string; avoid?: string; references?: string; delivery?: string; feedback?: string;
     model: string; approve: boolean; status: boolean;
   }) => {
     const series = await loadSeries(resolve(opts.project));
@@ -394,6 +396,7 @@ program
         console.log(`  Logline: ${existing.logline}`);
         console.log(`  Script: ${existing.script.title} · ${existing.script.totalDuration} · ${existing.script.shots.length} shots`);
         console.log(`  Open questions: ${existing.productionNotes.openQuestions.length}`);
+        console.log(`  Delivery: ${existing.productionNotes.delivery === '4k' ? '4K master after assembly' : 'Standard master'}`);
         console.log(`  Files: ${getWorkshopPath(series)} · ${join(series.outputDir, 'WORKSHOP.md')}`);
       } else {
         console.log(`  Start: venice-video workshop -p "${series.outputDir}"`);
@@ -414,6 +417,9 @@ program
       return;
     }
 
+    if (opts.delivery && !['standard', '4k'].includes(opts.delivery)) {
+      throw new Error('--delivery must be standard or 4k');
+    }
     const previousInputs = existing?.inputs;
     const ask = async (label: string, value: string | undefined, fallback = '') =>
       value ?? (stdin.isTTY ? await promptText(label, { defaultValue: fallback, required: false }) : fallback);
@@ -424,6 +430,12 @@ program
       mustInclude: await ask('What must be included?', opts.mustInclude, previousInputs?.mustInclude ?? ''),
       avoid: await ask('What should it avoid?', opts.avoid, previousInputs?.avoid ?? ''),
       references: await ask('Creative references', opts.references, previousInputs?.references ?? ''),
+      delivery: (opts.delivery ?? (stdin.isTTY
+        ? await promptChoice('Final delivery', [
+            { label: 'Standard master', value: 'standard', description: 'Keep the assembled resolution' },
+            { label: '4K master', value: '4k', description: 'Upscale the approved final cut after assembly' },
+          ], previousInputs?.delivery === '4k' ? 1 : 0)
+        : previousInputs?.delivery ?? 'standard')) as 'standard' | '4k',
     };
 
     const apiKey = await getVeniceApiKey();
@@ -439,6 +451,7 @@ program
     console.log(`  Locations: ${draft.locations.length}`);
     console.log(`  Script: ${draft.script.title} · ${draft.script.totalDuration} · ${draft.script.shots.length} shots`);
     console.log(`  Open questions: ${draft.productionNotes.openQuestions.length}`);
+    console.log(`  Delivery: ${draft.productionNotes.delivery === '4k' ? '4K master after assembly' : 'Standard master'}`);
     console.log(`  Review: ${join(series.outputDir, 'WORKSHOP.md')}`);
     console.log(`  Revise: venice-video workshop -p "${series.outputDir}" --feedback "..."`);
     console.log(`  Approve: venice-video workshop -p "${series.outputDir}" --approve`);
@@ -3169,6 +3182,120 @@ program
     project: string; episode: number; fps: string; width: string; height: string;
   }) => {
     await runTimelineExport({ ...opts, format: 'fcpxml' });
+  });
+
+// ── finish / upscale ──────────────────────────────────────────────────
+function probeVideoDuration(path: string): number {
+  const result = spawnSync('ffprobe', [
+    '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path,
+  ], { encoding: 'utf-8' });
+  if (result.status !== 0) throw new Error(`ffprobe failed for ${path}: ${result.stderr || result.stdout}`);
+  const duration = Number.parseFloat(result.stdout.trim());
+  if (!Number.isFinite(duration)) throw new Error(`Could not read video duration: ${path}`);
+  return duration;
+}
+
+async function runUpscale(opts: {
+  input: string; output?: string; factor: string; segmentSeconds: string;
+  concurrency: string; keepWorkDir: boolean; yes: boolean;
+}): Promise<void> {
+  const inputPath = resolve(opts.input);
+  if (!existsSync(inputPath)) throw new Error(`Input video not found: ${inputPath}`);
+  const factor = Number.parseInt(opts.factor, 10);
+  if (factor !== 2 && factor !== 4) throw new Error('--factor must be 2 or 4');
+  const outputPath = opts.output
+    ? resolve(opts.output)
+    : inputPath.replace(/\.(mp4|mov)$/i, factor === 4 ? '-4k.mp4' : '-2x.mp4');
+  if (resolve(outputPath) === inputPath) throw new Error('Output path must differ from input path.');
+
+  const inputSeconds = probeVideoDuration(inputPath);
+  const estimate = estimateUpscaleCostUsd(inputSeconds);
+  console.log(`Input: ${inputPath} (${inputSeconds.toFixed(1)}s, ${(statSync(inputPath).size / 1e6).toFixed(0)}MB)`);
+  console.log(`Output: ${outputPath}`);
+  console.log(`Upscale: ${factor}x via topaz-video-upscale`);
+  console.log(`Estimated cost: ~$${estimate.toFixed(2)} (~$0.12 per input second)`);
+  if (!opts.yes) {
+    console.log('\nReview the estimate, then re-run with --yes to start.');
+    return;
+  }
+
+  const apiKey = await getVeniceApiKey();
+  const client = new VeniceClient(apiKey);
+  const result = await upscaleVideo(client, {
+    inputPath,
+    outputPath,
+    factor: factor as 2 | 4,
+    segmentSeconds: Number.parseInt(opts.segmentSeconds, 10),
+    concurrency: Number.parseInt(opts.concurrency, 10),
+    keepWorkDir: opts.keepWorkDir,
+    onProgress: message => console.log(`  ${message}`),
+  });
+  console.log(`\nUpscaled master: ${result.path}`);
+  console.log(`  ${result.width}x${result.height} · ${(result.sizeBytes / 1e6).toFixed(0)}MB · ${result.chunks} chunks`);
+}
+
+program
+  .command('upscale')
+  .description('Advanced: upscale any finished video 2x or 4x with Topaz')
+  .requiredOption('-i, --input <file>', 'Input video')
+  .option('-o, --output <file>', 'Output path')
+  .option('--factor <n>', '2 or 4; both cost the same', '4')
+  .option('--segment-seconds <s>', 'Upload-safe chunk length', '10')
+  .option('--concurrency <n>', 'Parallel upscale jobs', '3')
+  .option('--keep-work-dir', 'Keep intermediate chunks', false)
+  .option('--yes', 'Confirm estimated spend and start', false)
+  .action(runUpscale);
+
+program
+  .command('finish')
+  .description('Create the requested delivery master for an assembled project')
+  .requiredOption('-p, --project <dir>', 'Project output directory')
+  .option('--part <number>', 'Internal script part number', '1')
+  .option('--4k', 'Create a 4K master even if the workshop requests standard delivery', false)
+  .option('-i, --input <file>', 'Override the assembled input master')
+  .option('-o, --output <file>', 'Override the delivery output path')
+  .option('--segment-seconds <s>', 'Upload-safe chunk length', '10')
+  .option('--concurrency <n>', 'Parallel upscale jobs', '3')
+  .option('--keep-work-dir', 'Keep intermediate chunks', false)
+  .option('--yes', 'Confirm estimated spend and start', false)
+  .action(async (opts: {
+    project: string; part: string; '4k': boolean; input?: string; output?: string;
+    segmentSeconds: string; concurrency: string; keepWorkDir: boolean; yes: boolean;
+  }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) throw new Error(`Project not found: ${opts.project}`);
+    const workshop = await loadWorkshop(series);
+    const wants4k = opts['4k'] || workshop?.productionNotes.delivery === '4k';
+    const part = Number.parseInt(opts.part, 10);
+    const partDir = getEpisodeDir(series, part);
+    const partNum = String(part).padStart(3, '0');
+    const inputPath = opts.input
+      ? resolve(opts.input)
+      : join(partDir, `episode-${partNum}-final.mp4`);
+    if (!existsSync(inputPath)) {
+      throw new Error(`Assembled master not found: ${inputPath}. Run assemble-episode first or pass --input.`);
+    }
+    if (!wants4k) {
+      console.log('Workshop delivery target is Standard master.');
+      console.log(`Master ready: ${inputPath}`);
+      console.log('Use --4k to create a 4K delivery master anyway.');
+      return;
+    }
+
+    const mastersDir = join(series.outputDir, 'masters');
+    await mkdir(mastersDir, { recursive: true });
+    const outputPath = opts.output
+      ? resolve(opts.output)
+      : join(mastersDir, `${series.slug}-master-4k.mp4`);
+    await runUpscale({
+      input: inputPath,
+      output: outputPath,
+      factor: '4',
+      segmentSeconds: opts.segmentSeconds,
+      concurrency: opts.concurrency,
+      keepWorkDir: opts.keepWorkDir,
+      yes: opts.yes,
+    });
   });
 
 // ── produce-episode ───────────────────────────────────────────────────

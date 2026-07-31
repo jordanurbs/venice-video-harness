@@ -14,6 +14,7 @@ export interface WorkshopInputs {
   mustInclude: string;
   avoid: string;
   references: string;
+  delivery: 'standard' | '4k';
 }
 
 export interface WorkshopDraft {
@@ -33,6 +34,7 @@ export interface WorkshopDraft {
   locations: Location[];
   script: EpisodeScript;
   productionNotes: {
+    delivery?: 'standard' | '4k';
     audioApproach: string;
     continuityPriorities: string[];
     risks: string[];
@@ -60,6 +62,10 @@ function normalizeDraft(raw: WorkshopDraft, series: SeriesState, inputs: Worksho
     throw new Error('Workshop response did not contain a usable shot-by-shot script.');
   }
   const language = getProjectLanguage(series);
+  raw.productionNotes = {
+    ...raw.productionNotes,
+    delivery: raw.productionNotes?.delivery ?? inputs.delivery ?? 'standard',
+  };
   const characters = (raw.characters ?? []).map(character => ({
     ...character,
     name: character.name.toUpperCase(),
@@ -107,7 +113,7 @@ ${language.structureGuidance}
 ${language.closingShotGuidance}
 ${language.locationGuidance}
 
-Native dialogue means the selected video model speaks in-frame; Seedance and HappyHorse use voice-donor references when available. Exact lip-sync means Venice speech drives Wan 2.7 mouth movement. Respect the project's selected audio strategy.
+Treat 4K as a final delivery/finishing target, never as a reason to make every draft generation at 4K. Native dialogue means the selected video model speaks in-frame; Seedance and HappyHorse use voice-donor references when available. Exact lip-sync means Venice speech drives Wan 2.7 mouth movement. Respect the project's selected audio strategy.
 
 Every shot must have one dramatic intention, specific camera/blocking/light/performance direction, a location slug, a valid duration string, and no background music or sound effects baked into its description. Return ONLY valid JSON matching the requested schema.`;
 }
@@ -155,7 +161,7 @@ ${JSON.stringify({
     characters: [{ name: '', gender: 'other', age: '', description: '', fullDescription: '', wardrobe: '', voiceDescription: '', locked: false, seed: 1 }],
     locations: [{ name: '', slug: '', description: '', lightingNotes: '', seed: 1 }],
     script: { episode: 1, title: '', seriesName: series.name, totalDuration: '', status: 'draft', locations: [], shots: [{ shotNumber: 1, type: 'establishing', environment: 'DAY_EXTERIOR', location: '', duration: '10s', videoModel: 'atmosphere', description: '', panelDescription: '', characters: [], dialogue: null, sfx: null, cameraMovement: '', transition: 'CUT' }] },
-    productionNotes: { audioApproach: '', continuityPriorities: [''], risks: [''], openQuestions: [''] },
+    productionNotes: { delivery: inputs.delivery, audioApproach: '', continuityPriorities: [''], risks: [''], openQuestions: [''] },
     feedbackHistory: [],
   }, null, 2)}`;
 }
@@ -211,6 +217,7 @@ export function renderWorkshopMarkdown(draft: WorkshopDraft): string {
     '## Locations',
     ...draft.locations.flatMap(location => [`### ${location.name}`, location.description, `- Lighting: ${location.lightingNotes ?? 'Not specified'}`, '']),
     '## Production notes',
+    `- Delivery: ${draft.productionNotes.delivery === '4k' ? '4K master' : 'Standard master'}`,
     `- Audio: ${draft.productionNotes.audioApproach}`,
     ...draft.productionNotes.continuityPriorities.map(item => `- Continuity: ${item}`),
     ...draft.productionNotes.risks.map(item => `- Risk: ${item}`),

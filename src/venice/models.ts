@@ -154,6 +154,16 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 15, minAudioInputSec: 3,
     privacy: 'anonymized', offline: false,
   },
+  // Post-production 2x/4x upscaler. Requires `upscale_factor`, the real
+  // input duration as a string, and chunking for large payloads. It strips
+  // audio; src/venice/upscale.ts remuxes the original audio after processing.
+  {
+    id: 'topaz-video-upscale', name: 'Topaz Video Upscale', type: 'image-to-video',
+    durations: [], resolutions: [], aspectRatios: [],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: true,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 300, privacy: 'anonymized', offline: false,
+  },
   // -- Wan 2.5 Preview --
   {
     id: 'wan-2.5-preview-image-to-video', name: 'Wan 2.5 Preview', type: 'image-to-video',

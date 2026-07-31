@@ -224,7 +224,32 @@ venice-video workshop -p ~/VeniceVideos/my-film --approve
 ```
 
 Approval materializes the accepted aesthetic, cast, locations, and script into
-the existing production pipeline. Individual commands such as
+the existing production pipeline.
+
+The workshop also asks for the final delivery target. Choose **4K master** to
+keep generation/drafts economical and upscale only the approved assembled cut:
+
+```bash
+venice-video finish -p ~/VeniceVideos/my-film
+# Prints input, output, and cost estimate first; then:
+venice-video finish -p ~/VeniceVideos/my-film --yes
+```
+
+The finishing command finds the assembled master, chunks large videos into
+upload-safe segments, upscales them through `topaz-video-upscale`, resumes
+already-finished chunks after interruption, concatenates without another video
+encode, and remuxes the original audio. The 4K master lands in `masters/` while
+the original assembled master is preserved. Current rough estimate: about
+$0.12 per input second; the CLI always shows the estimate before spending.
+
+For a standalone file outside a project:
+
+```bash
+venice-video upscale --input final-cut.mp4 --factor 4
+venice-video upscale --input final-cut.mp4 --factor 4 --yes
+```
+
+Individual commands such as
 `explore-aesthetic`, `add-character`, and `storyboard-episode` remain available
 for advanced manual control, but they are no longer the default onboarding path.
 
