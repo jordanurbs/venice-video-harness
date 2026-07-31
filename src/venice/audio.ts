@@ -5,9 +5,11 @@
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, extname, join } from 'node:path';
+import { dirname, extname, join, resolve as resolvePath } from 'node:path';
 import { promisify } from 'node:util';
 import type { VeniceClient } from './client.js';
+import { clearPendingJob, findPendingJob, recordPendingJob, touchPendingJob } from './job-store.js';
+import { abortableSleep, reportProgress, throwIfAborted } from './operation-context.js';
 import { getMusicModel } from './models.js';
 
 const execFileAsync = promisify(execFile);
@@ -343,11 +345,29 @@ export async function generateQueuedAudio(
     queueBody.lyrics_prompt = lyricsPrompt;
   }
 
-  const queued = await client.post<AudioQueueResponse>('/api/v1/audio/queue', queueBody);
+  // Persist the queue id before the first poll so an interrupted generation can
+  // be re-attached instead of paid for twice (see venice/job-store.ts).
+  const jobKey = resolvePath(outputPath);
+  const existing = await findPendingJob(jobKey);
+  let queued: AudioQueueResponse;
+  if (existing && existing.kind === 'audio') {
+    console.log(`  Re-attaching to in-flight audio job ${existing.queueId} (${existing.model}) — not re-queueing.`);
+    queued = { model: existing.model, queue_id: existing.queueId, status: 'QUEUED' };
+  } else {
+    queued = await client.post<AudioQueueResponse>('/api/v1/audio/queue', queueBody);
+    await recordPendingJob({
+      kind: 'audio',
+      model: queued.model,
+      queueId: queued.queue_id,
+      outputPath: jobKey,
+      prompt,
+    });
+  }
 
   for (let attempt = 0; attempt < maxPollAttempts; attempt++) {
+    throwIfAborted();
     if (attempt > 0) {
-      await sleep(pollIntervalMs);
+      await abortableSleep(pollIntervalMs);
     }
 
     const response = await client.postBinaryOrJson<AudioRetrieveStatus>(
@@ -361,6 +381,7 @@ export async function generateQueuedAudio(
 
     if (Buffer.isBuffer(response.value)) {
       await writeAudioBuffer(response.value, response.contentType, outputPath);
+      await clearPendingJob(jobKey);
 
       await client.post('/api/v1/audio/complete', {
         model: queued.model,
@@ -371,7 +392,12 @@ export async function generateQueuedAudio(
     }
 
     const status = response.value as AudioRetrieveStatus;
+    await touchPendingJob(jobKey);
     if (status.status === 'PROCESSING') {
+      reportProgress({
+        phase: 'poll',
+        detail: `audio ${Math.round(status.execution_duration / 1000)}s / ~${Math.round(status.average_execution_time / 1000)}s`,
+      });
       console.log(
         `  Audio still processing (${Math.round(status.execution_duration / 1000)}s / ~${Math.round(status.average_execution_time / 1000)}s)`,
       );
@@ -437,8 +463,4 @@ function ffmpegTranscodeArgs(inputPath: string, outputPath: string, outputExt: s
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }

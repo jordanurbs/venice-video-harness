@@ -2,9 +2,20 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
+/**
+ * The project and episode commands default to when `-p` / `-e` are omitted.
+ * Set by `venice-video use`, and by `/use` inside the interactive shell.
+ */
+export interface SelectedContext {
+  /** Absolute path to the selected project directory. */
+  project?: string;
+  episode?: number;
+}
+
 export interface UserConfig {
   apiKey?: string;
   workspace?: string;
+  context?: SelectedContext;
 }
 
 function expandHome(value: string): string {

@@ -291,6 +291,58 @@ venice-video list-series
 venice-video --help
 ```
 
+### Interactive shell
+
+Every command above also runs inside a persistent session:
+
+```bash
+venice-video shell
+```
+
+The shell keeps one warm process for the whole production, which changes three
+things that matter over a long session:
+
+- **A selected project and part.** `use <project> [part]` sets them once; after
+  that `-p` and `-e` are optional on every command and the prompt shows what you
+  are pointed at. `unuse` clears the selection. The selection persists across
+  shell restarts and applies to one-shot commands too.
+- **Warm rate limiting and caches.** The Venice client's pacing state survives
+  between commands instead of resetting on every invocation, so back-to-back
+  generation stops tripping 429s.
+- **Background commands.** Suffix any command with `&` to detach it, then keep
+  working. `/jobs` lists them with elapsed time and current progress detail,
+  `/jobs log <id>` replays captured output, `/jobs cancel <id>` aborts one.
+
+```
+venice-video my-film · ep 01 › storyboard-episode
+venice-video my-film · ep 01 › generate-videos &
+  [1] started in the background. Check with /jobs.
+venice-video my-film · ep 01 › /jobs
+  [1] running    4m12s  generate-videos — shot 3/12 polling
+```
+
+Session extras: `Tab` completes commands, flags, and project slugs; `↑`/`↓` walk
+a persistent history file; `Ctrl-C` cancels the running command without killing
+the session (`Ctrl-D` or `/exit` leaves); `/help`, `/status`, `/jobs`, `/cd`, and
+`/pwd` are shell meta-commands; `!<cmd>` runs something in your system shell.
+
+### Interrupted renders are resumable
+
+The harness records each Venice `queue_id` to disk *before* it starts polling, so
+a cancelled command, a crash, or a closed laptop no longer orphans a render you
+have already paid for. Re-running the same command re-attaches to the pending job
+and keeps polling it instead of submitting and billing a second one.
+
+```bash
+venice-video queue              # renders Venice still has in flight
+venice-video queue prune        # forget records too old for Venice to still hold
+venice-video queue clear <id>   # forget one record (does not refund it)
+```
+
+The shell reports stranded renders in its banner on startup. Note the split:
+`queue` is Venice's side of the work (real money, survives restarts), while
+`/jobs` is only the background commands of the current session.
+
 For server environments, prefer `VENICE_API_KEY` instead of writing a user
 configuration file. Credential precedence is environment variable, then stored
 user configuration, then the repository `.env` compatibility path.

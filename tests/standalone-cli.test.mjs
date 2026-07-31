@@ -8,9 +8,14 @@ import test from 'node:test';
 const cli = new URL('../dist/mini-drama/cli.js', import.meta.url).pathname;
 
 function run(args, env = {}) {
+  const merged = { ...process.env, ...env };
+  // These tests configure the workspace through `setup`. An ambient
+  // VENICE_VIDEO_WORKSPACE (env beats stored config) would silently redirect
+  // every project they create.
+  if (!('VENICE_VIDEO_WORKSPACE' in env)) delete merged.VENICE_VIDEO_WORKSPACE;
   return spawnSync(process.execPath, [cli, ...args], {
     encoding: 'utf-8',
-    env: { ...process.env, ...env },
+    env: merged,
   });
 }
 

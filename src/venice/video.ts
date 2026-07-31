@@ -5,8 +5,11 @@
 // ---------------------------------------------------------------------------
 
 import { writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve as resolvePath } from 'node:path';
 import type { VeniceClient } from './client.js';
+import { VeniceRequestError } from './client.js';
+import { clearPendingJob, findPendingJob, recordPendingJob, touchPendingJob } from './job-store.js';
+import { abortableSleep, reportProgress, throwIfAborted } from './operation-context.js';
 import type {
   VideoQueueRequest,
   VideoQueueResponse,
@@ -26,8 +29,14 @@ const VIDEO_QUOTE_PATH = '/api/v1/video/quote';
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const DEFAULT_MAX_POLL_ATTEMPTS = 180;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
+/**
+ * True when Venice no longer recognises a queue id -- the job finished and was
+ * reaped, or it never existed. A resumed job that hits this is unrecoverable, so
+ * the caller drops the stale record and queues fresh.
+ */
+function isQueueGoneError(error: unknown): boolean {
+  return error instanceof VeniceRequestError
+    && (error.status === 400 || error.status === 404 || error.status === 410);
 }
 
 // ---- Quote ----------------------------------------------------------------
@@ -172,6 +181,12 @@ export interface PollVideoOptions {
   silentRejectThreshold?: number;
   /** Skip the silent-reject check (e.g. for low-resolution or short clips). */
   skipSilentRejectCheck?: boolean;
+  /**
+   * Output path this poll is feeding. Supplying it keeps the pending-job
+   * heartbeat fresh so `venice-video queue` can distinguish a live poll from an
+   * abandoned one.
+   */
+  heartbeatPath?: string;
 }
 
 /**
@@ -191,10 +206,12 @@ export async function pollVideoResult(
     prompt,
     silentRejectThreshold,
     skipSilentRejectCheck,
+    heartbeatPath,
   } = options;
 
   for (let attempt = 0; attempt < maxPollAttempts; attempt++) {
-    if (attempt > 0) await sleep(pollIntervalMs);
+    throwIfAborted();
+    if (attempt > 0) await abortableSleep(pollIntervalMs);
 
     const response = await client.postBinaryOrJson<VideoRetrieveStatus>(
       VIDEO_RETRIEVE_PATH,
@@ -213,8 +230,13 @@ export async function pollVideoResult(
     }
 
     const status = response.value as VideoRetrieveStatus;
-    if (status.status === 'PROCESSING' && onProgress) {
-      onProgress(status);
+    if (heartbeatPath) await touchPendingJob(heartbeatPath);
+    if (status.status === 'PROCESSING') {
+      reportProgress({
+        phase: 'poll',
+        detail: `${status.status} ${Math.round((attempt * pollIntervalMs) / 1000)}s`,
+      });
+      onProgress?.(status);
     }
   }
 
@@ -245,31 +267,84 @@ export interface GenerateVideoOptions extends QueueVideoOptions {
   pollIntervalMs?: number;
   maxPollAttempts?: number;
   onProgress?: (status: VideoRetrieveStatus) => void;
+  /** Project directory, recorded on the pending job for `venice-video queue`. */
+  project?: string;
+  episode?: number;
+  /** Ignore any recorded in-flight job and queue a fresh generation. */
+  forceRequeue?: boolean;
 }
 
 /**
  * Queue, poll, download, and save a video in one call.
  * Returns the saved file path and the raw buffer size.
+ *
+ * The queue id is persisted before the first poll, so a generation interrupted
+ * mid-flight is re-attached on the next run rather than paid for twice.
  */
 export async function generateVideo(
   client: VeniceClient,
   options: GenerateVideoOptions,
-): Promise<{ path: string; sizeBytes: number; queueId: string }> {
-  const { outputPath, pollIntervalMs, maxPollAttempts, onProgress, ...queueOpts } = options;
-
-  await mkdir(dirname(outputPath), { recursive: true });
-
-  const { queue_id, model } = await queueVideo(client, queueOpts);
-
-  const videoBuffer = await pollVideoResult(client, model, queue_id, {
+): Promise<{ path: string; sizeBytes: number; queueId: string; resumed: boolean }> {
+  const {
+    outputPath,
     pollIntervalMs,
     maxPollAttempts,
     onProgress,
-    prompt: options.prompt,
-  });
+    project,
+    episode,
+    forceRequeue,
+    ...queueOpts
+  } = options;
+
+  await mkdir(dirname(outputPath), { recursive: true });
+  const jobKey = resolvePath(outputPath);
+
+  const existing = forceRequeue ? undefined : await findPendingJob(jobKey);
+  let queueId: string;
+  let model: string;
+  let resumed = false;
+
+  if (existing && existing.kind === 'video') {
+    console.log(`  Re-attaching to in-flight job ${existing.queueId} (${existing.model}) — not re-queueing.`);
+    queueId = existing.queueId;
+    model = existing.model;
+    resumed = true;
+  } else {
+    ({ queue_id: queueId, model } = await queueVideo(client, queueOpts));
+    await recordPendingJob({
+      kind: 'video',
+      model,
+      queueId,
+      outputPath: jobKey,
+      project,
+      episode,
+      prompt: options.prompt,
+    });
+  }
+
+  let videoBuffer: Buffer;
+  try {
+    videoBuffer = await pollVideoResult(client, model, queueId, {
+      pollIntervalMs,
+      maxPollAttempts,
+      onProgress,
+      prompt: options.prompt,
+      heartbeatPath: jobKey,
+    });
+  } catch (err) {
+    // A resumed id Venice has already reaped is a dead end; drop the stale
+    // record and generate fresh rather than failing the whole episode.
+    if (resumed && isQueueGoneError(err)) {
+      console.warn(`  ⚠ Recorded job ${queueId} is gone on Venice's side; queueing a fresh generation.`);
+      await clearPendingJob(jobKey);
+      return generateVideo(client, { ...options, forceRequeue: true });
+    }
+    throw err;
+  }
 
   await writeFile(outputPath, videoBuffer);
-  await completeVideo(client, model, queue_id);
+  await clearPendingJob(jobKey);
+  await completeVideo(client, model, queueId);
 
-  return { path: outputPath, sizeBytes: videoBuffer.length, queueId: queue_id };
+  return { path: outputPath, sizeBytes: videoBuffer.length, queueId, resumed };
 }

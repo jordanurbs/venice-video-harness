@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import type { VeniceApiError } from "./types.js";
+import { abortableSleep, currentSignal, isAbortError } from "./operation-context.js";
 
 // ---- Configuration constants ----------------------------------------------
 
@@ -146,6 +147,7 @@ export class VeniceClient {
     await this.applyRateLimit();
     const response = await fetch(`${this.baseUrl}${path}`, {
       headers: { Authorization: `Bearer ${this.apiKey}` },
+      signal: currentSignal(),
     });
     this.lastRequestAt = Date.now();
     reportVeniceDeprecation(response.headers, path);
@@ -189,7 +191,7 @@ export class VeniceClient {
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       if (attempt > 0) {
         const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
-        await VeniceClient.sleep(backoff);
+        await abortableSleep(backoff);
       }
 
       try {
@@ -200,6 +202,7 @@ export class VeniceClient {
             Authorization: `Bearer ${this.apiKey}`,
           },
           body: JSON.stringify(body),
+          signal: currentSignal(),
         });
 
         this.lastRequestAt = Date.now();
@@ -247,6 +250,8 @@ export class VeniceClient {
         // Non-retryable client error -- throw immediately.
         throw new VeniceRequestError(message, response.status, errorBody);
       } catch (err) {
+        // Cancellation is not a transient failure -- never retry it.
+        if (isAbortError(err)) throw err;
         // Network errors (DNS failure, connection reset, etc.) are retryable.
         if (err instanceof VeniceRequestError) {
           // Already classified above; re-throw non-retryable errors.
@@ -276,7 +281,7 @@ export class VeniceClient {
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       if (attempt > 0) {
         const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
-        await VeniceClient.sleep(backoff);
+        await abortableSleep(backoff);
       }
 
       try {
@@ -287,6 +292,7 @@ export class VeniceClient {
             Authorization: `Bearer ${this.apiKey}`,
           },
           body: JSON.stringify(body),
+          signal: currentSignal(),
         });
 
         this.lastRequestAt = Date.now();
@@ -316,6 +322,7 @@ export class VeniceClient {
 
         throw new VeniceRequestError(message, response.status, errorBody);
       } catch (err) {
+        if (isAbortError(err)) throw err;
         if (err instanceof VeniceRequestError) {
           if (err.status > 0 && err.status < 500 && err.status !== 429) {
             throw err;
@@ -347,7 +354,7 @@ export class VeniceClient {
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       if (attempt > 0) {
         const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
-        await VeniceClient.sleep(backoff);
+        await abortableSleep(backoff);
       }
 
       try {
@@ -358,6 +365,7 @@ export class VeniceClient {
             Authorization: `Bearer ${this.apiKey}`,
           },
           body: JSON.stringify(body),
+          signal: currentSignal(),
         });
 
         this.lastRequestAt = Date.now();
@@ -397,6 +405,7 @@ export class VeniceClient {
 
         throw new VeniceRequestError(message, response.status, errorBody);
       } catch (err) {
+        if (isAbortError(err)) throw err;
         if (err instanceof VeniceRequestError) {
           if (err.status > 0 && err.status < 500 && err.status !== 429) {
             throw err;
@@ -453,12 +462,7 @@ export class VeniceClient {
   private async applyRateLimit(): Promise<void> {
     const elapsed = Date.now() - this.lastRequestAt;
     if (elapsed < RATE_LIMIT_DELAY_MS) {
-      await VeniceClient.sleep(RATE_LIMIT_DELAY_MS - elapsed);
+      await abortableSleep(RATE_LIMIT_DELAY_MS - elapsed);
     }
-  }
-
-  /** Promise-based sleep helper. */
-  private static sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

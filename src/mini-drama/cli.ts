@@ -3,10 +3,11 @@
 import 'dotenv/config';
 import { Command } from 'commander';
 import { resolve, join, basename } from 'node:path';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { stdin } from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 import {
   createSeries,
@@ -61,6 +62,22 @@ import {
 } from '../user-config.js';
 import { listVoices, filterVoices, auditionVoices } from '../venice/voices.js';
 import {
+  clearContext,
+  MissingContextError,
+  readContext,
+  resolveProjectRef,
+  setContext,
+} from '../session/context.js';
+import { OperationAbortedError } from '../venice/operation-context.js';
+import { applyContextDefaults } from '../session/program-context.js';
+import { collectProjectStatus, formatProjectStatus } from '../session/status.js';
+import {
+  clearPendingJob,
+  isStale,
+  listPendingJobs,
+  prunePendingJobs,
+} from '../venice/job-store.js';
+import {
   generateDialogueForShots,
   generateSoundEffect,
   generateMusic,
@@ -97,11 +114,21 @@ import {
   type WorkshopInputs,
 } from './workshop.js';
 
+// Read from package.json rather than a literal, which drifts on every release.
+const packageVersion: string = (() => {
+  try {
+    const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url));
+    return JSON.parse(readFileSync(pkgPath, 'utf-8')).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
+
 const program = new Command();
 program
   .name('venice-video')
   .description('Standalone consistency-first video production with Venice AI')
-  .version('2.5.3')
+  .version(packageVersion)
   .option('--workspace <dir>', 'Workspace containing Venice Video projects');
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
@@ -116,6 +143,28 @@ function openInDefaultBrowser(path: string): boolean {
       : { name: 'xdg-open', args: [path] };
   const result = spawnSync(command.name, command.args, { stdio: 'ignore' });
   return result.status === 0;
+}
+
+/**
+ * True when this file is the process entry point. The program is only parsed in
+ * that case, so `shell` (and tests) can import the same command tree without
+ * argv being consumed at import time.
+ *
+ * `bin` points straight at this file, so the comparison is against argv[1] with
+ * symlinks resolved. The basename fallback covers the tsx dev path (.ts entry
+ * for a .js module specifier) -- getting this wrong would leave the CLI silently
+ * doing nothing, so it errs toward "yes, run".
+ */
+function isMainModule(moduleUrl: string): boolean {
+  const entry = process.argv[1];
+  if (!entry) return true;
+  const canonical = (path: string): string => {
+    try { return realpathSync(path); } catch { return resolve(path); }
+  };
+  const stripExtension = (path: string): string => basename(path).replace(/\.[cm]?[jt]s$/, '');
+  const modulePath = canonical(fileURLToPath(moduleUrl));
+  const entryPath = canonical(entry);
+  return modulePath === entryPath || stripExtension(modulePath) === stripExtension(entryPath);
 }
 
 function runCommand(command: string, args: string[]): string {
@@ -3392,7 +3441,169 @@ program
     console.log('\n=== Production Complete ===');
   });
 
-await program.parseAsync();
+// ── session: use / status / queue / shell ─────────────────────────────
+
+program
+  .command('use')
+  .description('Select the project (and episode) that -p / -e default to')
+  .argument('[project]', 'Project slug, name, or directory')
+  .option('-e, --episode <number>', 'Episode number to select', parseInt)
+  .option('--clear', 'Clear the current selection', false)
+  .action(async (projectRef: string | undefined, opts: { episode?: number; clear: boolean }) => {
+    if (opts.clear) {
+      await clearContext();
+      console.log('Selection cleared. Commands now require -p / -e again.');
+      return;
+    }
+
+    if (!projectRef && opts.episode === undefined) {
+      const context = await readContext();
+      if (!context.project) {
+        console.log('Nothing selected. Usage: venice-video use <project> [-e <episode>]');
+        const workspace = await getWorkspaceDir(program.opts().workspace);
+        const available = await listSeries(workspace);
+        if (available.length > 0) {
+          console.log('\nAvailable projects:');
+          for (const entry of available) console.log(`  ${entry.slug.padEnd(28)} ${entry.name}`);
+        }
+        return;
+      }
+      console.log(`Project: ${context.project}`);
+      if (context.episode !== undefined) console.log(`Episode: ${context.episode}`);
+      return;
+    }
+
+    const patch: { project?: string; episode?: number } = {};
+    if (projectRef) {
+      const projectDir = await resolveProjectRef(projectRef, program.opts().workspace);
+      const series = await loadSeries(projectDir);
+      if (!series) {
+        console.error(`No series.json found at ${projectDir}.`);
+        console.error('Run `venice-video list-series` to see what is available.');
+        process.exit(1);
+      }
+      patch.project = projectDir;
+    }
+    if (opts.episode !== undefined) patch.episode = opts.episode;
+
+    const next = await setContext(patch);
+    console.log(`Selected ${next.project}${next.episode !== undefined ? ` · episode ${next.episode}` : ''}`);
+  });
+
+program
+  .command('unuse')
+  .description('Clear the selected project and episode')
+  .action(async () => {
+    await clearContext();
+    console.log('Selection cleared.');
+  });
+
+program
+  .command('status')
+  .description('Show pipeline state for a project and the next command to run')
+  .option('-p, --project <dir>', 'Project directory (defaults to the selection)')
+  .action(async (opts: { project?: string }) => {
+    const context = await readContext();
+    const projectRef = opts.project ?? context.project;
+    if (!projectRef) {
+      console.log('No project selected. Run `venice-video use <project>` or pass -p <dir>.');
+      return;
+    }
+    const projectDir = await resolveProjectRef(projectRef, program.opts().workspace);
+    const status = await collectProjectStatus(projectDir);
+    if (!status) {
+      console.error(`No series.json found at ${projectDir}.`);
+      process.exit(1);
+      return;
+    }
+    console.log(formatProjectStatus(status, context.episode));
+  });
+
+program
+  .command('queue')
+  .description('List Venice renders left in flight by an interrupted run')
+  .argument('[action]', 'clear to drop a recorded job, prune to drop stale ones')
+  .argument('[target]', 'Output path or queue id to clear')
+  .action(async (action: string | undefined, target: string | undefined) => {
+    if (action === 'prune') {
+      const removed = await prunePendingJobs();
+      console.log(`Pruned ${removed} stale job record(s).`);
+      return;
+    }
+
+    if (action === 'clear') {
+      if (!target) {
+        console.error('Usage: venice-video queue clear <output-path|queue-id>');
+        process.exit(1);
+        return;
+      }
+      const pending = await listPendingJobs();
+      const match = pending.find(job => job.queueId === target)
+        ?? pending.find(job => job.outputPath === resolve(target))
+        ?? pending.find(job => job.outputPath.endsWith(target));
+      if (!match) {
+        console.error(`No recorded job matching "${target}".`);
+        process.exit(1);
+        return;
+      }
+      await clearPendingJob(match.outputPath);
+      console.log(`Dropped ${match.queueId} (${match.outputPath}).`);
+      console.log('Note: this only forgets the id locally. Venice already charged for the render.');
+      return;
+    }
+
+    const pending = await listPendingJobs();
+    if (pending.length === 0) {
+      console.log('No Venice jobs are recorded as in flight.');
+      return;
+    }
+    console.log(`${pending.length} job(s) recorded as in flight:\n`);
+    for (const job of pending) {
+      const ageMin = Math.round((Date.now() - Date.parse(job.updatedAt)) / 60_000);
+      console.log(`  ${job.kind}  ${job.model}`);
+      console.log(`    queue id   ${job.queueId}`);
+      console.log(`    output     ${job.outputPath}`);
+      console.log(`    last seen  ${ageMin} min ago${isStale(job) ? ' (stale — Venice has likely dropped it)' : ''}`);
+      if (job.prompt) console.log(`    prompt     ${job.prompt.slice(0, 70)}…`);
+      console.log('');
+    }
+    console.log('Re-run the command that produced these to re-attach instead of re-billing.');
+  });
+
+program
+  .command('shell')
+  .description('Start an interactive session that keeps the selected project and runs jobs in the background')
+  .action(async () => {
+    // Imported lazily so the shell (and its readline/job machinery) costs
+    // nothing for one-shot invocations, and to avoid an import cycle back
+    // into this module.
+    const { startShell } = await import('../session/shell.js');
+    await startShell(program);
+  });
+
+applyContextDefaults(program);
+
+// Only parse when executed directly. The shell imports this module to reuse the
+// same command tree, and must not have argv consumed at import time.
+if (isMainModule(import.meta.url)) {
+  try {
+    await program.parseAsync();
+  } catch (error) {
+    // A missing project/episode selection is ordinary user error, not a crash —
+    // report it the way Commander reports a missing required option.
+    if (error instanceof MissingContextError) {
+      console.error(`error: ${error.message}`);
+      process.exit(1);
+    }
+    if (error instanceof OperationAbortedError) {
+      console.error('Cancelled. Any in-flight Venice job is recorded — re-run to re-attach.');
+      process.exit(130);
+    }
+    throw error;
+  }
+}
+
+export { program };
 
 // ── Helpers ───────────────────────────────────────────────────────────
 

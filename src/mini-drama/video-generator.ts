@@ -1,5 +1,5 @@
 import { writeFile, mkdir, appendFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve as resolvePath } from 'node:path';
 import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import type { VeniceClient } from '../venice/client.js';
@@ -44,12 +44,41 @@ import { parseShotDuration } from './generation-planner.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
 import { getVideoModel, modelSupportsDuration } from '../venice/models.js';
 import { appendRecipePass } from '../venice/recipe.js';
+import {
+  clearPendingJob,
+  findPendingJob,
+  recordPendingJob,
+  touchPendingJob,
+} from '../venice/job-store.js';
+import {
+  abortableSleep,
+  isAbortError,
+  reportProgress,
+  throwIfAborted,
+} from '../venice/operation-context.js';
 
 const VIDEO_QUEUE_PATH = '/api/v1/video/queue';
 const VIDEO_RETRIEVE_PATH = '/api/v1/video/retrieve';
 const VIDEO_COMPLETE_PATH = '/api/v1/video/complete';
 const POLL_INTERVAL_MS = 10_000;
 const MULTISHOT_RETRY_DELAY_MS = 15_000;
+/**
+ * Ceiling on a single shot's poll loop. Generous relative to real render times
+ * (~30 min worst case) but finite: the loop used to be `while (true)`, so a job
+ * that never resolved hung the process forever.
+ */
+const MAX_POLL_MS = 60 * 60 * 1000;
+/** Consecutive /retrieve failures tolerated before abandoning a shot. */
+const MAX_CONSECUTIVE_POLL_ERRORS = 6;
+
+/**
+ * True when Venice no longer recognises a queue id -- the job was reaped or
+ * never existed. Only meaningful for a resumed id; a fresh one just failed.
+ */
+function isQueueGoneError(error: unknown): boolean {
+  return error instanceof VeniceRequestError
+    && (error.status === 400 || error.status === 404 || error.status === 410);
+}
 
 function runCommand(command: string, args: string[]): string {
   const result = spawnSync(command, args, {
@@ -238,6 +267,7 @@ async function renderSeedanceKeyframe(
     referenceImagePaths,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
+    project: series.outputDir,
   });
 
   console.log(`  Stage B/3: extracting first frame -> ${keyframePngPath}`);
@@ -510,6 +540,14 @@ interface RenderVideoOptions {
    * is present (Venice rejects audio-only reference audio).
    */
   voiceReferencePaths?: string[];
+  /** Project directory, recorded on the pending job for `venice-video queue`. */
+  project?: string;
+  episode?: number;
+  /**
+   * Ignore any recorded in-flight queue id for this output and generate fresh.
+   * Set automatically when a resumed job turns out to be gone on Venice's side.
+   */
+  forceRequeue?: boolean;
 }
 
 function fileToDataUri(filePath: string, mimeType = 'image/png'): string | undefined {
@@ -767,6 +805,23 @@ async function renderVideoFile(
 
   console.log(`  Queueing video: model=${effectiveModel}, duration=${prompt.duration}, aspect=${body.aspect_ratio ?? 'default'}, prompt=${(prompt.prompt).length} chars`);
 
+  // Re-attach to an in-flight generation for this exact output rather than
+  // paying for it again. Populated by a previous run that was interrupted
+  // mid-poll (Ctrl-C, crash, closed terminal). See venice/job-store.ts.
+  const jobKey = resolvePath(outputPath);
+  const recordedJob = options.forceRequeue ? undefined : await findPendingJob(jobKey);
+  if (recordedJob && recordedJob.kind === 'video') {
+    console.log(`  Re-attaching to in-flight job ${recordedJob.queueId} (${recordedJob.model}) — not re-queueing.`);
+    return pollRenderedVideo(client, {
+      ...options,
+      queueId: recordedJob.queueId,
+      model: recordedJob.model,
+      effectiveModel,
+      body,
+      resumed: true,
+    });
+  }
+
   let queueResponse: QueueResponse;
   try {
     queueResponse = await client.post<QueueResponse>(VIDEO_QUEUE_PATH, body);
@@ -813,10 +868,69 @@ async function renderVideoFile(
 
   const { queue_id, model } = queueResponse;
   console.log(`  Queue ID: ${queue_id}`);
+  await recordPendingJob({
+    kind: 'video',
+    model,
+    queueId: queue_id,
+    outputPath: jobKey,
+    project: options.project,
+    episode: options.episode,
+    prompt: prompt.prompt,
+  });
+
+  return pollRenderedVideo(client, {
+    ...options,
+    queueId: queue_id,
+    model,
+    effectiveModel,
+    body,
+    resumed: false,
+  });
+}
+
+interface PollRenderedVideoOptions extends RenderVideoOptions {
+  queueId: string;
+  /** Model as Venice echoed it back from /queue -- /retrieve keys on this. */
+  model: string;
+  /** Model actually used for the render, for recipe/provenance output. */
+  effectiveModel: string;
+  /** The queue request body, kept for failure diagnostics. */
+  body: Record<string, unknown>;
+  /** True when the queue id came from the pending-job registry, not a fresh queue. */
+  resumed: boolean;
+}
+
+/**
+ * Poll a queued video to completion, save it, and write its recipe sidecar.
+ *
+ * Split out of renderVideoFile so a resumed queue id can enter the same path
+ * without re-queueing. Cancellation propagates (the shell's Ctrl-C leaves the
+ * pending-job record in place so the next run re-attaches), while a resumed id
+ * Venice has already reaped falls back to a fresh generation.
+ */
+async function pollRenderedVideo(
+  client: VeniceClient,
+  options: PollRenderedVideoOptions,
+): Promise<string> {
+  const {
+    prompt, anchorImagePath, outputPath, endFrameImagePath,
+    elements, referenceImagePaths, sceneImagePaths,
+    negativePrompt, audioPath, voiceReferencePaths,
+    queueId: queue_id, model, effectiveModel, body, resumed,
+  } = options;
+  const jobKey = resolvePath(outputPath);
 
   let elapsed = 0;
+  let consecutiveErrors = 0;
   while (true) {
-    await sleep(POLL_INTERVAL_MS);
+    throwIfAborted();
+    if (elapsed >= MAX_POLL_MS) {
+      throw new Error(
+        `Timed out after ${Math.round(MAX_POLL_MS / 60_000)} min waiting for ${model} (${queue_id}). `
+        + `The job is still recorded — re-run to re-attach, or drop it with \`venice-video queue clear\`.`,
+      );
+    }
+    await abortableSleep(POLL_INTERVAL_MS);
     elapsed += POLL_INTERVAL_MS;
 
     try {
@@ -824,6 +938,7 @@ async function renderVideoFile(
         VIDEO_RETRIEVE_PATH,
         { model, queue_id },
       );
+      consecutiveErrors = 0;
 
       if (Buffer.isBuffer(result.value)) {
         const videoBuffer = result.value;
@@ -831,6 +946,7 @@ async function renderVideoFile(
         archiveExisting(outputPath);
 
         await writeFile(outputPath, videoBuffer);
+        await clearPendingJob(jobKey);
         console.log(`  Video saved: ${outputPath} (${(videoBuffer.length / 1024 / 1024).toFixed(1)} MB, ${(elapsed / 1000).toFixed(0)}s)`);
 
         try {
@@ -885,9 +1001,28 @@ async function renderVideoFile(
       const pct = status.execution_duration
         ? `${(status.execution_duration / 1000).toFixed(0)}s elapsed`
         : '';
+      await touchPendingJob(jobKey);
+      reportProgress({ phase: 'poll', detail: `${status.status} ${pct}`.trim() });
       process.stdout.write(`\r  Polling... ${status.status} ${pct}   `);
     } catch (err) {
-      console.warn(`  Poll error (will retry): ${err}`);
+      if (isAbortError(err)) throw err;
+
+      // A resumed queue id Venice has already reaped can never complete —
+      // without this the loop below would retry it forever.
+      if (resumed && isQueueGoneError(err)) {
+        console.warn(`\n  ⚠ Recorded job ${queue_id} is gone on Venice's side; queueing a fresh generation.`);
+        await clearPendingJob(jobKey);
+        return renderVideoFile(client, { ...options, forceRequeue: true });
+      }
+
+      consecutiveErrors++;
+      if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+        throw new Error(
+          `Polling ${model} (${queue_id}) failed ${consecutiveErrors} times in a row; giving up. `
+          + `Last error: ${(err as Error).message ?? err}`,
+        );
+      }
+      console.warn(`  Poll error ${consecutiveErrors}/${MAX_CONSECUTIVE_POLL_ERRORS} (will retry): ${err}`);
     }
   }
 }
@@ -1257,6 +1392,7 @@ async function renderSingleShotUnit(
     voiceReferencePaths,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
+    project: series.outputDir,
   });
 
   const durationSec = getVideoDuration(savedPath);
@@ -1385,6 +1521,7 @@ async function renderMultiShotUnit(
     referenceImagePaths,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
+    project: series.outputDir,
   });
 
   const segments = splitRenderedUnitIntoShots(savedUnitPath, unit, new Map(shots.map(shot => [shot.shotNumber, shot])), sceneDir);
@@ -1590,6 +1727,15 @@ export async function generateEpisodeVideos(
     const nextShotNumber = nextUnit?.shotNumbers[0];
 
     if (unitShots.length === 0) continue;
+
+    // Feeds the shell's `/jobs` view, so a backgrounded episode render reports
+    // "unit 3/12 shot 5" instead of only whatever the current poll is doing.
+    reportProgress({
+      phase: 'render',
+      current: unitIndex + 1,
+      total: plan.units.length,
+      detail: `unit ${unitIndex + 1}/${plan.units.length} · shot ${unitShots[0].shotNumber}`,
+    });
 
     try {
       const savedPaths = unit.unitType === 'single'

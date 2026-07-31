@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.6.0 — 2026-07-31
+
+### Added
+
+- `venice-video shell` — a persistent interactive session. Commands run without
+  a process restart, so the Venice client's rate-limit pacing and caches stay
+  warm across a whole production instead of resetting on every invocation.
+- A selected project and part. `use <project> [part]` makes `-p` and `-e`
+  optional on every command; `unuse` clears it. The selection is stored in user
+  config, so it applies to one-shot commands and survives restarts.
+- Background commands: suffix any command with `&`, then `/jobs`,
+  `/jobs log <id>`, and `/jobs cancel <id>`. Output from a backgrounded render is
+  captured to its own buffer rather than sprayed over the prompt.
+- `venice-video status` — reports where a project sits in the pipeline and which
+  command to run next.
+- `venice-video queue` — lists Venice renders left in flight, with `prune` and
+  `clear` subcommands.
+- Shell conveniences: tab completion for commands, flags, and project slugs; a
+  persistent history file; a context-aware prompt; `!<cmd>` passthrough to the
+  system shell.
+
+### Fixed
+
+- **Interrupted renders no longer orphan paid work.** Each Venice `queue_id` is
+  now recorded to disk *before* polling starts. Re-running a command re-attaches
+  to the pending job instead of submitting and billing a second render. Previously
+  a Ctrl-C, crash, or dropped connection lost the id while Venice kept charging.
+- `Ctrl-C` now cancels the in-flight operation through an `AbortSignal` threaded
+  into every Venice request, poll loop, and retry backoff, rather than only
+  killing the process between requests.
+- Video polling gained an overall timeout and a consecutive-error ceiling, so a
+  wedged render fails instead of hanging indefinitely.
+- Tests no longer inherit an ambient `VENICE_VIDEO_WORKSPACE`, which could
+  silently redirect the projects they create.
+
 ## 2.5.3 — 2026-07-31
 
 - Workshop generation now writes a formatted, self-contained `WORKSHOP.html` alongside JSON and Markdown.
