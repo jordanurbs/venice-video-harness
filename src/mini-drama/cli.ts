@@ -91,6 +91,7 @@ import {
   approveWorkshop,
   generateWorkshop,
   getWorkshopPath,
+  inventoryReferencePath,
   loadWorkshop,
   saveWorkshop,
   type WorkshopInputs,
@@ -100,7 +101,7 @@ const program = new Command();
 program
   .name('venice-video')
   .description('Standalone consistency-first video production with Venice AI')
-  .version('2.5.1')
+  .version('2.5.2')
   .option('--workspace <dir>', 'Workspace containing Venice Video projects');
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
@@ -374,7 +375,7 @@ program
   .option('--audience <text>', 'Intended audience')
   .option('--must-include <text>', 'Required story, visual, character, or product elements')
   .option('--avoid <text>', 'Things the project must avoid')
-  .option('--references <text>', 'Creative references or influences')
+  .option('--references <path>', 'Reference file or directory path (you can drag it into the terminal)')
   .option('--delivery <target>', 'standard | 4k delivery master')
   .option('--feedback <text>', 'Revision feedback for the existing workshop')
   .option('--model <model>', 'Venice chat model', 'llama-3.3-70b')
@@ -434,7 +435,11 @@ program
       audience: await ask(language.audienceQuestion, opts.audience, previousInputs?.audience ?? ''),
       mustInclude: await ask('What must be included?', opts.mustInclude, previousInputs?.mustInclude ?? ''),
       avoid: await ask('What should it avoid?', opts.avoid, previousInputs?.avoid ?? ''),
-      references: await ask('Creative references', opts.references, previousInputs?.references ?? ''),
+      references: await ask(
+        'Reference files (optional) — drag a file or directory here, then press Enter. Leave blank and the workshop will propose the creative direction',
+        opts.references,
+        previousInputs?.references ?? '',
+      ),
       delivery: (opts.delivery ?? (stdin.isTTY
         ? await promptChoice('Final delivery', [
             { label: 'Standard master', value: 'standard', description: 'Keep the assembled resolution' },
@@ -442,6 +447,19 @@ program
           ], previousInputs?.delivery === '4k' ? 1 : 0)
         : previousInputs?.delivery ?? 'standard')) as 'standard' | '4k',
     };
+
+    if (inputs.references.trim()) {
+      inputs.referenceSources = await inventoryReferencePath(inputs.references);
+      console.log(`Reference inventory: ${inputs.referenceSources.length} file(s)`);
+      const counts = inputs.referenceSources.reduce<Record<string, number>>((acc, source) => {
+        acc[source.kind] = (acc[source.kind] ?? 0) + 1;
+        return acc;
+      }, {});
+      console.log(`  ${Object.entries(counts).map(([kind, count]) => `${kind}: ${count}`).join(' · ')}`);
+    } else {
+      inputs.referenceSources = [];
+      console.log('No references supplied — the workshop will propose creative choices from your concept.');
+    }
 
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);

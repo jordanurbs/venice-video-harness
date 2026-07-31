@@ -207,7 +207,7 @@ venice-video workshop -p ~/VeniceVideos/my-film
 
 The workshop develops the complete project—not only a shot list:
 
-- objective, audience, runtime, constraints, and references
+- audience outcome, audience, runtime, constraints, and optional dragged reference files/directories
 - logline, synopsis, themes, acts/movements, and story beats
 - visual aesthetic, palette, lighting, lens language, and texture
 - characters, wardrobe, voices, and continuity anchors

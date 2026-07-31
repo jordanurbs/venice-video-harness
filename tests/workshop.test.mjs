@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -7,7 +7,9 @@ import {
   approveWorkshop,
   buildWorkshopSystemPrompt,
   buildWorkshopUserPrompt,
+  inventoryReferencePath,
   loadWorkshop,
+  normalizeDroppedPath,
   renderWorkshopMarkdown,
   saveWorkshop,
 } from '../dist/mini-drama/workshop.js';
@@ -74,4 +76,32 @@ test('workshop draft saves a readable review and approval materializes productio
   const script = JSON.parse(await readFile(join(series.outputDir, 'episodes', 'episode-001', 'script.json'), 'utf-8'));
   assert.equal(script.status, 'approved');
   assert.equal(script.totalDuration, '480s');
+});
+
+test('dragged reference directory is inventoried and text is read', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'venice-refs-'));
+  const refs = join(root, 'My References');
+  await mkdir(join(refs, 'images'), { recursive: true });
+  await writeFile(join(refs, 'treatment.md'), '# Treatment\nA lonely pilot follows a signal.');
+  await writeFile(join(refs, 'images', 'capsule.png'), Buffer.from([1, 2, 3]));
+  await writeFile(join(refs, 'ignore.xyz'), 'binary-ish');
+
+  const escaped = refs.replace(/ /g, '\\ ');
+  assert.equal(normalizeDroppedPath(`"${refs}"`), refs);
+  assert.equal(normalizeDroppedPath(escaped), refs);
+  const sources = await inventoryReferencePath(`"${refs}"`);
+  assert.equal(sources.length, 3);
+  const treatment = sources.find(source => source.path.endsWith('treatment.md'));
+  assert.equal(treatment.kind, 'text');
+  assert.match(treatment.content, /lonely pilot/);
+  assert.equal(sources.find(source => source.path.endsWith('capsule.png')).kind, 'image');
+});
+
+test('blank creative fields explicitly ask the workshop to propose answers', () => {
+  const series = film('/tmp');
+  const inputs = { objective: '', targetDuration: '300s', audience: '', mustInclude: '', avoid: '', references: '', delivery: 'standard', referenceSources: [] };
+  const prompt = buildWorkshopUserPrompt(series, inputs);
+  assert.match(prompt, /blanksPolicy/);
+  assert.match(prompt, /blank creative field is for the workshop to propose/);
+  assert.match(buildWorkshopSystemPrompt(series), /When a workshop input is blank, propose a strong answer/);
 });

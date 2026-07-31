@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
-import { readFile, rename, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import { extname, join, resolve } from 'node:path';
 import type { VeniceClient } from '../venice/client.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import type { Character, EpisodeScript, Location, SeriesState } from '../series/types.js';
@@ -15,6 +16,76 @@ export interface WorkshopInputs {
   avoid: string;
   references: string;
   delivery: 'standard' | '4k';
+  referenceSources?: WorkshopReferenceSource[];
+}
+
+
+export interface WorkshopReferenceSource {
+  path: string;
+  kind: 'text' | 'image' | 'video' | 'audio' | 'other';
+  sizeBytes: number;
+  content?: string;
+  truncated?: boolean;
+}
+
+const TEXT_REFERENCE_EXTENSIONS = new Set(['.md', '.txt', '.json', '.yaml', '.yml', '.csv', '.srt', '.vtt', '.fountain']);
+const IMAGE_REFERENCE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif', '.heic']);
+const VIDEO_REFERENCE_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv']);
+const AUDIO_REFERENCE_EXTENSIONS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg']);
+const MAX_REFERENCE_FILES = 100;
+const MAX_TEXT_CHARS_PER_FILE = 20_000;
+
+export function normalizeDroppedPath(value: string): string {
+  let normalized = value.trim();
+  if ((normalized.startsWith('"') && normalized.endsWith('"')) || (normalized.startsWith("'") && normalized.endsWith("'"))) {
+    normalized = normalized.slice(1, -1);
+  }
+  normalized = normalized.replace(/\\ /g, ' ');
+  if (normalized === '~') normalized = homedir();
+  else if (normalized.startsWith('~/')) normalized = join(homedir(), normalized.slice(2));
+  return resolve(normalized);
+}
+
+function referenceKind(path: string): WorkshopReferenceSource['kind'] {
+  const extension = extname(path).toLowerCase();
+  if (TEXT_REFERENCE_EXTENSIONS.has(extension)) return 'text';
+  if (IMAGE_REFERENCE_EXTENSIONS.has(extension)) return 'image';
+  if (VIDEO_REFERENCE_EXTENSIONS.has(extension)) return 'video';
+  if (AUDIO_REFERENCE_EXTENSIONS.has(extension)) return 'audio';
+  return 'other';
+}
+
+export async function inventoryReferencePath(value: string): Promise<WorkshopReferenceSource[]> {
+  if (!value.trim()) return [];
+  const root = normalizeDroppedPath(value);
+  if (!existsSync(root)) throw new Error(`Reference path not found: ${root}`);
+  const files: string[] = [];
+  const walk = async (path: string): Promise<void> => {
+    if (files.length >= MAX_REFERENCE_FILES) return;
+    const info = await stat(path);
+    if (info.isFile()) { files.push(path); return; }
+    if (!info.isDirectory()) return;
+    const entries = await readdir(path, { withFileTypes: true });
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      await walk(join(path, entry.name));
+      if (files.length >= MAX_REFERENCE_FILES) break;
+    }
+  };
+  await walk(root);
+  return Promise.all(files.map(async path => {
+    const info = await stat(path);
+    const kind = referenceKind(path);
+    if (kind !== 'text') return { path, kind, sizeBytes: info.size };
+    const full = await readFile(path, 'utf-8');
+    return {
+      path,
+      kind,
+      sizeBytes: info.size,
+      content: full.slice(0, MAX_TEXT_CHARS_PER_FILE),
+      truncated: full.length > MAX_TEXT_CHARS_PER_FILE || undefined,
+    };
+  }));
 }
 
 export interface WorkshopDraft {
@@ -103,7 +174,7 @@ export function buildWorkshopSystemPrompt(series: SeriesState): string {
   const language = getProjectLanguage(series);
   return `You are the complete creative-development team for a ${language.projectNounLower}: story editor, director, production designer, casting director, cinematographer, sound director, and AI-video production planner.
 
-Develop the entire project coherently before generation. Do not merely produce a shot list. Resolve the premise, audience, target duration, logline, synopsis, themes, structure, visual language, cast, locations, dialogue approach, continuity priorities, risks, and a production-ready shot script.
+Develop the entire project coherently before generation. When a workshop input is blank, propose a strong answer from the project concept and supplied references; surface genuinely consequential uncertainty under openQuestions instead of stopping. Do not merely produce a shot list. Resolve the premise, audience, target duration, logline, synopsis, themes, structure, visual language, cast, locations, dialogue approach, continuity priorities, risks, and a production-ready shot script.
 
 ${language.namingGuidance}
 ${language.targetDurationGuidance}
@@ -137,7 +208,9 @@ export function buildWorkshopUserPrompt(
     inputs: {
       ...inputs,
       intendedAudienceResponse: inputs.objective,
+      blanksPolicy: 'Any blank creative field is for the workshop to propose from the project concept and supplied references. Do not treat blanks as missing required data.',
     },
+    referenceSources: inputs.referenceSources ?? [],
     existingAesthetic: series.aesthetic,
     existingCharacters: series.characters,
     existingLocations: series.locations ?? [],

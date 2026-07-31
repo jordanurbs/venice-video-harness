@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.5.2 — 2026-07-31
+
+- The Creative references prompt now says to drag a file or directory into the terminal.
+- Dragged quoted paths, escaped spaces, and `~` paths are normalized automatically.
+- Reference directories are recursively inventoried (up to 100 files); supported text references are read into workshop context, while image/video/audio paths and metadata are preserved for planning.
+- Leaving references or other optional creative fields blank explicitly tells the workshop to propose strong answers from the project concept instead of treating them as missing requirements.
+
 ## 2.5.1 — 2026-07-31
 
 - Replaced the vague “What should the finished project accomplish?” workshop prompt with concrete, project-specific audience-outcome questions.
