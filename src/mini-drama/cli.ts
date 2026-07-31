@@ -42,6 +42,7 @@ import {
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
+import { upscaleVideo, estimateUpscaleCostUsd } from '../venice/upscale.js';
 import { generateImage, generateWithReferences } from '../venice/generate.js';
 import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { appendRecipePass } from '../venice/recipe.js';
@@ -2887,6 +2888,82 @@ program
     project: string; episode: number; fps: string; width: string; height: string;
   }) => {
     await runTimelineExport({ ...opts, format: 'fcpxml' });
+  });
+
+// ── upscale-episode ───────────────────────────────────────────────────
+program
+  .command('upscale-episode')
+  .description('Upscale a finished render to 4K via topaz-video-upscale (chunks large inputs, remuxes original audio)')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .option('-e, --episode <number>', 'Episode number (uses episode-NNN-final.mp4)', parseInt)
+  .option('-i, --input <file>', 'Explicit input video (overrides -e resolution)')
+  .option('-o, --output <file>', 'Output path (default: <input>-4k.mp4)')
+  .option('--factor <n>', '2 or 4 (same price either way)', '4')
+  .option('--segment-seconds <s>', 'Chunk length in seconds', '10')
+  .option('--concurrency <n>', 'Parallel upscale jobs', '3')
+  .option('--keep-work-dir', 'Keep intermediate chunks for debugging', false)
+  .option('--yes', 'Skip the cost-estimate confirmation', false)
+  .action(async (opts: {
+    project: string; episode?: number; input?: string; output?: string;
+    factor: string; segmentSeconds: string; concurrency: string;
+    keepWorkDir: boolean; yes: boolean;
+  }) => {
+    const factor = parseInt(opts.factor, 10);
+    if (factor !== 2 && factor !== 4) {
+      console.error('--factor must be 2 or 4');
+      process.exit(1);
+    }
+
+    let inputPath: string;
+    if (opts.input) {
+      inputPath = resolve(opts.input);
+    } else if (opts.episode !== undefined) {
+      const series = await loadSeries(resolve(opts.project));
+      if (!series) { console.error('Series not found.'); process.exit(1); }
+      const episodeDir = getEpisodeDir(series, opts.episode);
+      const epNum = String(opts.episode).padStart(3, '0');
+      inputPath = join(episodeDir, `episode-${epNum}-final.mp4`);
+    } else {
+      console.error('Provide -e <episode> or -i <input file>.');
+      process.exit(1);
+    }
+    if (!existsSync(inputPath)) {
+      console.error(`Input not found: ${inputPath}\nRun assemble-episode first, or pass -i <file>.`);
+      process.exit(1);
+    }
+
+    const outputPath = opts.output
+      ? resolve(opts.output)
+      : inputPath.replace(/\.(mp4|mov)$/i, '-4k.mp4');
+    if (resolve(outputPath) === resolve(inputPath)) {
+      console.error('Output path must differ from input path.');
+      process.exit(1);
+    }
+
+    const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', inputPath], { encoding: 'utf-8' });
+    const inputSeconds = parseFloat((probe.stdout || '0').trim()) || 0;
+    const estimate = estimateUpscaleCostUsd(inputSeconds);
+    console.log(`Input:    ${inputPath} (${inputSeconds.toFixed(1)}s)`);
+    console.log(`Output:   ${outputPath}`);
+    console.log(`Factor:   ${factor}x`);
+    console.log(`Estimate: ~$${estimate.toFixed(2)} (~$0.12 per input second; 2x and 4x cost the same)`);
+    if (!opts.yes) {
+      console.log('\nRe-run with --yes to confirm and start the upscale.');
+      process.exit(0);
+    }
+
+    const client = new VeniceClient(getVeniceApiKey());
+    const result = await upscaleVideo(client, {
+      inputPath,
+      outputPath,
+      factor: factor as 2 | 4,
+      segmentSeconds: parseInt(opts.segmentSeconds, 10),
+      concurrency: parseInt(opts.concurrency, 10),
+      keepWorkDir: opts.keepWorkDir,
+      onProgress: message => console.log(`  ${message}`),
+    });
+    console.log(`\nUpscaled master: ${result.path}`);
+    console.log(`  ${result.width}x${result.height}, ${(result.sizeBytes / 1e6).toFixed(0)}MB, ${result.chunks} chunks`);
   });
 
 // ── produce-episode ───────────────────────────────────────────────────

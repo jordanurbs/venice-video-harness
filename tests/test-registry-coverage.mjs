@@ -71,6 +71,8 @@ const REQUIRED_VIDEO_IDS = [
   'grok-imagine-image-to-video',
   'grok-imagine-reference-to-video',
   'grok-imagine-video-to-video',
+  // Topaz post-production upscaler (added 2026-07)
+  'topaz-video-upscale',
   // Sora 2
   'sora-2-image-to-video',
   'sora-2-pro-image-to-video',
@@ -90,6 +92,13 @@ for (const id of REQUIRED_VIDEO_IDS) {
 const sora2pro = getVideoModel('sora-2-pro-image-to-video');
 ok('sora-2-pro maxDurationSec is 20', sora2pro?.maxDurationSec === 20);
 ok('sora-2-pro durations includes 20s', sora2pro?.durations.includes('20s'));
+
+// ---- Topaz upscaler capability shape (post-production, not generative) ----
+const topaz = getVideoModel('topaz-video-upscale');
+ok('topaz is video-input', topaz?.videoInput === true);
+ok('topaz has no audio output', topaz?.audio === false);
+ok('topaz has no duration ladder (real seconds required)', topaz?.durations.length === 0);
+ok('topaz maxDurationSec is 300 (per-request input cap)', topaz?.maxDurationSec === 300);
 
 // ---- Capability sets are consistent with the registry ----
 // Every registry entry that has supportsReferenceImages: true must be in

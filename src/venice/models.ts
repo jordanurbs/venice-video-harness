@@ -154,6 +154,22 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 15, minAudioInputSec: 3,
     privacy: 'anonymized', offline: false,
   },
+  // -- Topaz Video Upscale --
+  // Post-production upscaler (2x / 4x), not a generative model. Live-probed
+  // 2026-07-30: takes `upscale_factor` INSTEAD of `resolution`; requires the
+  // input video's real duration in seconds as a STRING on /video/queue
+  // ("Auto" is only accepted by /video/quote); input capped at 300s per
+  // request; strips audio (remux after). Priced per input second and the
+  // SAME for 2x and 4x (~$0.12/s at 1080p-class input) -- default to 4x.
+  // Large inputs must be chunked (~50MB body 413s); see src/venice/upscale.ts.
+  {
+    id: 'topaz-video-upscale', name: 'Topaz Video Upscale', type: 'image-to-video',
+    durations: [], resolutions: [], aspectRatios: [],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: true,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 300,
+    privacy: 'anonymized', offline: false,
+  },
   // -- Wan 2.5 Preview --
   {
     id: 'wan-2.5-preview-image-to-video', name: 'Wan 2.5 Preview', type: 'image-to-video',
