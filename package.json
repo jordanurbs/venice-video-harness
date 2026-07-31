@@ -1,6 +1,6 @@
 {
   "name": "venice-video-harness",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "Standalone consistency-first video production CLI powered by the Venice API",
   "homepage": "https://github.com/jordanurbs/venice-video-harness",
   "repository": {
@@ -42,7 +42,8 @@
     "prepack": "npm run build",
     "test": "npm run build && node --test tests/*.test.mjs",
     "test:legacy": "npm run build && for f in tests/test-*.mjs; do node \"$f\" || exit 1; done",
-    "release:check": "npm test && npm run test:legacy && npm audit --omit=dev && npm pack --dry-run"
+    "release:check": "npm test && npm run test:legacy && npm audit --omit=dev && npm pack --dry-run",
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "dependencies": {
     "commander": "^12.1.0",
@@ -68,7 +69,8 @@
     "dist",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "scripts/postinstall.mjs"
   ],
   "engines": {
     "node": ">=20"

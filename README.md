@@ -157,11 +157,36 @@ The CLI works directly against the Venice API. Cursor, Claude Code, OpenCode,
 MCP, and other agent harnesses are optional integrations, not runtime requirements.
 
 ```bash
-npm install -g venice-video-harness
+npm install -g venice-video-harness --foreground-scripts
 venice-video setup
 venice-video doctor
 venice-video new
 ```
+
+The `--foreground-scripts` flag makes the package's PATH diagnostic visible;
+modern npm otherwise suppresses successful post-install output. After installation,
+verify that your shell can find the executable:
+
+```bash
+command -v venice-video
+venice-video --version
+```
+
+If npm reports a successful install but `venice-video` is not found, npm's global
+`bin` directory is not on your shell `PATH`. The install output prints the exact
+directory and an `export PATH=...` command when it detects this condition. You can
+also inspect the directory manually:
+
+```bash
+NPM_BIN="$(npm prefix -g)/bin"
+echo "$NPM_BIN"
+export PATH="$NPM_BIN:$PATH"
+```
+
+Add that `export` line to `~/.zshrc`, `~/.bashrc`, or the startup file for your
+shell, then open a new terminal. Node version managers can create this mismatch
+when the active `npm` installs globally somewhere different from the active
+Node shim.
 
 `venice-video setup` prompts for the API key without echoing it, validates it,
 and stores it in the OS-appropriate user configuration directory with owner-only

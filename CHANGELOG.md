@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.1 — 2026-07-31
+
+- Added an install-time diagnostic that warns when npm's global executable directory is missing from `PATH` and prints the exact shell command to fix it.
+- Added README troubleshooting for successful global installs where `venice-video` is not found.
+
 ## 2.4.0 — 2026-07-31
 
 First standalone CLI release.
