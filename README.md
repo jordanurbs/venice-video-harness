@@ -198,6 +198,36 @@ export VENICE_API_KEY=your_key
 export VENICE_VIDEO_WORKSPACE=~/VeniceVideos
 ```
 
+After `new`, the CLI hands the project to one guided control center:
+
+```bash
+venice-video workshop -p ~/VeniceVideos/my-film
+```
+
+The workshop develops the complete project—not only a shot list:
+
+- objective, audience, runtime, constraints, and references
+- logline, synopsis, themes, acts/movements, and story beats
+- visual aesthetic, palette, lighting, lens language, and texture
+- characters, wardrobe, voices, and continuity anchors
+- locations and environmental continuity
+- dialogue/audio approach and exact-lip-sync decisions
+- production-ready shot script, risks, and open questions
+
+It writes `WORKSHOP.md` for human review and `workshop.json` as the structured
+source. Iterate without losing project context:
+
+```bash
+venice-video workshop -p ~/VeniceVideos/my-film --feedback "Make the middle more tense"
+venice-video workshop -p ~/VeniceVideos/my-film --status
+venice-video workshop -p ~/VeniceVideos/my-film --approve
+```
+
+Approval materializes the accepted aesthetic, cast, locations, and script into
+the existing production pipeline. Individual commands such as
+`explore-aesthetic`, `add-character`, and `storyboard-episode` remain available
+for advanced manual control, but they are no longer the default onboarding path.
+
 The `new` wizard starts with these production types:
 
 1. **Film** — a film of any length; there is no short-duration assumption

@@ -88,3 +88,17 @@ test('Film script scaffold uses Film terminology and a non-episodic duration', a
   const script = JSON.parse(await readFile(join(project, 'episodes', 'episode-001', 'script.json'), 'utf-8'));
   assert.equal(script.totalDuration, '300s');
 });
+
+test('new project hands off to the complete workshop instead of manual command chaining', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'venice-video-workshop-handoff-'));
+  const configDir = join(root, 'config');
+  const workspace = join(root, 'workspace');
+  const env = { VENICE_VIDEO_CONFIG_DIR: configDir, VENICE_API_KEY: '' };
+  let result = run(['setup', '--api-key', 'test-api-key-123456', '--workspace', workspace, '--skip-validation'], env);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(['new', '--type', 'film', '--name', 'Rocketship', '--concept', 'A complete space film'], env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Next: venice-video workshop -p/);
+  assert.doesNotMatch(result.stdout, /storyboard-episode/);
+  assert.doesNotMatch(result.stdout, /workshop your shot-by-shot script/);
+});

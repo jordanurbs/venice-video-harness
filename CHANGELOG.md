@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.4 — 2026-07-31
+
+- Added `venice-video workshop` as the project-level creative control center.
+- The workshop develops objective, audience, runtime, logline, synopsis, themes, structure, aesthetic, cast, voices, locations, audio approach, production risks, open questions, and the complete shot script in one coherent process.
+- Added structured revision feedback, status inspection, readable `WORKSHOP.md`, and explicit approval that materializes production state.
+- Replaced unclear manual command-chain handoffs after `new` and `new-script` with the guided workshop.
+- Kept low-level commands as advanced controls rather than the default onboarding experience.
+
 ## 2.4.3 — 2026-07-31
 
 - Film projects now use Film/Part terminology in script scaffolding and workshop output instead of Episode language.

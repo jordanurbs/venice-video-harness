@@ -86,12 +86,20 @@ import { assembleEpisode, collectShotVideos } from './assembler.js';
 import { buildGenerationPlan, saveGenerationPlan } from './generation-planner.js';
 import { AUDIO_STRATEGY_CHOICES, VIDEO_FAMILY_CHOICES } from './choices.js';
 import { getProjectLanguage } from '../series/project-language.js';
+import {
+  approveWorkshop,
+  generateWorkshop,
+  getWorkshopPath,
+  loadWorkshop,
+  saveWorkshop,
+  type WorkshopInputs,
+} from './workshop.js';
 
 const program = new Command();
 program
   .name('venice-video')
   .description('Standalone consistency-first video production with Venice AI')
-  .version('2.4.3')
+  .version('2.4.4')
   .option('--workspace <dir>', 'Workspace containing Venice Video projects');
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
@@ -351,7 +359,89 @@ program
     console.log(`\n${type === 'film' ? 'Film' : 'Project'} created: ${series.outputDir}`);
     console.log(`Reference-first defaults: ${series.videoDefaults.characterConsistencyModel}`);
     const language = getProjectLanguage(series);
-    console.log(`Next: venice-video new-script -p "${series.outputDir}" --title "${language.defaultScriptTitle}"`);
+    console.log(`Next: venice-video workshop -p "${series.outputDir}"`);
+  });
+
+// ── workshop ─────────────────────────────────────────────────────────
+program
+  .command('workshop')
+  .description('Develop the complete project: story, aesthetic, cast, locations, script, and production plan')
+  .requiredOption('-p, --project <dir>', 'Project output directory')
+  .option('--objective <text>', 'What the completed project should accomplish')
+  .option('--duration <duration>', 'Target runtime, e.g. "8 minutes" or "90 seconds"')
+  .option('--audience <text>', 'Intended audience')
+  .option('--must-include <text>', 'Required story, visual, character, or product elements')
+  .option('--avoid <text>', 'Things the project must avoid')
+  .option('--references <text>', 'Creative references or influences')
+  .option('--feedback <text>', 'Revision feedback for the existing workshop')
+  .option('--model <model>', 'Venice chat model', 'llama-3.3-70b')
+  .option('--approve', 'Approve the current workshop and materialize its production state', false)
+  .option('--status', 'Show current workshop status without generating', false)
+  .action(async (opts: {
+    project: string; objective?: string; duration?: string; audience?: string;
+    mustInclude?: string; avoid?: string; references?: string; feedback?: string;
+    model: string; approve: boolean; status: boolean;
+  }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Project not found.'); process.exit(1); }
+    const language = getProjectLanguage(series);
+    const existing = await loadWorkshop(series);
+
+    if (opts.status) {
+      console.log(`${language.projectNoun} workshop: ${existing?.status ?? 'not started'}`);
+      if (existing) {
+        console.log(`  Revision: ${existing.revision}`);
+        console.log(`  Logline: ${existing.logline}`);
+        console.log(`  Script: ${existing.script.title} · ${existing.script.totalDuration} · ${existing.script.shots.length} shots`);
+        console.log(`  Open questions: ${existing.productionNotes.openQuestions.length}`);
+        console.log(`  Files: ${getWorkshopPath(series)} · ${join(series.outputDir, 'WORKSHOP.md')}`);
+      } else {
+        console.log(`  Start: venice-video workshop -p "${series.outputDir}"`);
+      }
+      return;
+    }
+
+    if (opts.approve) {
+      if (!existing) throw new Error('No workshop draft exists. Run `venice-video workshop` first.');
+      await approveWorkshop(series, existing);
+      console.log(`${language.projectNoun} workshop approved.`);
+      console.log('  Aesthetic, characters, locations, and script are now production state.');
+      console.log(`  Review the script and assets listed in ${join(series.outputDir, 'WORKSHOP.md')}.`);
+      console.log('  The workshop remains your control center:');
+      console.log(`    venice-video workshop -p "${series.outputDir}" --status`);
+      console.log(`    venice-video workshop -p "${series.outputDir}" --feedback "..."`);
+      console.log(`  When ready to create images: venice-video storyboard-episode -p "${series.outputDir}" -e 1`);
+      return;
+    }
+
+    const previousInputs = existing?.inputs;
+    const ask = async (label: string, value: string | undefined, fallback = '') =>
+      value ?? (stdin.isTTY ? await promptText(label, { defaultValue: fallback, required: false }) : fallback);
+    const inputs: WorkshopInputs = {
+      objective: await ask('What should the finished project accomplish?', opts.objective, previousInputs?.objective ?? series.concept),
+      targetDuration: await ask('Target runtime', opts.duration, previousInputs?.targetDuration ?? language.defaultDuration),
+      audience: await ask('Intended audience', opts.audience, previousInputs?.audience ?? ''),
+      mustInclude: await ask('What must be included?', opts.mustInclude, previousInputs?.mustInclude ?? ''),
+      avoid: await ask('What should it avoid?', opts.avoid, previousInputs?.avoid ?? ''),
+      references: await ask('Creative references', opts.references, previousInputs?.references ?? ''),
+    };
+
+    const apiKey = await getVeniceApiKey();
+    const client = new VeniceClient(apiKey);
+    console.log(`${existing ? 'Revising' : 'Developing'} the complete ${language.projectNounLower} workshop...`);
+    const draft = await generateWorkshop(client, series, inputs, opts.model, existing, opts.feedback);
+    await saveWorkshop(series, draft);
+
+    console.log(`Workshop draft ready — revision ${draft.revision}.`);
+    console.log(`  Logline: ${draft.logline}`);
+    console.log(`  Structure: ${draft.structure.length} movements`);
+    console.log(`  Cast: ${draft.characters.length} characters`);
+    console.log(`  Locations: ${draft.locations.length}`);
+    console.log(`  Script: ${draft.script.title} · ${draft.script.totalDuration} · ${draft.script.shots.length} shots`);
+    console.log(`  Open questions: ${draft.productionNotes.openQuestions.length}`);
+    console.log(`  Review: ${join(series.outputDir, 'WORKSHOP.md')}`);
+    console.log(`  Revise: venice-video workshop -p "${series.outputDir}" --feedback "..."`);
+    console.log(`  Approve: venice-video workshop -p "${series.outputDir}" --approve`);
   });
 
 // ── new-series ────────────────────────────────────────────────────────
@@ -421,7 +511,7 @@ program
       console.log(`    actionModel: ${series.videoDefaults.actionModel}`);
       console.log(`    characterConsistencyModel: ${series.videoDefaults.characterConsistencyModel}`);
     }
-    console.log(`\nNext: explore-aesthetic -p ${series.outputDir}`);
+    console.log(`\nNext: venice-video workshop -p "${series.outputDir}"`);
   });
 
 // ── new-script / new-episode ─────────────────────────────────────────
@@ -455,7 +545,7 @@ async function scaffoldScript(opts: { project: string; title: string }): Promise
   console.log(`  ${language.segmentNoun}: ${episode.number}`);
   console.log(`  Directory: ${episodeDir}`);
   console.log(`  Script: ${join(episodeDir, 'script.json')} (empty template — workshop your shots)`);
-  console.log(`\nNext: venice-video workshop-script -p "${series.outputDir}" --part ${episode.number} --concept "..."`);
+  console.log(`\nContinue the complete creative process: venice-video workshop -p "${series.outputDir}"`);
 }
 
 program
