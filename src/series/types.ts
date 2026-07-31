@@ -41,10 +41,10 @@ export interface VideoModelDefaults {
    */
   seedanceCompatibility?: SeedanceCompatibilityMode;
   /**
-   * Default lip-sync model for dialogue shots whose character is a
-   * non-narrator with a visible face. Defaults to `wan-2-7-image-to-video`.
-   * The planner only routes to this model when `shot.motion !== 'high'`;
-   * high-motion dialogue stays on the R2V model for identity preservation.
+   * Exact lip-sync model for dialogue shots whose character is a non-narrator
+   * with a visible face. Consulted only when `audioStrategy === 'lip-sync'`.
+   * Native dialogue stays on the selected R2V family and uses voice-donor
+   * references when supported. Defaults to `wan-2-7-image-to-video`.
    */
   lipSyncModel?: string;
   /**
@@ -133,12 +133,14 @@ export type SeedanceCompatibilityMode = 'prompt' | 'fallback' | 'launder';
 /**
  * How dialogue reaches the final mix.
  *
- *   - 'native'      — the video model speaks the dialogue in-frame. Best when
+ *   - 'native'      — the video model speaks the dialogue in-frame. Seedance
+ *                     and HappyHorse use character voice-donor references when
+ *                     available to preserve timbre, accent, and pacing. Best when
  *                     characters speak only once or twice, the model's voice
  *                     range suffices, and you don't need precise control.
  *                     `assemble-episode` keeps `dialogueReplace: false`.
- *   - 'lip-sync'    — Venice TTS renders each dialogue line, Wan 2.7 i2v
- *                     lip-syncs the character's mouth to the audio. Best when
+ *   - 'lip-sync'    — exact lip-sync mode: Venice TTS renders each dialogue
+ *                     line, and Wan 2.7 i2v lip-syncs the character's mouth to the audio. Best when
  *                     a character speaks many times (so a single voice picks
  *                     up across the episode), the user wants accent control,
  *                     or the dialogue needs deterministic delivery.
@@ -158,8 +160,8 @@ export type AudioStrategy = 'native' | 'lip-sync' | 'narrator-vo';
  * Operator's preferred video model family for action / atmosphere shots.
  * `auto` keeps the current defaults (Seedance 2.0). Picking a family swaps
  * `actionModel`, `atmosphereModel`, and `characterConsistencyModel` to that
- * family's i2v / R2V variants. `lipSyncModel` stays on Wan 2.7 regardless —
- * it's the only Venice model with proper lip-sync today.
+ * family's i2v / R2V variants. `lipSyncModel` remains available for the
+ * explicit exact-audio lip-sync strategy; it does not affect native dialogue.
  *
  * Family quick reference:
  *   - 'seedance'     — Seedance 2.0 (default). Strong R2V identity anchoring,
@@ -199,9 +201,9 @@ export type VideoFamilyPreference =
  * `createSeries` to populate `actionModel` / `atmosphereModel` /
  * `characterConsistencyModel` from the operator's questionnaire answer.
  *
- * `lipSyncModel` is intentionally NOT included — Wan 2.7 i2v is the only
- * Venice lip-sync option today; callers should keep it at the default
- * regardless of family.
+ * `lipSyncModel` is intentionally NOT included. It is only consulted when
+ * `audioStrategy === 'lip-sync'`; native dialogue remains on the selected
+ * family and uses voice references when that family supports them.
  */
 export function resolveVideoFamilyDefaults(
   family: VideoFamilyPreference,
@@ -732,11 +734,10 @@ export const KLING_R2V_MODEL = 'kling-o3-standard-reference-to-video';
 export const KLING_MULTISHOT_MODEL = 'kling-o3-pro-image-to-video';
 
 /**
- * Default lip-sync model. Used by the planner for dialogue shots whose
- * character is a non-narrator with a visible face and motion !== 'high'.
- * Wan 2.7 i2v inherits the aspect ratio from the input image and
- * synthesizes lip-sync from `audio_url`. R2V dialogue (high motion or
- * multi-speaker) stays on Seedance for identity preservation.
+ * Default exact lip-sync model. Used only when `audioStrategy === 'lip-sync'`
+ * for visible, low/medium-motion single-speaker dialogue. Wan 2.7 i2v inherits
+ * aspect ratio from the input image and follows the exact supplied `audio_url`.
+ * Native dialogue remains on Seedance/HappyHorse with voice references.
  */
 export const DEFAULT_LIP_SYNC_MODEL = 'wan-2-7-image-to-video';
 

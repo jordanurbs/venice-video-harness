@@ -84,54 +84,14 @@ import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
 import type { MultiEditModel } from '../venice/types.js';
 import { assembleEpisode, collectShotVideos } from './assembler.js';
 import { buildGenerationPlan, saveGenerationPlan } from './generation-planner.js';
+import { AUDIO_STRATEGY_CHOICES, VIDEO_FAMILY_CHOICES } from './choices.js';
 
 const program = new Command();
 program
   .name('venice-video')
   .description('Standalone consistency-first video production with Venice AI')
-  .version('2.4.0')
+  .version('2.4.2')
   .option('--workspace <dir>', 'Workspace containing Venice Video projects');
-
-/**
- * The video-model question asked when a project is created, shared by the
- * interactive `new` wizard and the `--video-family` validation on both `new`
- * and `new-series`. The three headline families lead; the remaining options
- * are still selectable but sit below them.
- */
-const VIDEO_FAMILY_CHOICES: ReadonlyArray<{
-  label: string; value: VideoFamilyPreference; description?: string;
-}> = [
-  {
-    label: 'Seedance 2.0',
-    value: 'seedance',
-    description: 'Reference-first default — strongest identity anchoring, 720p drafts, 4-15s',
-  },
-  {
-    label: 'MiniMax H3',
-    value: 'minimax-h3',
-    description: 'Open-weight omni-modal — 2K + native stereo audio at ~1/3 the cost, 5-15s (no 3-4s beats, no draft tier)',
-  },
-  {
-    label: 'HappyHorse 1.1',
-    value: 'happyhorse',
-    description: 'Best lip-sync across 7 languages, 720p/1080p, 3-15s',
-  },
-  {
-    label: 'Grok Imagine',
-    value: 'grok-imagine',
-    description: 'Atmosphere-forward look; R2V durations stepped at 5s/8s/10s',
-  },
-  {
-    label: 'Kling O3',
-    value: 'kling-o3',
-    description: 'Stylized and illustrated aesthetics; accepts non-seedream reference images',
-  },
-  {
-    label: 'Automatic',
-    value: 'auto',
-    description: 'Track whatever the harness currently defaults to (Seedance Enhanced today)',
-  },
-];
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
 
@@ -370,11 +330,7 @@ program
     const setting = opts.setting ?? (stdin.isTTY
       ? await promptText('Setting', { defaultValue: '', required: false })
       : '');
-    const audioStrategy = (opts.audioStrategy ?? (stdin.isTTY ? await promptChoice('Audio strategy', [
-      { label: 'Native model audio', value: 'native', description: 'Generate dialogue and ambience in the video model' },
-      { label: 'Lip-sync', value: 'lip-sync', description: 'Use Venice speech plus Wan 2.7 lip-sync' },
-      { label: 'Narrator voice-over', value: 'narrator-vo', description: 'Mute model narration and own the VO lane' },
-    ]) : 'native')) as 'native' | 'lip-sync' | 'narrator-vo';
+    const audioStrategy = (opts.audioStrategy ?? (stdin.isTTY ? await promptChoice('Audio strategy', AUDIO_STRATEGY_CHOICES) : 'native')) as 'native' | 'lip-sync' | 'narrator-vo';
     const videoFamily = (opts.videoFamily ?? (stdin.isTTY
       ? await promptChoice('Video model family', VIDEO_FAMILY_CHOICES)
       : 'auto')) as VideoFamilyPreference;
@@ -412,8 +368,8 @@ program
   .option(
     '--audio-strategy <strategy>',
     'How dialogue reaches the final mix: ' +
-    '"native" (model speaks in-frame; default; best for 1-2 lines per character), ' +
-    '"lip-sync" (Venice TTS + Wan 2.7 lip-sync; best when characters talk often), ' +
+    '"native" (selected model speaks in-frame; Seedance/HappyHorse use voice-donor references when available), ' +
+    '"lip-sync" (exact mode: Venice TTS drives Wan 2.7 mouth movement), ' +
     '"narrator-vo" (NARRATOR voice-over only; auto-mutes the model audio so a competing AI narrator can\'t fight the TTS).',
   )
   .option(
@@ -421,7 +377,7 @@ program
     'Preferred video model family: ' +
     'auto (default Seedance 2.0), seedance, happyhorse, minimax-h3, grok-imagine, kling-o3. ' +
     'Swaps actionModel/atmosphereModel/characterConsistencyModel to that family. ' +
-    'lipSyncModel stays on Wan 2.7 regardless. ' +
+    'lipSyncModel is only used for the explicit exact lip-sync strategy. ' +
     'Omit it on an interactive terminal and you will be asked.',
   )
   .action(async (opts: {

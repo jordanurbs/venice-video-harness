@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.2 — 2026-07-31
+
+- Native dialogue now remains on the selected R2V family and uses Seedance/HappyHorse voice-donor references when available.
+- Wan 2.7 routing now requires the explicit Exact lip-sync strategy.
+- Reworded the audio wizard to distinguish native voice-reference generation from exact audio-driven mouth movement.
+- Reordered model families to Automatic, Seedance, MiniMax H3, HappyHorse, Grok Imagine, Kling O3.
+
 ## 2.4.1 — 2026-07-31
 
 - Added an install-time diagnostic that warns when npm's global executable directory is missing from `PATH` and prints the exact shell command to fix it.

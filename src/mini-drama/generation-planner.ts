@@ -61,16 +61,19 @@ function isIdentitySensitive(shot: ShotScript): boolean {
 }
 
 /**
- * a shot must render as a single Wan 2.7 lip-sync clip when
- * it has dialogue from a non-narrator with a visible face AND the motion is
- * not high. Multi-shot bundling must break at any such shot — bundling a
- * lip-sync shot into a Seedance multi-shot unit loses both the lip-sync and
- * the per-shot model routing.
+ * A shot must render as a single Wan 2.7 exact-lip-sync clip only when the
+ * series explicitly selected `audioStrategy: 'lip-sync'`, it has dialogue
+ * from a visible non-narrator, and motion is not high. Native dialogue stays
+ * on the selected R2V family and may use voice-donor references.
  *
  * High-motion dialogue stays on the R2V model for identity preservation
  * (Wan 2.7 prioritizes motion over reference adherence; see  notes).
  */
-export function mustStayAsWanLipSync(shot: ShotScript): boolean {
+export function mustStayAsWanLipSync(
+  shot: ShotScript,
+  videoDefaults?: VideoModelDefaults,
+): boolean {
+  if (videoDefaults?.audioStrategy !== 'lip-sync') return false;
   if (!shot.dialogue) return false;
   const speaker = shot.dialogue.character.toUpperCase();
   if (speaker === 'NARRATOR' || speaker === 'V.O.' || speaker === 'VO') return false;
@@ -134,6 +137,7 @@ function chooseStartFrameStrategy(
 function chooseEndFrameStrategy(
   lastShot: ShotScript,
   nextShot: ShotScript | undefined,
+  videoDefaults?: VideoModelDefaults,
 ): GenerationUnit['endFrameStrategy'] {
   if (!nextShot) return 'natural';
   if (hasNewCharacters(lastShot, nextShot)) return 'natural';
@@ -144,7 +148,7 @@ function chooseEndFrameStrategy(
   // continuity into the next shot AND anchors the character's identity at
   // both ends of the clip. Independent of the transition because the cut
   // continuity benefit applies even for hard cuts.
-  if (mustStayAsWanLipSync(lastShot)) {
+  if (mustStayAsWanLipSync(lastShot, videoDefaults)) {
     return 'next-panel-target';
   }
   return END_FRAME_TRANSITIONS.has(lastShot.transition.toUpperCase())
@@ -162,7 +166,7 @@ export function shouldUseSeedanceKeyframe(
   shot: ShotScript,
   videoDefaults?: VideoModelDefaults,
 ): boolean {
-  if (!mustStayAsWanLipSync(shot)) return false;
+  if (!mustStayAsWanLipSync(shot, videoDefaults)) return false;
   if (shot.characters.length === 0) return false;
   if (shot.disableSeedanceKeyframe === true) return false;
   if (videoDefaults?.seedanceKeyframeForWan === false) return false;
@@ -196,7 +200,7 @@ function buildSingleUnit(
     model: shot.videoModel,
     duration: shot.duration,
     startFrameStrategy: chooseStartFrameStrategy(previousShot, shot),
-    endFrameStrategy: chooseEndFrameStrategy(shot, nextShot),
+    endFrameStrategy: chooseEndFrameStrategy(shot, nextShot, videoDefaults),
     decisionReasons: reasons,
     fallbackToSingles: false,
     useSeedanceKeyframe: useSeedanceKeyframe || undefined,
@@ -215,7 +219,10 @@ function hasOverlappingCharacters(shots: ShotScript[]): boolean {
   return true;
 }
 
-function canUseMultiShotWindow(window: ShotScript[]): { ok: boolean; reasons: string[] } {
+function canUseMultiShotWindow(
+  window: ShotScript[],
+  videoDefaults?: VideoModelDefaults,
+): { ok: boolean; reasons: string[] } {
   if (window.length < 2) return { ok: false, reasons: ['window too short'] };
   if (window.some(shot => shot.mustStaySingle || shot.allowMultiShot === false)) {
     return { ok: false, reasons: ['script override blocks grouping'] };
@@ -228,7 +235,7 @@ function canUseMultiShotWindow(window: ShotScript[]): { ok: boolean; reasons: st
   }
   // a shot that needs Wan 2.7 lip-sync must render as a single clip.
   // Bundling it into a Seedance multi-shot unit drops the lip-sync entirely.
-  if (window.some(mustStayAsWanLipSync)) {
+  if (window.some(shot => mustStayAsWanLipSync(shot, videoDefaults))) {
     return { ok: false, reasons: ['lip-sync dialogue shot in window — keep separate for Wan 2.7'] };
   }
 
@@ -258,13 +265,17 @@ function canUseMultiShotWindow(window: ShotScript[]): { ok: boolean; reasons: st
   return { ok: true, reasons };
 }
 
-function selectMultiShotWindow(shots: ShotScript[], startIdx: number): { length: number; reasons: string[] } | null {
+function selectMultiShotWindow(
+  shots: ShotScript[],
+  startIdx: number,
+  videoDefaults?: VideoModelDefaults,
+): { length: number; reasons: string[] } | null {
   // Kling 3.0 supports up to 6 shots in a single generation
   const maxWindow = Math.min(6, shots.length - startIdx);
 
   for (let length = maxWindow; length >= 2; length--) {
     const window = shots.slice(startIdx, startIdx + length);
-    const verdict = canUseMultiShotWindow(window);
+    const verdict = canUseMultiShotWindow(window, videoDefaults);
     if (verdict.ok) {
       return { length, reasons: verdict.reasons };
     }
@@ -278,6 +289,7 @@ function buildMultiShotUnit(
   previousShot: ShotScript | undefined,
   nextShot: ShotScript | undefined,
   reasons: string[],
+  videoDefaults?: VideoModelDefaults,
 ): GenerationUnit {
   const first = shots[0];
   const last = shots[shots.length - 1];
@@ -292,7 +304,7 @@ function buildMultiShotUnit(
     model: KLING_MULTISHOT_MODEL,
     duration: formatShotDuration(durationSec),
     startFrameStrategy: chooseStartFrameStrategy(previousShot, first),
-    endFrameStrategy: chooseEndFrameStrategy(last, nextShot),
+    endFrameStrategy: chooseEndFrameStrategy(last, nextShot, videoDefaults),
     decisionReasons: reasons,
     fallbackToSingles: false,
   };
@@ -309,12 +321,12 @@ export function buildGenerationPlan(
   while (index < script.shots.length) {
     const previousShot = index > 0 ? script.shots[index - 1] : undefined;
     const currentShot = script.shots[index];
-    const multiWindow = selectMultiShotWindow(script.shots, index);
+    const multiWindow = selectMultiShotWindow(script.shots, index, videoDefaults);
 
     if (multiWindow) {
       const window = script.shots.slice(index, index + multiWindow.length);
       const nextShot = script.shots[index + multiWindow.length];
-      units.push(buildMultiShotUnit(window, previousShot, nextShot, multiWindow.reasons));
+      units.push(buildMultiShotUnit(window, previousShot, nextShot, multiWindow.reasons, videoDefaults));
       index += multiWindow.length;
       continue;
     }

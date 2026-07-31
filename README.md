@@ -298,7 +298,15 @@ These defaults are overridable per-project via `series.json` → `videoDefaults`
 
 ### Picking a family at project creation
 
-`venice-video new` asks which family to use, and `venice-video new-series` asks too when it's run on a terminal without `--video-family`. Both write the answer to `series.json` → `videoDefaults.videoFamilyPreference` and swap the action / atmosphere / character-consistency models to match. `lipSyncModel` stays on Wan 2.7 whatever you pick — it's the only Venice model with real lip-sync.
+`venice-video new` asks which family to use, and `venice-video new-series` asks too when it's run on a terminal without `--video-family`. Both write the answer to `series.json` → `videoDefaults.videoFamilyPreference` and swap the action / atmosphere / character-consistency models to match. The wizard orders the families as Automatic, Seedance, MiniMax H3, HappyHorse, Grok Imagine, then Kling O3.
+
+### Choosing dialogue audio
+
+- **Native dialogue** keeps the shot on the selected video family. Seedance and HappyHorse attach each character's short voice-donor clip through `reference_audio_urls`, then generate the authored line in-frame with that voice identity.
+- **Exact lip-sync** renders the exact line with Venice speech, creates a Seedance identity keyframe, and drives Wan 2.7 mouth movement from that speech file through `audio_url`.
+- **Narrator voice-over** keeps spoken narration out of the video prompt and mixes Venice speech over the picture in post.
+
+A voice-donor reference preserves timbre, accent, and pacing; it is not the exact dialogue recording. Wan 2.7 is used only when the project explicitly selects exact lip-sync.
 
 | Family | Picks | Trade-off |
 |--------|-------|-----------|

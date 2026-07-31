@@ -227,13 +227,15 @@ export function resolveVideoModel(
     };
   }
 
-  // dialogue shots whose speaker is a non-narrator visible
-  // character with low/medium motion route to Wan 2.7 i2v for lip-sync.
+  // Only the explicit exact-lip-sync strategy routes dialogue through Wan 2.7.
+  // Native dialogue stays on the selected R2V family and uses voice-donor
+  // reference_audio_urls when supported (Seedance / HappyHorse).
   // High-motion dialogue stays on R2V because Wan 2.7 prioritizes motion
   // over reference adherence (hair color shifts, shirt pattern simplifies,
   // eyes change) when forced to handle big movement.
   const lipSyncModel = series.videoDefaults.lipSyncModel;
-  if (lipSyncModel && shotWantsLipSync(shot) && shot.characters.length <= 1) {
+  const exactLipSync = series.videoDefaults.audioStrategy === 'lip-sync';
+  if (exactLipSync && lipSyncModel && shotWantsLipSync(shot) && shot.characters.length <= 1) {
     return {
       modelId: lipSyncModel,
       upgraded: true,
