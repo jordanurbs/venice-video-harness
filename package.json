@@ -27,9 +27,9 @@
     "character-consistency"
   ],
   "bin": {
-    "venice-video": "./dist/mini-drama/cli.js",
-    "video-harness": "./dist/mini-drama/cli.js",
-    "storyboard": "./dist/cli.js"
+    "venice-video": "dist/mini-drama/cli.js",
+    "video-harness": "dist/mini-drama/cli.js",
+    "storyboard": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
