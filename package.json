@@ -17,20 +17,14 @@
     "venice-ai",
     "ai-video",
     "video-generation",
+    "video-cli",
     "video-harness",
     "consistent-video",
     "storyboard",
     "image-to-video",
     "text-to-video",
     "multi-shot",
-    "character-consistency",
-    "claude-code",
-    "cursor",
-    "kling",
-    "veo",
-    "sora",
-    "wan",
-    "ltx-video"
+    "character-consistency"
   ],
   "bin": {
     "venice-video": "./dist/mini-drama/cli.js",
@@ -47,7 +41,8 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', {recursive:true, force:true})\"",
     "prepack": "npm run build",
     "test": "npm run build && node --test tests/*.test.mjs",
-    "test:legacy": "npm run build && for f in tests/test-*.mjs; do node \"$f\" || exit 1; done"
+    "test:legacy": "npm run build && for f in tests/test-*.mjs; do node \"$f\" || exit 1; done",
+    "release:check": "npm test && npm run test:legacy && npm audit --omit=dev && npm pack --dry-run"
   },
   "dependencies": {
     "commander": "^12.1.0",
@@ -72,9 +67,13 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

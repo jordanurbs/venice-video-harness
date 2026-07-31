@@ -1,8 +1,10 @@
 # Venice Video Harness
 
-Agent-first, Venice-optimized tooling for **consistency-first video creation** at any length.
+A standalone, Venice-optimized CLI for **consistency-first video creation** at any length.
 
-This harness is built for creators who want a coding agent (opencode, Claude Code, Cursor, Codex, etc.) to operate a reusable Venice production system for:
+Install it, enter a Venice API key, and create films directly from the terminal. No coding agent, IDE extension, or MCP host is required. The same repository also includes optional orchestration material for agent-driven workflows.
+
+Use it for:
 
 - **Character-consistent video projects** (any genre, any length)
 - **Visual-style-locked series or campaigns**
@@ -15,14 +17,13 @@ This harness is built for creators who want a coding agent (opencode, Claude Cod
 
 ## What This Is
 
-Most Venice integrations are thin wrappers around API calls. This harness is the higher-level layer:
+Most Venice integrations are thin wrappers around API calls. This package is the higher-level production layer:
 
-- **Orchestration rules** in `AGENTS.md`
-- **Reusable playbooks** in `.claude/commands/`
-- **Specialized agents** in `.claude/agents/`
-- **Venice production skills** in `.claude/skills/`
-- **TypeScript execution layer** in `src/`
-- **Comprehensive model registry** covering 50+ Venice video, image, audio, and music models
+- **Standalone `venice-video` CLI** with setup, diagnostics, project creation, generation, QA, assembly, and export commands
+- **Direct Venice API client** with retries, rate limiting, deprecation warnings, and async media polling
+- **Persistent project state** for characters, locations, episodes, references, recipes, and provenance
+- **Comprehensive model registry** covering Venice video, image, audio, and music models
+- **Optional agent orchestration** in `AGENTS.md` and `.claude/` for users who want natural-language operation
 
 ## Supported Venice Models (April 2026)
 
@@ -201,9 +202,13 @@ venice-video list-series
 venice-video --help
 ```
 
-The setup file is intentionally not a replacement for `VENICE_API_KEY` in
-server environments. Credential precedence is environment variable, then stored
+For server environments, prefer `VENICE_API_KEY` instead of writing a user
+configuration file. Credential precedence is environment variable, then stored
 user configuration, then the repository `.env` compatibility path.
+
+The setup command stores the key in a user-only configuration file, not the OS
+keychain. On macOS and Linux the file mode is `0600`. Use an environment variable
+or an external secrets manager where file-based storage is not appropriate.
 
 ### Repository development
 
@@ -222,9 +227,7 @@ Those layers can operate the same execution engine, but the installed
 ### Programmatic Usage
 
 ```typescript
-import { VeniceClient } from './src/venice/client.js';
-import { generateVideo, quoteVideo } from './src/venice/video.js';
-import { listVideoModels, getVideoModel } from './src/venice/models.js';
+import { VeniceClient, generateVideo, quoteVideo, listVideoModels } from 'venice-video-harness';
 
 const client = new VeniceClient();
 
