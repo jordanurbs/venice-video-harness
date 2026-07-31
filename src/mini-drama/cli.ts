@@ -85,12 +85,13 @@ import type { MultiEditModel } from '../venice/types.js';
 import { assembleEpisode, collectShotVideos } from './assembler.js';
 import { buildGenerationPlan, saveGenerationPlan } from './generation-planner.js';
 import { AUDIO_STRATEGY_CHOICES, VIDEO_FAMILY_CHOICES } from './choices.js';
+import { getProjectLanguage } from '../series/project-language.js';
 
 const program = new Command();
 program
   .name('venice-video')
   .description('Standalone consistency-first video production with Venice AI')
-  .version('2.4.2')
+  .version('2.4.3')
   .option('--workspace <dir>', 'Workspace containing Venice Video projects');
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
@@ -349,7 +350,8 @@ program
     await saveSeries(series);
     console.log(`\n${type === 'film' ? 'Film' : 'Project'} created: ${series.outputDir}`);
     console.log(`Reference-first defaults: ${series.videoDefaults.characterConsistencyModel}`);
-    console.log(`Next: venice-video new-episode -p "${series.outputDir}" --title "First episode"`);
+    const language = getProjectLanguage(series);
+    console.log(`Next: venice-video new-script -p "${series.outputDir}" --title "${language.defaultScriptTitle}"`);
   });
 
 // ── new-series ────────────────────────────────────────────────────────
@@ -422,43 +424,53 @@ program
     console.log(`\nNext: explore-aesthetic -p ${series.outputDir}`);
   });
 
-// ── new-episode ──────────────────────────────────────────────────────
+// ── new-script / new-episode ─────────────────────────────────────────
+async function scaffoldScript(opts: { project: string; title: string }): Promise<void> {
+  const series = await loadSeries(resolve(opts.project));
+  if (!series) { console.error('Project not found.'); process.exit(1); }
+
+  const language = getProjectLanguage(series);
+  const episode = addEpisode(series, opts.title);
+  const episodeDir = getEpisodeDir(series, episode.number);
+  const sceneDir = join(episodeDir, 'scene-001');
+  const audioDir = join(episodeDir, 'audio');
+  await mkdir(sceneDir, { recursive: true });
+  await mkdir(audioDir, { recursive: true });
+
+  const templateScript = {
+    episode: episode.number,
+    title: opts.title,
+    seriesName: series.name,
+    totalDuration: language.defaultDuration,
+    shots: [],
+  };
+  await writeFile(
+    join(episodeDir, 'script.json'),
+    JSON.stringify(templateScript, null, 2),
+    'utf-8',
+  );
+  await saveSeries(series);
+
+  console.log(`\n${language.scriptNoun} created: "${opts.title}"`);
+  console.log(`  ${language.segmentNoun}: ${episode.number}`);
+  console.log(`  Directory: ${episodeDir}`);
+  console.log(`  Script: ${join(episodeDir, 'script.json')} (empty template — workshop your shots)`);
+  console.log(`\nNext: venice-video workshop-script -p "${series.outputDir}" --part ${episode.number} --concept "..."`);
+}
+
+program
+  .command('new-script')
+  .description('Create a script container using Film or Series terminology')
+  .requiredOption('-p, --project <dir>', 'Project output directory')
+  .requiredOption('-t, --title <title>', 'Script title')
+  .action(scaffoldScript);
+
 program
   .command('new-episode')
-  .description('Scaffold a new episode directory and register it in series.json')
-  .requiredOption('-p, --project <dir>', 'Series output directory')
-  .requiredOption('-t, --title <title>', 'Episode title')
-  .action(async (opts: { project: string; title: string }) => {
-    const series = await loadSeries(resolve(opts.project));
-    if (!series) { console.error('Series not found.'); process.exit(1); }
-
-    const episode = addEpisode(series, opts.title);
-    const episodeDir = getEpisodeDir(series, episode.number);
-    const sceneDir = join(episodeDir, 'scene-001');
-    const audioDir = join(episodeDir, 'audio');
-    await mkdir(sceneDir, { recursive: true });
-    await mkdir(audioDir, { recursive: true });
-
-    const templateScript = {
-      episode: episode.number,
-      title: opts.title,
-      seriesName: series.name,
-      totalDuration: '60s',
-      shots: [],
-    };
-    await writeFile(
-      join(episodeDir, 'script.json'),
-      JSON.stringify(templateScript, null, 2),
-      'utf-8',
-    );
-
-    await saveSeries(series);
-
-    console.log(`\nEpisode ${episode.number} created: "${opts.title}"`);
-    console.log(`  Directory: ${episodeDir}`);
-    console.log(`  Script: ${join(episodeDir, 'script.json')} (empty template -- workshop your shots)`);
-    console.log(`\nNext: workshop your shot-by-shot script, then storyboard-episode -p ${series.outputDir} -e ${episode.number}`);
-  });
+  .description('[Compatibility alias] Create the next script container')
+  .requiredOption('-p, --project <dir>', 'Project output directory')
+  .requiredOption('-t, --title <title>', 'Script title')
+  .action(scaffoldScript);
 
 // ── list-series ───────────────────────────────────────────────────────
 program
@@ -480,11 +492,11 @@ program
 program
   .command('explore-aesthetic')
   .description('Generate aesthetic comparison samples for a series')
-  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-p, --project <dir>', 'Project output directory')
   .option('--count <n>', 'Number of aesthetic variants', '5')
   .action(async (opts: { project: string; count: string }) => {
     const series = await loadSeries(resolve(opts.project));
-    if (!series) { console.error('Series not found.'); process.exit(1); }
+    if (!series) { console.error('Project not found.'); process.exit(1); }
 
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
@@ -1003,15 +1015,18 @@ program
 
 // ── workshop-episode ──────────────────────────────────────────────────
 program
-  .command('workshop-episode')
-  .description('Generate an episode script draft using Venice LLM with full series context')
-  .requiredOption('-p, --project <dir>', 'Series output directory')
-  .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
-  .requiredOption('--concept <text>', 'Episode concept/premise')
+  .command('workshop-script')
+  .alias('workshop-episode')
+  .description('Generate a Film- or Series-aware script draft using Venice LLM')
+  .requiredOption('-p, --project <dir>', 'Project output directory')
+  .option('-e, --episode <number>', 'Script part number (compatibility flag)', parseInt)
+  .option('--part <number>', 'Script part number', parseInt)
+  .requiredOption('--concept <text>', 'Film/part concept, including target duration when relevant')
   .option('--model <model>', 'Venice chat model', 'llama-3.3-70b')
-  .action(async (opts: { project: string; episode: number; concept: string; model: string }) => {
+  .action(async (opts: { project: string; episode: number; part?: number; concept: string; model: string }) => {
+    opts.episode = opts.part ?? opts.episode ?? 1;
     const series = await loadSeries(resolve(opts.project));
-    if (!series) { console.error('Series not found.'); process.exit(1); }
+    if (!series) { console.error('Project not found.'); process.exit(1); }
 
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
@@ -1027,7 +1042,9 @@ program
       referenceContext += `\n--- ${f} ---\n${content}\n`;
     }
 
-    // Gather prior episode summaries for continuity
+    const language = getProjectLanguage(series);
+
+    // Gather prior script-part summaries for continuity
     let priorEpisodes = '';
     for (const ep of series.episodes) {
       const script = await loadEpisodeScript(series, ep.number);
@@ -1036,7 +1053,7 @@ program
           .filter(s => s.dialogue)
           .map(s => `  ${s.dialogue!.character}: "${s.dialogue!.line}"`)
           .join('\n');
-        priorEpisodes += `\nEpisode ${ep.number} ("${ep.title}"): ${script.shots.length} shots, ${script.totalDuration}\n`;
+        priorEpisodes += `\n${language.segmentNoun} ${ep.number} ("${ep.title}"): ${script.shots.length} shots, ${script.totalDuration}\n`;
         if (dialogueLines) priorEpisodes += `Key dialogue:\n${dialogueLines}\n`;
       }
     }
@@ -1058,9 +1075,9 @@ program
       ? (series.locations ?? []).map(l => `${l.slug}: ${l.name} — ${l.description}${l.lightingNotes ? ` (lighting: ${l.lightingNotes})` : ''}`).join('\n')
       : 'None defined yet.';
 
-    const systemPrompt = `You are a scriptwriter for the mini-drama series "${series.name}".
+    const systemPrompt = `You are a screenwriter for the ${language.projectNounLower} "${series.name}".
 
-SERIES CONCEPT: ${series.concept}
+PROJECT CONCEPT: ${series.concept}
 GENRE: ${series.genre}
 SETTING: ${series.setting}
 
@@ -1073,53 +1090,55 @@ ${charSummaries}
 LOCATIONS (existing, reuse these slugs):
 ${locationSummaries}
 
-PRIOR EPISODES:
+PRIOR ${language.segmentNoun.toUpperCase()} MATERIAL:
 ${priorEpisodes || 'None yet.'}
 
-SERIES REFERENCE DOCUMENTS:
+PROJECT REFERENCE DOCUMENTS:
 ${referenceContext || 'None available.'}
 
 DIRECT THE SCENE, DON'T DECORATE IT (CRITICAL):
-For every shot, first decide what the beat is DOING — the turn, the point of view, the power, the subtext — and name ONE intention. Then derive camera, lens, light, blocking, performance, and sound from that single intention. Do NOT stack empty "cinematic / epic / beautiful / dramatic / masterpiece / 4k" adjectives — they give the model nothing to serve. A reveal is not framed, lit, blocked, or performed like a goodbye; write the specific answer, not the generic one. Hold ONE directorial voice across every shot of the episode.
+For every shot, first decide what the beat is DOING — the turn, the point of view, the power, the subtext — and name ONE intention. Then derive camera, lens, light, blocking, performance, and sound from that single intention. Do NOT stack empty "cinematic / epic / beautiful / dramatic / masterpiece / 4k" adjectives — they give the model nothing to serve. A reveal is not framed, lit, blocked, or performed like a goodbye; write the specific answer, not the generic one. Hold ONE directorial voice across every shot of the ${language.containerNounLower}.
 - Decorated (reject): "epic cinematic close-up of a woman reading a letter, emotional, beautiful lighting".
 - Directed (write like this): "Medium close-up, eye-level; she lowers the letter and her hands go still as a slow push-in arrives; soft window light keeps her face plain; near-silence with one chair scrape — the realization lands in the stilled hands, not a word."
 Direct INTENTION / CAMERA / LIGHT / BLOCKING / PERFORMANCE / SOUND only. Do NOT write exhaustive physical character descriptions or reference-image tags into "description" — identity is locked downstream by R2V character references. Name the character and direct what they DO.
 When a take is close but wrong, the fix is one variable at a time (camera OR light OR motion OR framing), not a fresh pile of adjectives. When continuing a story, direct the next beat from what actually ended on screen, not from the original plan.
 
-Your task is to write a complete episode script as a JSON object. Follow the exact format below. The script must:
-- Target 58-75 seconds total duration
-- Open with a visual hook in the first 3 seconds
-- End on a beat that makes viewers want the next episode
-- Use one scene, one location, one emotional note
+${language.namingGuidance}
+
+Your task is to write a complete ${language.scriptNounLower} as a JSON object. Follow the exact format below. The script must:
+- ${language.targetDurationGuidance}
+- ${language.openingGuidance}
+- ${language.endingGuidance}
+- ${language.structureGuidance}
+- ${language.closingShotGuidance}
 - Give each shot ONE intention and derive its craft from it (see DIRECT THE SCENE above)
 - Include specific delivery cues for all dialogue (see VOICE DIRECTION below)
 - Use the correct videoModel ("action" for movement/dialogue, "atmosphere" for establishing/static)
-- End with a title card shot (3s, type "insert", FADE transition)
 
 SHOT DURATION — PREFER FEWER, LONGER SHOTS (CRITICAL):
-The video models (Seedance 2.0, HappyHorse 1.1, Wan 2.7) all support up to 15 seconds in a single generation, and 15s is the strong default. For a 60-second episode, prefer 4 shots at ~15s each over 10 shots at ~6s. Reasons:
+The video models (Seedance 2.0, HappyHorse 1.1, Wan 2.7) all support up to 15 seconds in a single generation, and 15s is the strong default. For a 60-second sequence, prefer 4 shots at ~15s each over 10 shots at ~6s. Reasons:
 1. Identity stays locked longer — every new shot is a fresh generation where character likeness can drift.
 2. Motion has room to breathe — short shots cut before gestures/expressions complete, which is one of the main "AI video looks twitchy" tells.
-3. Cost is lower — fewer generations per episode.
+3. Cost is lower — fewer generations for the sequence.
 4. Fewer transitions to police for continuity.
 Only use shorts (3-8s) for *deliberate* short beats: hard cuts, sight gags, single-frame reactions, the closing title card. Default everything else to 12-15s.
 - duration must be one of: "3s","4s","5s","6s","7s","8s","9s","10s","11s","12s","13s","14s","15s" (HappyHorse goes down to 3s; Seedance from 4s).
-- Aim for the episode to contain roughly (target_seconds / 13) shots ± 1.
+- Aim for this script part to contain roughly (target_seconds / 13) shots ± 1.
 
 VOICE DIRECTION — NATIVE MODEL DIALOGUE IS PREFERRED:
-The recommended pipeline uses the video model's own native dialogue (Seedance / Wan 2.7 / HappyHorse all generate in-character speech). Venice TTS is an exception path, not the default. Therefore every dialogue shot's "delivery" cue must be RICH — direct the voice like you're talking to a voice actor: timbre, accent, pacing, emotional register, breath placement, signature delivery quirks. Two-word "delivery": "angry" cues produce flat results; "delivery": "deliberate, half-volume drawl with a beat before the punchline; warm not bitter; breath audible before 'audacity'" produces in-character results.
+The recommended native pipeline uses Seedance or HappyHorse with character voice-donor references for in-character speech. Venice TTS plus Wan 2.7 is reserved for the explicit Exact lip-sync strategy. Therefore every dialogue shot's "delivery" cue must be RICH — direct the voice like you're talking to a voice actor: timbre, accent, pacing, emotional register, breath placement, signature delivery quirks. Two-word "delivery": "angry" cues produce flat results; "delivery": "deliberate, half-volume drawl with a beat before the punchline; warm not bitter; breath audible before 'audacity'" produces in-character results.
 
 NO MUSIC / NO SFX FROM THE VIDEO MODEL:
 Every shot "description" MUST end with the literal phrase: "No background music, no sound effects, no soundtrack, dry recording." The harness adds music and ambient/SFX in post via separate Venice audio calls; baked-in music or SFX from the video model fights the assembler's mix. The "sfx" field in the schema below describes what the harness should generate in post — it does NOT instruct the video model to produce sound effects.
 
 LOCATIONS — TAG EVERY SHOT WITH A LOCATION:
-Define the physical place(s) this episode happens in as first-class locations, and tag every shot with the location it plays in. Locations anchor the environment across shots (consistent architecture, set dressing, and lighting) the same way character references anchor identity.
+Define the physical place(s) this ${language.containerNounLower} uses as first-class locations, and tag every shot with the location it plays in. Locations anchor the environment across shots (consistent architecture, set dressing, and lighting) the same way character references anchor identity.
 - Emit a top-level "locations" array. Each entry: {"name": "<Display Name>", "slug": "<kebab-case-slug>", "description": "<locked prose description of the environment — architecture, materials, set dressing, scale>", "lightingNotes": "<the established lighting for this place>"}.
 - REUSE the existing location slugs listed above when the scene is in a place already defined; only introduce a new location entry when the place is genuinely new.
 - Give every shot a "location" field set to the slug of the location it plays in.
-- Since an episode uses "one scene, one location" by default, you will usually define exactly ONE location and tag all shots with its slug.
+- ${language.locationGuidance}
 
-IMPORTANT: Every shot MUST include an "environment" field. This controls whether the pipeline uses the series' dark/rainy aesthetic or adapts it for bright daytime scenes. Values:
+IMPORTANT: Every shot MUST include an "environment" field. This tells the pipeline when to adapt the project's aesthetic for bright daytime scenes. Values:
 - "DAY_INTERIOR" -- bright indoor scene (café, office, apartment in daylight)
 - "DAY_EXTERIOR" -- bright outdoor scene (street, park in daylight)
 - "NIGHT_INTERIOR" -- indoor scene at night (club, bar, dimly lit room)
@@ -1127,7 +1146,7 @@ IMPORTANT: Every shot MUST include an "environment" field. This controls whether
 
 Respond with ONLY valid JSON matching this exact schema (no markdown, no code fences, no explanation):
 {
-  "episode": <number>,
+  "episode": <internal part number; keep this field name for compatibility>,
   "title": "<title>",
   "seriesName": "${series.name}",
   "totalDuration": "<estimated total>",
@@ -1154,13 +1173,13 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
   ]
 }`;
 
-    const userPrompt = `Write Episode ${opts.episode} with this concept: ${opts.concept}`;
+    const userPrompt = `Write ${language.segmentNoun} ${opts.episode} of the ${language.projectNounLower} with this concept: ${opts.concept}`;
 
-    console.log(`Workshop: Generating script draft for Episode ${opts.episode}...`);
+    console.log(`Workshop: Generating ${language.scriptNounLower} draft (${language.segmentNoun} ${opts.episode})...`);
     console.log(`  Concept: ${opts.concept}`);
     console.log(`  Model: ${opts.model}`);
     console.log(`  Reference docs: ${mdFiles.length} (${mdFiles.join(', ') || 'none'})`);
-    console.log(`  Prior episodes: ${series.episodes.length}\n`);
+    console.log(`  Prior ${language.segmentNounLower} parts: ${series.episodes.length}\n`);
 
     try {
       const response = await client.post<{
@@ -1201,9 +1220,9 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
         process.exit(1);
       }
 
-      // Ensure episode exists in series.json
+      // Ensure this internal script part exists in series.json
       if (!series.episodes.find(ep => ep.number === opts.episode)) {
-        addEpisode(series, script.title || `Episode ${opts.episode}`);
+        addEpisode(series, script.title || `${language.segmentNoun} ${opts.episode}`);
       }
 
       // Merge any locations the LLM introduced into the series, then generate

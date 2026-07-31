@@ -206,6 +206,12 @@ The `new` wizard starts with these production types:
 4. Music video
 5. Screenplay
 
+Film projects use `new-script` and `workshop-script` terminology. Internally,
+legacy JSON keys and directories still use `episode` for compatibility, but the
+CLI and scriptwriter prompt call the work a Film and Part. Film scripts do not
+inherit the series workflow's 60-second duration, one-location structure, or
+next-episode cliffhanger.
+
 A non-interactive Film can also be created explicitly:
 
 ```bash

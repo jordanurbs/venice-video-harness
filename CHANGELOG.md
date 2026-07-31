@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.3 — 2026-07-31
+
+- Film projects now use Film/Part terminology in script scaffolding and workshop output instead of Episode language.
+- Added `new-script` and `workshop-script` commands while preserving `new-episode` and `workshop-episode` compatibility aliases.
+- Film script prompts no longer force 60-second episode timing, one-location structure, cliffhangers, or mandatory episodic title cards.
+- Film script templates default to five minutes when no requested duration exists; concepts can request any target duration.
+
 ## 2.4.2 — 2026-07-31
 
 - Native dialogue now remains on the selected R2V family and uses Seedance/HappyHorse voice-donor references when available.

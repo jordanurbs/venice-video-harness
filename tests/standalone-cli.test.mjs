@@ -68,3 +68,23 @@ test('config show never reveals the full API key', async () => {
   assert.doesNotMatch(result.stdout, new RegExp(secret));
   assert.match(result.stdout, /test.*3456/);
 });
+
+test('Film script scaffold uses Film terminology and a non-episodic duration', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'venice-video-film-script-'));
+  const configDir = join(root, 'config');
+  const workspace = join(root, 'workspace');
+  const env = { VENICE_VIDEO_CONFIG_DIR: configDir, VENICE_API_KEY: '' };
+  let result = run(['setup', '--api-key', 'test-api-key-123456', '--workspace', workspace, '--skip-validation'], env);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(['new', '--type', 'film', '--name', 'Long Horizon', '--concept', 'A long ocean crossing'], env);
+  assert.equal(result.status, 0, result.stderr);
+
+  const project = join(workspace, 'long-horizon');
+  result = run(['new-script', '-p', project, '--title', 'Long Horizon'], env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Film script created/);
+  assert.doesNotMatch(result.stdout, /Episode 1 created/);
+
+  const script = JSON.parse(await readFile(join(project, 'episodes', 'episode-001', 'script.json'), 'utf-8'));
+  assert.equal(script.totalDuration, '300s');
+});
