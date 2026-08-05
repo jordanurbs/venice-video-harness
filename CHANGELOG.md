@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.14.1 — 2026-08-05
+
+### Changed
+
+- **README: added a human-facing "Installing the CLI" section.** Installation
+  was documented only inside the agent-runner quick start; a person at a
+  terminal had no plain install path. The new section covers prerequisites
+  (Node 20+, ffmpeg/ffprobe), the global npm install with `setup` (interactive
+  or `--api-key`/`--workspace`/`--skip-validation`) and `doctor`, the three
+  bins on PATH (`venice-video`, `video-harness`, `storyboard`), the
+  from-source path (clone, `npm install`, `npm run build`, `npm run dev --` /
+  `node dist/mini-drama/cli.js`, `.env` for the API key), and pointers to
+  `pipeline` and `shell`. Docs only.
+
 ## 2.14.0 — 2026-08-05
 
 ### Changed

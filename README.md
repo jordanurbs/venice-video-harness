@@ -27,6 +27,52 @@ Most Venice integrations are thin wrappers around API calls. This package is the
 - **Comprehensive model registry** covering Venice video, image, audio, and music models
 - **Optional agent orchestration** in `AGENTS.md` and `.agents/` for users who want natural-language operation
 
+## Installing the CLI
+
+For a human at a terminal. (Driving it from an agent instead? See the next section.)
+
+**Prerequisites:** Node 20+, and `ffmpeg` + `ffprobe` on PATH (used for video/audio processing; `venice-video doctor` checks all three).
+
+### Global install (recommended)
+
+```bash
+npm install -g venice-video-harness
+
+venice-video setup     # prompts for your Venice API key + default project workspace
+venice-video doctor    # verifies API key, ffmpeg, ffprobe
+```
+
+`setup` prompts interactively (the API key prompt is hidden); for non-interactive use pass `--api-key <key>` and `--workspace <dir>`, or set `VENICE_API_KEY` in the environment. `--skip-validation` stores the key without contacting Venice.
+
+The install puts three commands on PATH:
+
+- `venice-video` — the primary CLI
+- `video-harness` — alias for the same CLI
+- `storyboard` — the legacy screenplay-ingestion CLI
+
+From there:
+
+```bash
+venice-video pipeline   # the ordered stages, their gates, and the command that advances each
+venice-video shell      # persistent interactive session: select a project once, background renders, /jobs
+venice-video --help     # everything else
+```
+
+### From source (development)
+
+```bash
+git clone https://github.com/jordanurbs/venice-video-harness.git
+cd venice-video-harness
+npm install
+npm run build
+
+# Run via tsx during development, or the compiled CLI:
+npm run dev -- pipeline
+node dist/mini-drama/cli.js pipeline
+```
+
+Put the API key in `.env` at the repo root (`VENICE_API_KEY=...`) — many scripts source it from there — or run `setup` as above.
+
 ## Driving this from an agent
 
 Instructions for a coding agent operating the harness — Claude Code, Cursor,
