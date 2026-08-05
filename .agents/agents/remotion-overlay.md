@@ -97,8 +97,7 @@ On failure, return `{ "id": "...", "error": "<message>" }` — the parent decide
 
 ## See Also
 
-- `~/.claude/skills/remotion/SKILL.md` — Remotion best practices
-- `~/.claude/skills/remotion-best-practices/SKILL.md` — deeper patterns
-- `.claude/agents/overlay-designer.md` — parent agent
-- `.claude/agents/ffmpeg-overlay.md` — sibling worker for static overlays
+- `remotion` / `remotion-best-practices` skills, if installed in your runner's global skills dir (e.g. `~/.claude/skills/`, `~/.hermes/skills/`) — Remotion best practices and deeper patterns
+- `.agents/agents/overlay-designer.md` — parent agent
+- `.agents/agents/ffmpeg-overlay.md` — sibling worker for static overlays
 - AGENTS.md rules 17, anti-patterns #9, #11

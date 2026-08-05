@@ -126,8 +126,8 @@ Next: applying 3 fixes -> re-render -> iteration 2.
 
 ## See Also
 
-- `.claude/skills/video-editing/SKILL.md` — the pipeline this agent plugs into
-- `.claude/skills/burn-in-subtitles/SKILL.md` — caption derivation the agent may trigger re-runs of
+- `.agents/skills/video-editing/SKILL.md` — the pipeline this agent plugs into
+- `.agents/skills/burn-in-subtitles/SKILL.md` — caption derivation the agent may trigger re-runs of
 - `scripts/timeline-view.ts` — the composite tool this agent uses
 - `src/editing/types.ts` → `CutQaFinding`, `CutQaReport`
 - `AGENTS.md` anti-patterns #5, #7, #10, rule 26

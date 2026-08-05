@@ -40,6 +40,6 @@ in the other.
 
 ## Where the full knowledge lives
 - `AGENTS.md` — 49 rules and 28 production anti-patterns, shipped in the package.
-- `.claude/skills/` — `venice-api`, `venice-video-model-routing`, `character-consistency`, `shot-composition`, `burn-in-subtitles`, `video-editing`, and more.
-- `.claude/commands/` — 20 step-by-step playbooks; `.claude/agents/` — 10 sub-agent roles.
+- `.agents/skills/` — `venice-api`, `venice-video-model-routing`, `character-consistency`, `shot-composition`, `burn-in-subtitles`, `video-editing`, and more.
+- `.agents/commands/` — 20 step-by-step playbooks; `.agents/agents/` — 10 sub-agent roles.
 - Read the relevant playbook before running a workflow. Validate model capabilities against `src/venice/models.ts` before an API call.

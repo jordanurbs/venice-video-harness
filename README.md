@@ -25,7 +25,7 @@ Most Venice integrations are thin wrappers around API calls. This package is the
 - **Direct Venice API client** with retries, rate limiting, deprecation warnings, and async media polling
 - **Persistent project state** for characters, locations, episodes, references, recipes, and provenance
 - **Comprehensive model registry** covering Venice video, image, audio, and music models
-- **Optional agent orchestration** in `AGENTS.md` and `.claude/` for users who want natural-language operation
+- **Optional agent orchestration** in `AGENTS.md` and `.agents/` for users who want natural-language operation
 
 ## Driving this from an agent
 
@@ -40,9 +40,9 @@ knowledge reaches you, which is the single largest predictor of output quality.
 
 | Surface | How it runs | What you get | Use when |
 |---|---|---|---|
-| **Repo-resident agent** | Agent's cwd is a clone of this repo | Everything: `AGENTS.md` (49 rules, 28 anti-patterns), `.claude/commands/`, `.claude/agents/`, `.claude/skills/`, `.cursor/rules/` | Authoring and iteration — the best results by a wide margin |
+| **Repo-resident agent** | Agent's cwd is a clone of this repo | Everything: `AGENTS.md` (49 rules, 28 anti-patterns), `.agents/commands/`, `.agents/agents/`, `.agents/skills/`, `.cursor/rules/` | Authoring and iteration — the best results by a wide margin |
 | **MCP** | `venice-video-mcp` (on npm) shells out to this CLI | 7 action-discriminated tools, structured JSON responses, progress notifications, plus 4 companion skills carrying the pipeline order | Any agent that supports MCP — Hermes, OpenClaw, Cursor, Claude — with no clone required |
-| **Bare global CLI** | `npm install -g`, shell tool, `--help` | The compiled CLI, this README, `AGENTS.md`, `.claude/skills/`, and the self-describing commands below (`agent-guide`, `pipeline`) | When your runner has a shell but no MCP — start with `venice-video agent-guide` |
+| **Bare global CLI** | `npm install -g`, shell tool, `--help` | The compiled CLI, this README, `AGENTS.md`, `.agents/skills/`, and the self-describing commands below (`agent-guide`, `pipeline`) | When your runner has a shell but no MCP — start with `venice-video agent-guide` |
 
 ### Quick start for Hermes and OpenClaw (no clone, no absolute paths)
 
@@ -58,7 +58,7 @@ requires cloning a repo or hand-writing a path.
 > points the agent at the operating rules — run it once and re-set-up cleanly.
 
 ```bash
-# 1. Install both globally. The harness ships AGENTS.md + .claude/skills/;
+# 1. Install both globally. The harness ships AGENTS.md + .agents/skills/;
 #    the MCP ships its 7 tools and 4 companion skills.
 npm install -g venice-video-harness venice-video-mcp --foreground-scripts
 
@@ -93,15 +93,16 @@ verified here; the shapes above are what to adapt. `venice-video-mcp-install-ski
 
 **The bare-CLI trap, and how to check whether you are in it.** Through version
 **2.9.0** the npm package published only `dist`, `README.md`, `CHANGELOG.md`,
-`LICENSE`, and `scripts/postinstall.mjs`. `AGENTS.md` and `.claude/` were left
+`LICENSE`, and `scripts/postinstall.mjs`. `AGENTS.md` and `.agents/` were left
 out, so an agent working from a global install of those versions had no access to
 the anti-patterns, the model-routing rules, or the pipeline playbooks. It saw a
 flat list of 40-plus commands with no ordering information and no indication of
 which stages were gated. That is the most common reason agent-driven runs produce
 poor output, and it is a knowledge problem rather than a capability problem.
 
-From **2.10.0** onward the package ships `AGENTS.md`, `.claude/commands/`,
-`.claude/agents/`, and `.claude/skills/`. Check what your install actually has:
+From **2.10.0** onward the package ships `AGENTS.md` plus the knowledge pack
+(`commands/`, `agents/`, `skills/` — under `.claude/` through 2.13.x, under the
+provider-neutral `.agents/` from 2.14.0). Check what your install actually has:
 
 ```bash
 ls "$(npm root -g)/venice-video-harness/AGENTS.md"
@@ -114,7 +115,7 @@ package and must do one of the following first:
 1. **Upgrade**, then read the shipped `AGENTS.md`.
 2. **Register the MCP server** (see below). It carries the pipeline order in its
    companion skills and returns JSON instead of prose.
-3. **Clone this repo** and work inside it, so `AGENTS.md` and `.claude/` load
+3. **Clone this repo** and work inside it, so `AGENTS.md` and `.agents/` load
    from the working tree.
 4. **Read `AGENTS.md` from GitHub** and hold its rules in context for the session.
 
@@ -137,7 +138,7 @@ venice-video status -p <dir> --json   # where a project stands and the exact com
 anything, then reach for the full rules and playbooks when you need depth. The
 same core rules are installable as a skill for runners that pull skills from
 GitHub: `hermes skills install jordanurbs/venice-video-harness/venice-agent-guide`
-(and any of the other `.claude/skills/` by name).
+(and any of the other `.agents/skills/` by name).
 
 ### Running the harness in a separate runtime (containers, remote backends)
 
@@ -270,9 +271,10 @@ gate flowchart), `venice-mcp-cookbook` (one worked example per action),
 `venice-mcp-directing` (shot-prompt quality), and `venice-mcp-troubleshooting`
 (every known failure mode). Without them the MCP tools are thin per-command
 wrappers and you will reconstruct the pipeline by trial and error. Claude Code and
-Cursor read `.claude/skills/`; Hermes reads `~/.hermes/skills/`, so `--target
-hermes` installs a `venice` category there. OpenClaw's skills path is not verified
-yet — pass `--dir` once you know it.
+Cursor read `.claude/skills/` (their convention — the installer symlinks there);
+Hermes reads `~/.hermes/skills/`, so `--target hermes` installs a `venice`
+category there. Any other runner: pass `--dir` with its skills path. This repo's
+own knowledge pack lives provider-neutrally in `.agents/`.
 
 ### Preflight: run these three checks first
 
@@ -459,7 +461,7 @@ Anti-Patterns" (28 entries). If you can only carry a few, carry these:
 12. **Validate model capabilities before sending** `elements`,
     `reference_image_urls`, `scene_image_urls`, `end_image_url`, or `audio_url`.
     The registry is `src/venice/models.ts` in a clone; from a global install use
-    `.claude/skills/venice-video-model-routing/SKILL.md` or the model tables
+    `.agents/skills/venice-video-model-routing/SKILL.md` or the model tables
     below.
 13. **Ask before burning in subtitles**, and derive caption timings from
     `ffmpeg silencedetect` on the rendered voiceover rather than estimating them.
@@ -579,7 +581,7 @@ retries automatically, so the choice costs latency rather than a failed command.
 
 ```
 AGENTS.md                        Agent orchestration hub
-.claude/
+.agents/
   commands/                      19 workflow playbooks (see below)
   agents/                        6 specialized agent roles (see below)
   skills/                        6 Venice and workflow knowledge packs (see below)
@@ -899,7 +901,7 @@ npm run test:legacy
 npm run dev -- <command>
 ```
 
-The repository still includes agent orchestration in `AGENTS.md` and `.claude/`.
+The repository still includes agent orchestration in `AGENTS.md` and `.agents/`.
 Those layers can operate the same execution engine, but the installed
 `venice-video` command does not depend on them.
 
@@ -1130,7 +1132,7 @@ npx tsx scripts/render-overlay.ts \
   --manifest output/<project>/overlays/manifest.json
 ```
 
-See [`.claude/skills/video-editing/SKILL.md`](.claude/skills/video-editing/SKILL.md) for the full philosophy, EDL format, and editing-specific anti-patterns.
+See [`.agents/skills/video-editing/SKILL.md`](.agents/skills/video-editing/SKILL.md) for the full philosophy, EDL format, and editing-specific anti-patterns.
 
 ## Timeline Export (NLE round-trip)
 
@@ -1175,7 +1177,7 @@ Bug reports are how we'll catch the gaps — the test fixture confirms structure
 
 ## Commands, Agents, and Skills
 
-### Workflow Commands (`.claude/commands/`)
+### Workflow Commands (`.agents/commands/`)
 
 | Command | Purpose |
 |---------|---------|
@@ -1203,7 +1205,7 @@ Bug reports are how we'll catch the gaps — the test fixture confirms structure
 | `ingest-screenplay` | Ingest Fountain/PDF screenplay |
 | `edit-footage` | Text-first editing pipeline for existing media (cuts, trims, re-orders) |
 
-### Specialized Agents (`.claude/agents/`)
+### Specialized Agents (`.agents/agents/`)
 
 | Agent | Role |
 |-------|------|
@@ -1218,7 +1220,7 @@ Bug reports are how we'll catch the gaps — the test fixture confirms structure
 | `remotion-overlay` | Renders one animated overlay as transparent ProRes / WebM |
 | `ffmpeg-overlay` | Emits drawtext specs for static overlays |
 
-### Production Skills (`.claude/skills/`)
+### Production Skills (`.agents/skills/`)
 
 | Skill | Purpose |
 |-------|---------|
@@ -1237,14 +1239,14 @@ The harness is the *production crew* — it locks identity, routes models, QA's 
 This principle is already baked into the harness where it matters:
 
 - The **workshop system prompt** (`src/mini-drama/cli.ts`) carries a "DIRECT THE SCENE, DON'T DECORATE IT" block, so both the CLI and the `venice-video-mcp` `episode.workshop` produce directed scripts.
-- `.claude/agents/prompt-engineer.md`, `.claude/skills/shot-composition/SKILL.md`, and `.claude/commands/workshop-episode.md` open with the same directing preface for Claude-Code-in-repo sessions.
+- `.agents/agents/prompt-engineer.md`, `.agents/skills/shot-composition/SKILL.md`, and `.agents/commands/workshop-episode.md` open with the same directing preface for agent-in-repo sessions.
 - The `buildVideoPrompt` builders document the principle so future prompt logic stays directed.
 
 Install Seedance OS to unlock its full `directing-engine`, genre library, `retake-protocol`, `continuation-handoff`, `seedance-copyright`, `seedance-antislop`, and multilingual `vocab/*`:
 
 ```bash
 # Clone the repo (its root is shaped as the seedance-20 skill) into the skills dir:
-git clone https://github.com/emily2040/seedance-2.0 .claude/skills/seedance-20
+git clone https://github.com/emily2040/seedance-2.0 .agents/skills/seedance-20
 ```
 
 **Division of labor to respect:** the harness owns identity (R2V refs + Seedance → Wan keyframe pass), durations (the pre-flight gate + 15s default), and model routing. So use Seedance OS for **intention/camera/light/blocking/performance/sound** only — do not hand-write identity locks, `[Image1]` reference tags, or surface-specific durations into prompts. Skip Seedance OS's `api-status.md` / `surface-prompt-profiles.md` / `api-workflow.md` / `model-name-map.md` (those describe non-Venice surfaces). The `venice-video-mcp` repo's `venice-mcp-directing` skill is the matching bridge for MCP-driven work.

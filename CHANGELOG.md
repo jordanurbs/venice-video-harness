@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.14.0 — 2026-08-05
+
+### Changed
+
+- **Provider-neutral workspace: `.claude/` → `.agents/`, `CLAUDE.md` symlink
+  removed.** The knowledge pack (20 command playbooks, 10 sub-agent roles,
+  9 skills, hooks-config) now lives at `.agents/` — a neutral name any coding
+  agent (Cursor, Claude Code, Hermes, OpenClaw, Codex, opencode) can read
+  without implying a provider. Every reference was rewritten: `package.json`
+  `files[]`, `src/agent/guide.ts` (the `agent-guide` text shipped inside the
+  binary), source-comment cross-references, `AGENTS.md`, `README.md`, and all
+  intra-pack links (`hooks-config.json`, skills, commands, agents). The
+  `CLAUDE.md → AGENTS.md` symlink is gone — `AGENTS.md` is the single
+  orchestration hub. Claude Code's own `settings.local.json` was untracked
+  (provider-local state, now git-ignored along with any `.claude/` a specific
+  runner drops in a checkout).
+- **What deliberately still says `.claude`:** external tools' own read paths.
+  Claude Code and Cursor consume skills from `~/.claude/skills/` /
+  `<workspace>/.claude/skills/` — that is their convention, not this repo's
+  layout — so the `venice-video-mcp-install-skills` docs still name those
+  targets, and the optional Seedance Skill OS install still lands wherever
+  the runner reads. Historical CHANGELOG entries are unchanged (they describe
+  the tree as it was). No code behavior changes; docs, packaging, and the
+  embedded agent-guide text only.
+
 ## 2.13.1 — 2026-08-05
 
 ### Changed

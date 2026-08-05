@@ -668,7 +668,7 @@ function extractRegister(fullText: string, sceneNumber: number): string {
  * movement, subject + action, setting, style, and audio cues. Only the
  * aesthetic register relevant to the current scene is included.
  *
- * Directing principle (see .claude/agents/prompt-engineer.md and the README
+ * Directing principle (see .agents/agents/prompt-engineer.md and the README
  * "Directing layer"): the prose should DIRECT the shot -- one intention
  * expressed through camera/light/blocking/performance/sound -- rather than
  * stack "cinematic" adjectives. Camera, angle, and movement come from the

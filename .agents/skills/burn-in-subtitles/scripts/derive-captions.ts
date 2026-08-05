@@ -9,7 +9,7 @@
  * time.
  *
  * Usage:
- *   npx tsx .claude/skills/burn-in-subtitles/scripts/derive-captions.ts \
+ *   npx tsx .agents/skills/burn-in-subtitles/scripts/derive-captions.ts \
  *     --vo output/<project>/audio/vo.mp3 \
  *     --vo-text-file scripts/<project>/config.ts \
  *     --vo-delay 1.5 \
@@ -339,7 +339,7 @@ function formatCaptionsArray(captions: Caption[]): string {
   });
   return [
     "/**",
-    " * Caption rows (auto-derived by .claude/skills/burn-in-subtitles/scripts/derive-captions.ts).",
+    " * Caption rows (auto-derived by .agents/skills/burn-in-subtitles/scripts/derive-captions.ts).",
     " * Re-derive whenever the VO file changes — never hand-edit timings.",
     " */",
     "export const CAPTIONS: Array<{ text: string; start: number; end: number }> = [",

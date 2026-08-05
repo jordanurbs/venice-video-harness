@@ -2,7 +2,7 @@
  * Silence-gap and filler-word detection.
  *
  * Built on the same `ffmpeg silencedetect` pattern used by
- * `.claude/skills/burn-in-subtitles/scripts/derive-captions.ts`. Reused here
+ * `.agents/skills/burn-in-subtitles/scripts/derive-captions.ts`. Reused here
  * rather than duplicated.
  *
  * Filler words are identified from word-level transcripts (not audio), so

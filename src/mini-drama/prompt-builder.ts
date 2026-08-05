@@ -420,7 +420,7 @@ function summarizeCharacterForMultiShot(
 /**
  * Build a video-generation prompt for a shot.
  *
- * Directing principle (see .claude/agents/prompt-engineer.md and the README
+ * Directing principle (see .agents/agents/prompt-engineer.md and the README
  * "Directing layer"): this assembles the prose that DIRECTS the shot -- one
  * intention expressed through camera, light, blocking, performance, and sound
  * -- not a pile of "cinematic" adjectives. It intentionally leans on the

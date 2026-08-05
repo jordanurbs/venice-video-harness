@@ -7,7 +7,7 @@ Before filling any template below, decide what the shot is *doing* — the turn,
 - Decorated (avoid): `epic cinematic close-up of a woman reading a letter, emotional, beautiful lighting`
 - Directed (do this): `Medium close-up, eye-level; she lowers the letter and her hands go still as a slow push-in arrives; soft window light keeps her face plain; near-silence with one chair scrape — the realization lands in the stilled hands, not a word.`
 
-If the **Seedance 2.0 Skill OS** is installed (see this repo's README "Directing layer"; typical path `.claude/skills/seedance-20/`), load its `directing-engine` for the full derivation method and worked genre examples, `seedance-antislop` + `vocab/*` to strip empty boosters, and `retake-protocol` when a take is close but not right. The templates below are the *container*; the directing engine decides what goes in them.
+If the **Seedance 2.0 Skill OS** is installed (see this repo's README "Directing layer"; typical path `.agents/skills/seedance-20/`), load its `directing-engine` for the full derivation method and worked genre examples, `seedance-antislop` + `vocab/*` to strip empty boosters, and `retake-protocol` when a take is close but not right. The templates below are the *container*; the directing engine decides what goes in them.
 
 **Division of labor with the harness:** identity is locked by R2V references + the Seedance → Wan keyframe pass, and durations/model routing are decided at generation time. So direct **intention/camera/light/blocking/performance/sound**; let the pipeline own identity, duration, and routing.
 

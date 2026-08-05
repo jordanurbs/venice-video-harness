@@ -105,7 +105,7 @@ Threshold guidance:
 This skill ships a TypeScript helper that does the silence detection AND prints a drop-in `CAPTIONS` array:
 
 ```bash
-npx tsx .claude/skills/burn-in-subtitles/scripts/derive-captions.ts \
+npx tsx .agents/skills/burn-in-subtitles/scripts/derive-captions.ts \
   --vo output/<project>/audio/vo.mp3 \
   --vo-text-file scripts/<project>/config.ts \
   --vo-delay 1.5 \
@@ -272,13 +272,13 @@ Even with silence-detect-derived timings, verify by extracting a frame at each p
 | Render VO | `npx tsx scripts/<project>/04-audio.ts --only=vo --force` |
 | Measure VO | `ffprobe -v error -show_entries format=duration ...` |
 | Detect phrase boundaries | `ffmpeg -af "silencedetect=noise=-30dB:d=0.18"` |
-| Generate CAPTIONS array | `npx tsx .claude/skills/burn-in-subtitles/scripts/derive-captions.ts ...` |
+| Generate CAPTIONS array | `npx tsx .agents/skills/burn-in-subtitles/scripts/derive-captions.ts ...` |
 | Paste into config.ts | manual |
 | Re-assemble trailer | `npx tsx scripts/<project>/05-assemble.ts --force` |
 | Verify spot frames | `ffmpeg -ss <caption.start> -i trailer-final.mp4 -frames:v 1` |
 
 ## See Also
 
-- `.claude/skills/venice-api/SKILL.md` — Venice TTS endpoints and voice catalog
-- `.claude/skills/venice-video-model-routing/SKILL.md` — model selection for the underlying video
+- `.agents/skills/venice-api/SKILL.md` — Venice TTS endpoints and voice catalog
+- `.agents/skills/venice-video-model-routing/SKILL.md` — model selection for the underlying video
 - `AGENTS.md` § "Learned Anti-Patterns" — broader harness lessons

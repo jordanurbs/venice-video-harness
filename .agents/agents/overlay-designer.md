@@ -111,8 +111,8 @@ Return to the calling agent:
 
 ## See Also
 
-- [`.claude/agents/remotion-overlay.md`](remotion-overlay.md) — animated overlay worker
-- [`.claude/agents/ffmpeg-overlay.md`](ffmpeg-overlay.md) — static overlay worker
+- [`.agents/agents/remotion-overlay.md`](remotion-overlay.md) — animated overlay worker
+- [`.agents/agents/ffmpeg-overlay.md`](ffmpeg-overlay.md) — static overlay worker
 - [`scripts/render-overlay.ts`](../../scripts/render-overlay.ts) — the compositing tool
 - [`src/editing/overlays.ts`](../../src/editing/overlays.ts) — manifest type definitions
 - AGENTS.md rules 17, anti-pattern #9, anti-pattern #11

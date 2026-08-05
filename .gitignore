@@ -14,6 +14,12 @@ agentdb.rvf
 agentdb.rvf.lock
 ruvector.db
 
+# Provider-local agent config. The knowledge pack lives provider-neutrally in
+# .agents/ (renamed from .claude/ in 2.14.0); anything a specific runner drops
+# at its own path (e.g. Claude Code's settings.local.json) stays local.
+.claude/
+.agents/settings.local.json
+
 # Project-specific config files that live alongside a series under output/
 # but sometimes appear at the repo root. Per-project, not per-harness.
 voices.json

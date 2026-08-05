@@ -1,6 +1,6 @@
 # Venice Video Model Routing for Character Consistency
 
-A Claude Code agent skill that combines Venice AI media generation tools with intelligent model routing for character consistency. Includes executable Python scripts for image generation, video generation, image editing, and upscaling, plus decision trees for choosing the right model, reference images, frame sources, and prompt format for every shot.
+An agent skill (usable by any coding agent — Claude Code, Cursor, Hermes, OpenClaw, and others) that combines Venice AI media generation tools with intelligent model routing for character consistency. Includes executable Python scripts for image generation, video generation, image editing, and upscaling, plus decision trees for choosing the right model, reference images, frame sources, and prompt format for every shot.
 
 Based on the [venice-ai-media](https://github.com/openclaw/skills/tree/main/skills/nhannah/venice-ai-media) skill by [@nhannah](https://github.com/nhannah) for generation execution, extended with production-tested model routing logic for multi-shot character consistency.
 
@@ -87,13 +87,13 @@ Previous last frame (continuity priority):
 Clone into your project's skills directory:
 
 ```bash
-git clone https://github.com/jordanurbs/venice-video-model-routing.git your-project/.claude/skills/venice-video-model-routing/
+git clone https://github.com/jordanurbs/venice-video-model-routing.git your-project/.agents/skills/venice-video-model-routing/
 ```
 
 Or copy manually:
 
 ```bash
-cp -r venice-video-model-routing/ your-project/.claude/skills/venice-video-model-routing/
+cp -r venice-video-model-routing/ your-project/.agents/skills/venice-video-model-routing/
 ```
 
 ## Skill Structure

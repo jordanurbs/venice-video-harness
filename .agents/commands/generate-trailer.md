@@ -18,7 +18,7 @@ Analyze the screenplay and generate a curated trailer -- selecting the most comp
 1. Load `project.json` and read all scene data
 2. Analyze the dramatic arc: world, inciting incident, protagonist journey, central tension
 3. Identify the most visually striking and emotionally resonant moments
-4. Follow the trailer-curator agent's methodology (see `.claude/agents/trailer-curator.md`)
+4. Follow the trailer-curator agent's methodology (see `.agents/agents/trailer-curator.md`)
 
 ### Phase 2: Shot List Curation
 1. Select 10-15 shots (1m) or 25-40 shots (3m) from across the screenplay

@@ -133,7 +133,7 @@ Archive-first per workspace rule `.cursor/rules/shot-asset-safety.mdc`: if `fina
 
 ### Step 5 — Self-Eval via cut-qa
 
-After the render, spawn the `cut-qa` agent (see `.claude/agents/cut-qa.md`). It checks:
+After the render, spawn the `cut-qa` agent (see `.agents/agents/cut-qa.md`). It checks:
 
 | Check | Trigger |
 |-------|---------|
@@ -222,9 +222,9 @@ Fix: ALWAYS propose-then-confirm. The render is cheap; regenerating a 20-minute 
 
 ## See Also
 
-- `.claude/skills/burn-in-subtitles/SKILL.md` — downstream captioning
-- `.claude/skills/venice-video-model-routing/SKILL.md` — generation side for insert shots
-- `.claude/agents/cut-qa.md` — post-render QA agent
-- `.claude/commands/edit-footage.md` — end-to-end playbook
+- `.agents/skills/burn-in-subtitles/SKILL.md` — downstream captioning
+- `.agents/skills/venice-video-model-routing/SKILL.md` — generation side for insert shots
+- `.agents/agents/cut-qa.md` — post-render QA agent
+- `.agents/commands/edit-footage.md` — end-to-end playbook
 - `src/editing/types.ts` — EDL, Take, EditSession type definitions
 - `.cursor/rules/shot-asset-safety.mdc` — archive-first rule

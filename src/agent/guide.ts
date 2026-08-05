@@ -69,8 +69,8 @@ export const AGENT_GUIDE: readonly GuideSection[] = [
     title: 'Where the full knowledge lives',
     points: [
       'AGENTS.md — 49 rules and 28 production anti-patterns, shipped in the package.',
-      '.claude/skills/ — venice-api, venice-video-model-routing, character-consistency, shot-composition, burn-in-subtitles, video-editing, and more.',
-      '.claude/commands/ — 20 step-by-step playbooks; .claude/agents/ — 10 sub-agent roles.',
+      '.agents/skills/ — venice-api, venice-video-model-routing, character-consistency, shot-composition, burn-in-subtitles, video-editing, and more.',
+      '.agents/commands/ — 20 step-by-step playbooks; .agents/agents/ — 10 sub-agent roles.',
       'Read the relevant playbook before running a workflow. Validate model capabilities against src/venice/models.ts before an API call.',
     ],
   },
@@ -83,7 +83,7 @@ export function guideAsJson(): { version: 1; sections: readonly GuideSection[] }
 export function formatGuide(): string {
   const lines: string[] = [];
   lines.push('Venice Video Harness — core rules for driving this CLI from an agent');
-  lines.push('Full rules: AGENTS.md · Playbooks: .claude/commands/ · Knowledge: .claude/skills/');
+  lines.push('Full rules: AGENTS.md · Playbooks: .agents/commands/ · Knowledge: .agents/skills/');
   lines.push('');
   for (const section of AGENT_GUIDE) {
     lines.push(`## ${section.title}`);

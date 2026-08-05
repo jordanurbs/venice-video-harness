@@ -103,6 +103,6 @@ On unsuitable overlay (e.g. `logo-bug` spec), return:
 ## See Also
 
 - [`scripts/render-overlay.ts`](../../scripts/render-overlay.ts) — the consumer of these specs
-- `.claude/agents/overlay-designer.md` — parent agent
-- `.claude/agents/remotion-overlay.md` — sibling for animated overlays
-- `.claude/skills/burn-in-subtitles/SKILL.md` — drawtext escaping gotchas learned in production
+- `.agents/agents/overlay-designer.md` — parent agent
+- `.agents/agents/remotion-overlay.md` — sibling for animated overlays
+- `.agents/skills/burn-in-subtitles/SKILL.md` — drawtext escaping gotchas learned in production

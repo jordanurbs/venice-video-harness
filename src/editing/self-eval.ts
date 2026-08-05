@@ -1,7 +1,7 @@
 /**
  * Self-evaluation driver for the editing pipeline.
  *
- * The cut-qa agent (`.claude/agents/cut-qa.md`) is the intelligent layer;
+ * The cut-qa agent (`.agents/agents/cut-qa.md`) is the intelligent layer;
  * this module is the mechanical layer that:
  *   1. Enumerates cut boundaries from an EDL
  *   2. Runs each boundary through the six programmatic checks

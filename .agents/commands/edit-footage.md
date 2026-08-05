@@ -139,7 +139,7 @@ session.iterations.push(report);
 saveSession(session, 'output/<project>/edit/session.json');
 ```
 
-Then invoke `.claude/agents/cut-qa.md` with the report. The agent proposes fixes, you apply them to the EDL, and re-render.
+Then invoke `.agents/agents/cut-qa.md` with the report. The agent proposes fixes, you apply them to the EDL, and re-render.
 
 **Max 3 iterations.** If the 3rd iteration still has `fail`-severity findings, stop and surface to the user with:
 
@@ -152,7 +152,7 @@ Then invoke `.claude/agents/cut-qa.md` with the report. The agent proposes fixes
 Always ask "Burn in subtitles? (yes / no)" before running the captioning step, per the [burn-in-subtitles skill](../skills/burn-in-subtitles/SKILL.md). If yes:
 
 ```bash
-npx tsx .claude/skills/burn-in-subtitles/scripts/derive-captions.ts \
+npx tsx .agents/skills/burn-in-subtitles/scripts/derive-captions.ts \
   --vo output/<project>/edit/final-edit.mp4 \
   --vo-text-file scripts/<project>/config.ts \
   --vo-delay 0
@@ -189,8 +189,8 @@ Report back to the user with:
 
 ## See Also
 
-- [`.claude/skills/video-editing/SKILL.md`](../skills/video-editing/SKILL.md) — the full philosophy and rules
-- [`.claude/skills/burn-in-subtitles/SKILL.md`](../skills/burn-in-subtitles/SKILL.md) — caption derivation
-- [`.claude/agents/cut-qa.md`](../agents/cut-qa.md) — the QA agent invoked in step 5
+- [`.agents/skills/video-editing/SKILL.md`](../skills/video-editing/SKILL.md) — the full philosophy and rules
+- [`.agents/skills/burn-in-subtitles/SKILL.md`](../skills/burn-in-subtitles/SKILL.md) — caption derivation
+- [`.agents/agents/cut-qa.md`](../agents/cut-qa.md) — the QA agent invoked in step 5
 - [`src/editing/types.ts`](../../src/editing/types.ts) — EDL, Take, Session type definitions
 - `AGENTS.md` rule 26 — VO truncation cause and cure
