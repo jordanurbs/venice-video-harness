@@ -1,6 +1,6 @@
 {
   "name": "venice-video-harness",
-  "version": "2.11.1",
+  "version": "2.11.2",
   "description": "Standalone consistency-first video production CLI powered by the Venice API",
   "homepage": "https://github.com/jordanurbs/venice-video-harness",
   "repository": {
@@ -71,6 +71,7 @@
     "CHANGELOG.md",
     "LICENSE",
     "AGENTS.md",
+    "HERMES-AGENT-SETUP.md",
     ".claude/commands",
     ".claude/agents",
     ".claude/skills",

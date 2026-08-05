@@ -139,31 +139,11 @@ same core rules are installable as a skill for runners that pull skills from
 GitHub: `hermes skills install jordanurbs/venice-video-harness/venice-agent-guide`
 (and any of the other `.claude/skills/` by name).
 
-### ACP does not run the harness, and it does not provision a runtime
+### Running the harness in a separate runtime (containers, remote backends)
 
-ACP is the **Agent Client Protocol**, and it is worth being precise about the
-direction it points, because two different readings lead to two different setups.
-
-ACP connects an **editor (the client) to an agent**. The editor spawns the agent
-as a subprocess and speaks JSON-RPC to it over stdio, and the **editor supplies
-the working directory** — in Hermes's adapter, `session/new` receives `cwd` from
-the client and the agent adopts it. So ACP does not start a runtime, does not
-provision a sandbox, and does not move work off the workspace; it standardizes an
-editor driving an agent against a workspace the editor already has open. It is
-also stdio-only and local-trust by design, so there is no remote endpoint in the
-picture.
-
-That means the harness has no position in an ACP conversation. The harness is a
-**tool the agent calls**; ACP describes who calls the agent. The tool-side
-protocol is MCP, which already exists as a separate package. The two stack rather
-than compete: an editor drives your agent over ACP, and that agent drives the
-harness over MCP or a shell.
-
-### Running the harness in a separate runtime (this is the real question)
-
-Starting a fresh runtime to run long workflows off the main workspace is a real
-and useful capability — it is just not ACP. In Hermes it is the **terminal
-backend**, configured independently of any protocol:
+Running long renders off the main machine is a real and useful capability. In
+Hermes it is the **terminal backend**, configured independently of any agent
+protocol:
 
 ```yaml
 # ~/.hermes/config.yaml

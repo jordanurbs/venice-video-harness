@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.11.2 — 2026-08-05
+
+### Changed
+
+- **README: added `HERMES-AGENT-SETUP.md` and trimmed the ACP explainer.** A
+  paste-ready re-setup prompt for Hermes users on an old global install (which
+  shipped only the compiled CLI — no `AGENTS.md`, skills, or MCP) is now linked
+  from the Hermes/OpenClaw quick start. Removed the "ACP does not run the
+  harness" section — it was conceptual myth-busting, not setup or operating
+  guidance — and reworded the "separate runtime" section to stand on its own.
+  The operational runtime/long-render guidance is unchanged. Docs only.
+
 ## 2.11.1 — 2026-08-05
 
 ### Changed
