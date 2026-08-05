@@ -162,7 +162,9 @@ ACTION_MODEL              = 'seedance-2-0-image-to-video'
 ATMOSPHERE_MODEL          = 'seedance-2-0-image-to-video'
 CHARACTER_CONSISTENCY_MODEL = 'seedance-2-0-reference-to-video'
 KLING_R2V_MODEL           = 'kling-o3-standard-reference-to-video'  (fallback for 3+ chars)
-MULTISHOT_MODEL           = 'kling-o3-pro-image-to-video'
+MULTISHOT_MODEL           = 'seedance-2-0-enhanced-reference-to-video'  (default since 2026-08-05; resolveMultiShotModel())
+# Legacy: 'kling-o3-pro-image-to-video' — explicit videoDefaults.multiShotModel override only.
+# It has NO elements and NO reference_image_urls, so it drops all identity anchoring.
 
 # Single image default for ALL panels (Venice removed the Seedance face restriction, 2026-07)
 IMAGE_GENERATION          = 'nano-banana-2'          # character + faceless panels alike
@@ -318,6 +320,8 @@ Construct prompts differently depending on the resolved model's capabilities:
 - Dialogue speaker uses image ref: `[@Image1, voice description, delivery]: "dialogue line"`
 - Attach `reference_image_urls` at the API layer in the slot-planner order (up to 9: character primaries → storyboard blocking plate → location angles → second character angles)
 - Emit a role clause per non-character slot: location angles ("@Image4 is a second angle of the same location"), blocking plates ("use ONLY for composition, blocking, and spatial relationships")
+- Carry the shot's authored `blocking` verbatim (`Blocking: @Image1 at the bar counter, screen left, facing right; …`) and the location's `spatialAnchors` ("Fixed layout (never rearrange): …") — placement is stated per shot, never left to the model (rule 49)
+- With a blocking plate bound, the prompt also pins geometry to it: characters keep their side of the scene and position relative to the plate's landmarks — no mirroring, swapping, or rearranging; plateless location shots pin geography to the first location `@ImageN` slot instead
 - **Pure reference mode:** no `image_url` start frame when the slot plan is populated — references carry all consistency
 - Keep prompts concise. Use the 5-part structure: Subject, Action, Camera, Style, Constraints.
 - Use physics-aware language: describe forces and materials, not just actions
@@ -345,9 +349,22 @@ Construct prompts differently depending on the resolved model's capabilities:
 - Structure: camera term first, then description, then dialogue with delivery cues
 - Veo requires `resolution: '720p'`; Kling does NOT accept `resolution`/`aspect_ratio` (derived from input image)
 
-### Native Multi-Shot (Kling 3.0, up to 6 shots, 15s max)
+### Native Multi-Shot (default: Seedance R2V Enhanced with `Lens switch.`)
 
-Kling 3.0 supports native multi-shot generation — a single prompt produces a single video with multiple distinct shots and automatic cuts between them. This works with the R2V model (`kling-o3-standard-reference-to-video`) which supports `elements` for identity anchoring across all shots.
+**Multi-shot units render on `seedance-2-0-enhanced-reference-to-video` by default (2026-08-05)** — the same reference-first lane as singles. `buildMultiShotPrompt()` produces ONE Seedance generation covering the window's beats:
+
+1. **Identity declarations up front** from the unit's @Image slot plan: `@Image1 is Bob — wearing …`
+2. **Role clauses** for the non-character slots (blocking plate, location angles) — identical clause text to singles
+3. **Per-beat blocks** labeled `Shot N (Xs):` with camera, description (names → `@ImageN`), authored `Blocking:` restated per beat (rule 49), and `[@ImageN, voice, delivery]: "line"` dialogue
+4. **Literal `Lens switch.` lines** between beats (rule 21)
+5. **Geometry hold** pinned to the plate (or first location angle): no mirroring/swapping across the internal cuts
+6. Compact aesthetic + audio-exclusion suffix; ≤2500 chars
+
+The unit renders in **pure reference mode** — `reference_image_urls` pushed in slot-plan order, no `image_url` start frame — and takes voice-donor `reference_audio_urls` (@AudioN) for its dialogue speakers. Grouping windows never span locations (one slot plan per generation).
+
+### Legacy Multi-Shot Format (Kling 3.0 — explicit override only)
+
+Used only when `videoDefaults.multiShotModel` is explicitly set to a non-@Image-tag model (e.g. `kling-o3-pro-image-to-video`, which has NO reference support — identity is prompt-text only).
 
 **Prompt structure (per [Kling 3.0 Prompting Guide](https://blog.fal.ai/kling-3-0-prompting-guide/)):**
 1. **Define subjects up front** with `@Element` refs and traits — Kling locks these across all shots
@@ -400,7 +417,7 @@ For formats with **frequent speaker cuts** (talk shows, interviews, debate panel
 
 ### All Character Shots Must Be R2V Singles
 
-- **Never group shots with different speakers into multi-shot units.** The Kling multi-shot model (`kling-o3-pro-image-to-video`) does NOT support `elements` or `reference_image_urls` — characters lose all identity anchoring.
+- **Never group shots with different speakers into multi-shot units.** Even on the reference-first Seedance multi-shot default, a unit builds ONE slot plan for the window — disjoint speakers mean the plan can't anchor everyone correctly. (On the legacy Kling override the failure is total: `kling-o3-pro-image-to-video` has NO `elements` or `reference_image_urls`, so characters lose all identity anchoring.)
 - **Set `mustStaySingle: true`** on all shots in talk show scripts, or ensure the generation planner only groups shots that share the same characters.
 - **Every character shot uses R2V** — `seedance-2-0-reference-to-video` for 1-2 character shots (flat `reference_image_urls` with `@Image` tags), auto-fallback to `kling-o3-standard-reference-to-video` for 3+ characters (structured `elements`).
 
@@ -443,7 +460,7 @@ Seedance 2.0 (now the default for both atmosphere and character shots) accepts *
 
 ### Identity Failures
 
-- **Grouping different-character shots into multi-shot units:** The Kling multi-shot model has no reference image support. Characters rendered in a multi-shot unit with no `elements` lose identity completely. Always verify pairwise character overlap before grouping.
+- **Grouping different-character shots into multi-shot units:** A multi-shot unit builds ONE reference slot plan for the window — disjoint characters can't all anchor correctly (and on the legacy Kling override there are no references at all). Always verify pairwise character overlap before grouping.
 - **Frame chaining when new character enters:** The video model invents the new character's appearance from nothing. Always use the panel image (which was refined against character references) as the start frame when a new character appears.
 - **Multi-edit with more than 2 character references:** The multi-edit endpoint accepts max 3 images total (base + 2 refs). Exceeding this drops references silently.
 - **Sequential action in image descriptions:** Causes comic-panel layouts instead of single frames. Separate the single-frame panel description from the full video action description.

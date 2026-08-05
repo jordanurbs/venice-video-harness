@@ -47,6 +47,31 @@ When the **Seedance 2.0 Skill OS** is installed (`.claude/skills/seedance-20/`),
 5. Transitions between scenes match the screenplay's indicated transition
 6. Insert shots for objects mentioned prominently in action lines
 
+## Spatial Blocking Rules (rule 49 — placement is authored, not inferred)
+
+AI video models re-infer placement on every generation, so shot plans must
+state the geometry explicitly and keep it stable across a scene's coverage:
+
+1. **Anchor to the location's named landmarks.** Each `Location` carries
+   `spatialAnchors` (3-5 landmarks with fixed relative positions). Blocking
+   language must reference those names ("at the bar counter", "in the
+   doorway") so "by the window" means one specific window in every shot.
+2. **Every character shot gets a `blocking` field**: each character/key
+   object's position relative to the named anchors, their frame side (screen
+   left / center / right), depth (foreground / midground / background), and
+   facing/eyeline direction.
+3. **Hold screen sides across coverage.** Characters keep the side of frame
+   they had in the master unless a movement is scripted — and if they move,
+   the movement is the shot's action, written into the description.
+4. **Respect the 180-degree rule.** Pick the scene's axis at the master and
+   keep eyelines/screen direction consistent in every single and reaction:
+   if A looks right at B, A keeps looking right and B keeps looking left.
+5. **Close-ups still name the geography.** State what is behind/beside the
+   subject so backgrounds match the wide ("the neon window behind her
+   shoulder"), or backgrounds will drift per generation.
+6. **Establishing shots restate the full landmark layout** so the scene's
+   geography is re-locked at every scene boundary.
+
 ## Transition Types
 - **CUT**: Standard, default between shots
 - **DISSOLVE**: Time passage, dream, memory

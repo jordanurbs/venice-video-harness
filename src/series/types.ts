@@ -46,6 +46,15 @@ export interface VideoModelDefaults {
   atmosphereModel: string;
   characterConsistencyModel?: string;
   /**
+   * Model for multi-shot generation units. Defaults to
+   * `DEFAULT_MULTISHOT_MODEL` (Seedance 2.0 R2V Enhanced) — the same
+   * reference-first lane as singles, so a multi-beat sequence keeps the full
+   * @Image slot plan across its internal cuts. Set explicitly (e.g. to
+   * `kling-o3-pro-image-to-video`) only when you deliberately want another
+   * family's native multi-shot format and accept its reference limitations.
+   */
+  multiShotModel?: string;
+  /**
    * Paired image-generation defaults. When the video family is Seedance 2.0,
    * Venice blocks requests that include images produced by any other family,
    * so the image defaults must match the video family.
@@ -403,6 +412,16 @@ export interface Location {
    */
   lightingNotes?: string;
   /**
+   * Locked spatial geography of the location: the named landmarks and their
+   * fixed positions relative to each other (e.g. "bar counter runs along the
+   * north wall; entrance door opposite it; window with neon sign to the left
+   * of the door as seen from the counter"). Carried into every panel, plate,
+   * and video prompt for shots tagged with this location so character/object
+   * placement can be expressed relative to STABLE anchors instead of vague
+   * prose — the geography must never rearrange between shots (rule 49).
+   */
+  spatialAnchors?: string;
+  /**
    * Optional time-of-day / weather variants keyed by label
    * (e.g. { "night": "…", "dawn": "…" }). Reserved for future per-shot
    * variant selection; the base `description` is used when unset.
@@ -431,7 +450,13 @@ export interface Location {
 export interface StoryboardReference {
   /** Filesystem-safe slug; also the file stem under storyboards/<episode>/. */
   slug: string;
-  /** Prose description of the moment: who is where, doing what, with what. */
+  /**
+   * Prose description of the moment: who is where, doing what, with what.
+   * Should be SPATIALLY explicit — name each character's position relative to
+   * the location's spatialAnchors and to each other (left/right of frame,
+   * foreground/background, facing direction), so the composed plate encodes
+   * unambiguous geometry for the video model to follow.
+   */
   description: string;
   /** Character names composed into the plate (drives face refs at gen time). */
   characters: string[];
@@ -629,6 +654,22 @@ export interface ShotScript {
    * storyboarding or by hand.
    */
   storyboardRef?: string;
+  /**
+   * Explicit spatial blocking for the shot: where each character/object is
+   * relative to the location's fixed anchors (Location.spatialAnchors), to
+   * each other, and to the frame — plus facing/eyeline direction. One or two
+   * sentences of concrete geometry, e.g. "MARA at the bar counter, screen
+   * left, facing right toward the door; JAX enters through the door in the
+   * background, screen right, walking toward her."
+   *
+   * Authored by the workshop/script LLM (or by hand) and injected verbatim
+   * into panel, blocking-plate, and video prompts so placement is stated the
+   * same way in every generation instead of being re-inferred per shot.
+   * Continuity rule: keep screen direction and geography consistent with the
+   * previous shot in the same scene unless the cut deliberately crosses the
+   * line (rule 49).
+   */
+  blocking?: string;
   dialogue: { character: string; line: string; delivery?: string } | null;
   sfx: string | null;
   cameraMovement: string;
@@ -713,7 +754,13 @@ export interface ShotScript {
 // Generation Planning
 // ---------------------------------------------------------------------------
 
-export type GenerationUnitType = 'single' | 'kling-multishot';
+/**
+ * `multishot` is the current multi-shot unit type (model comes from
+ * `resolveMultiShotModel`, default Seedance R2V Enhanced). `kling-multishot`
+ * is the legacy name, still accepted when reading old generation-plan.json
+ * files.
+ */
+export type GenerationUnitType = 'single' | 'multishot' | 'kling-multishot';
 export type StartFrameStrategy = 'panel' | 'previous-last-frame';
 export type EndFrameStrategy = 'natural' | 'next-panel-target';
 
@@ -769,7 +816,34 @@ export const DEFAULT_ACTION_MODEL = 'seedance-2-0-enhanced-reference-to-video';
 export const DEFAULT_ATMOSPHERE_MODEL = 'seedance-2-0-enhanced-reference-to-video';
 export const DEFAULT_CHARACTER_CONSISTENCY_MODEL = 'seedance-2-0-enhanced-reference-to-video';
 export const KLING_R2V_MODEL = 'kling-o3-standard-reference-to-video';
+
+/**
+ * Default model for multi-shot units (2026-08-05): Seedance 2.0 R2V Enhanced —
+ * the SAME reference-first lane as every other shot. Multi-beat sequences
+ * render as ONE Seedance native multi-shot generation with `Lens switch.`
+ * separators (rule 21), anchored to the full @Image slot plan (character
+ * sheets, blocking plate, location angles), so identity AND geography hold
+ * across the internal cuts.
+ *
+ * The old default, `kling-o3-pro-image-to-video`, had NO `elements` and NO
+ * `reference_image_urls` support — every multi-shot unit silently dropped all
+ * identity anchoring (the anti-pattern 1 trap). It remains available as an
+ * explicit `videoDefaults.multiShotModel` override only.
+ */
+export const DEFAULT_MULTISHOT_MODEL = 'seedance-2-0-enhanced-reference-to-video';
+
+/**
+ * @deprecated The Kling i2v multi-shot lane is no longer the default
+ * (2026-08-05) — multi-shot units render on `DEFAULT_MULTISHOT_MODEL`
+ * (Seedance R2V Enhanced, reference-first). Kept resolvable for projects
+ * that explicitly set `videoDefaults.multiShotModel` to it.
+ */
 export const KLING_MULTISHOT_MODEL = 'kling-o3-pro-image-to-video';
+
+/** Resolve the model multi-shot units render on. */
+export function resolveMultiShotModel(videoDefaults?: Pick<VideoModelDefaults, 'multiShotModel'>): string {
+  return videoDefaults?.multiShotModel ?? DEFAULT_MULTISHOT_MODEL;
+}
 
 /**
  * Fallback exact-lip-sync model, used when the project's chosen family has no

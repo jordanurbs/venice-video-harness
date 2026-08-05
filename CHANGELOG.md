@@ -1,5 +1,111 @@
 # Changelog
 
+## 2.13.0 — 2026-08-05
+
+### Changed
+
+- **Multi-shot units now default to Seedance 2.0 R2V Enhanced — the Kling i2v
+  lane is an explicit override only.** `DEFAULT_MULTISHOT_MODEL` /
+  `resolveMultiShotModel()` (new, `src/series/types.ts`) route every
+  multi-shot generation unit to `seedance-2-0-enhanced-reference-to-video`,
+  the same reference-first lane as singles. The old default,
+  `kling-o3-pro-image-to-video`, has NO `elements` and NO
+  `reference_image_urls` support, so every multi-shot unit silently dropped
+  all identity anchoring (anti-pattern 1's underlying trap). Specifics:
+  - **New `buildMultiShotPrompt()`** dispatches on the resolved model. The
+    Seedance path builds ONE native multi-shot generation per rule 21:
+    identity declarations from the unit's @Image slot plan up front, role
+    clauses for the blocking plate and location angles, per-beat
+    `Shot N (Xs):` blocks (names → `@ImageN`, authored `Blocking:` restated
+    per beat, `[@ImageN, voice, delivery]: "line"` dialogue), literal
+    `Lens switch.` separators, and a geometry-hold clause pinned to the plate
+    (rule 49). ≤2500-char video prompt cap with aesthetic-first trimming.
+  - **Pure reference mode for the whole unit:** `reference_image_urls` pushed
+    in slot-plan order (union of the window's characters + the beat's plate +
+    location angles), no `image_url` start frame, no `end_image_url`. The
+    unit also carries voice-donor `reference_audio_urls` (@AudioN) for its
+    dialogue speakers, deduped across beats within Venice's 3-clip budget.
+  - **Planner:** unit type renamed `kling-multishot` → `multishot` (the old
+    name still parses from existing generation-plan.json files); units carry
+    the resolved model; multi-shot windows can no longer span locations
+    (rule 21b — one slot plan per generation); the 15s window limit message
+    no longer names Kling (both lanes cap at 15s).
+  - **Override:** `videoDefaults.multiShotModel` (new) selects another lane
+    explicitly — setting it to `kling-o3-pro-image-to-video` restores the
+    legacy Kling 3.0 format (`buildKlingMultiShotPrompt` is retained and
+    still exported). `KLING_MULTISHOT_MODEL` is deprecated but resolvable.
+  - **Docs:** AGENTS.md rule 18 rewritten (Seedance default, Kling as
+    override), anti-pattern 1 annotated, `venice-video-model-routing`
+    (SKILL/README/decision trees) and `character-consistency` updated.
+  - **Tests:** `test-spatial-consistency.mjs` now covers the dispatcher —
+    default resolution, Lens-switch structure, slot plan (plate + location),
+    per-beat blocking with @ImageN substitution, geometry hold, and the
+    explicit Kling override path; `audio-routing.test.mjs` asserts the
+    grouped unit renders on Seedance R2V.
+
+## 2.12.0 — 2026-08-05
+
+### Added
+
+- **Spatial consistency is now authored data, not per-generation inference
+  (rule 49).** Visual consistency was already reference-anchored, but *where*
+  characters and objects sit — screen side, depth, facing, position relative to
+  the set — was re-inferred by the model on every generation, which is where
+  side-swaps, teleporting props, and mirrored geography came from
+  (anti-pattern 28). Two new fields carry the geometry through the whole
+  pipeline:
+  - **`Location.spatialAnchors`** — the locked geography of a place: 3-5 named
+    landmarks and their fixed relative positions. Baked into the location's
+    reference angles at generation time, injected as
+    `Fixed layout (never rearrange): …` into every panel and video prompt for
+    shots tagged with the location, and sticky on merge (an existing anchor
+    set is never overwritten by a later script part). `add-location` takes
+    `--spatial-anchors`.
+  - **`ShotScript.blocking`** — the shot's authored geometry: 1-2 sentences
+    placing each character/object relative to the named anchors, the frame
+    (screen left/right, foreground/background), and their facing/eyeline.
+    Injected verbatim (with `@ImageN`/`@ElementN` name substitution) into the
+    panel prompt (`BLOCKING: …`), the video prompt (`Blocking: …`), and the
+    Kling multi-shot per-shot blocks; it also seeds the beat's storyboard
+    blocking-plate description. `insert-shot` inherits the anchor shot's
+    location and blocking for same-scene splices and takes `--location` /
+    `--blocking` overrides.
+- **The script LLM is now required to author the geometry.** Both workshop
+  system prompts (`workshop` in `workshop.ts` and `workshop-script` in
+  `cli.ts`) demand `spatialAnchors` per location and `blocking` per character
+  shot, with continuity rules: characters keep their screen sides and relative
+  positions across consecutive shots unless a movement is written into the
+  action, screen direction and eyelines obey the 180-degree rule, and blocking
+  always references the location's named anchors. `workshop-script` warns when
+  character shots are missing `blocking` or locations are missing
+  `spatialAnchors` (post-condition advisory, same pattern as the duration and
+  no-music checks).
+- **`qa-storyboard` reads geometry.** A fourth SPATIAL CONTINUITY dimension
+  checks each panel against the shot's stated blocking and the location's
+  landmarks, and the command now attaches the nearest prior panel from the
+  same location so side-swaps, mirrored geography, and moved landmarks are
+  caught against real coverage instead of prose alone. A spatial flip that
+  breaks the scene is FLAG-CRITICAL; a wrong frame side or relocated landmark
+  is FLAG-MODERATE.
+- **Stronger geometry clauses in video prompts.** The blocking-plate clause now
+  explicitly forbids mirroring/swapping ("each character stays on the same
+  side of the scene… do not mirror, swap, or rearrange who stands where"), and
+  plateless location shots get a geography-hold clause pinned to the location's
+  first `@ImageN` slot. Blocking plates themselves are prompted for legible
+  placement (screen side, distance, facing, landmark relations readable in one
+  look) and carry the location's fixed layout.
+- **Docs and knowledge pack updated together:** AGENTS.md rule 49 +
+  anti-pattern 28, README "carry these" rule 8, `agent-guide` (binary +
+  `venice-agent-guide` skill), `shot-composition` (spatial blocking rules),
+  `character-consistency` (Layer 5: spatial anchoring),
+  `venice-video-model-routing` (blocking/fixed-layout prompt lines),
+  `prompt-engineer` ([BLOCKING] template section), `storyboard-qa`, and the
+  `qa-storyboard` / `workshop-episode` playbooks.
+- **Tests:** `tests/test-spatial-consistency.mjs` covers blocking injection in
+  panel/video/multi-shot prompts, `@ImageN` substitution inside blocking,
+  fixed-layout injection, the no-mirroring and geography-hold clauses, plate
+  descriptions inheriting blocking, and the workshop prompt contract.
+
 ## 2.11.2 — 2026-08-05
 
 ### Changed

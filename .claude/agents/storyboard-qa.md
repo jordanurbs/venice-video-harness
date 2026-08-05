@@ -18,6 +18,13 @@ Analyze generated storyboard panels for character consistency and setting contin
 - **Location**: architectural style, neon signs, background elements should be consistent
 - **Color palette**: should match the locked aesthetic profile
 
+### Spatial Continuity (against the shot's blocking + prior same-location panels)
+- **Stated blocking honored**: each character/object is on the stated frame side, at the stated depth, facing the stated direction, positioned correctly relative to the location's named landmarks (`Location.spatialAnchors`)
+- **Screen sides held across coverage**: characters keep the side of frame they had in the previous same-location panel unless the script moves them
+- **Eyelines / screen direction (180-degree rule)**: if A looks right at B in one panel, A keeps looking right and B keeps looking left in the coverage that follows
+- **Landmark stability**: doors, windows, counters, and key props have not moved, mirrored, vanished, or rearranged between panels of the same location
+- A side-swap or mirrored geography that breaks the scene is **CRITICAL**; a single character on the wrong frame side vs stated blocking, or a relocated landmark, is **MODERATE**
+
 ### Aesthetic Adherence
 - **Style**: panels should match the series aesthetic (webtoon, anime noir, etc.)
 - **Palette**: color grading should be consistent with the locked palette
@@ -40,10 +47,11 @@ Summarize with:
 ## How To Invoke
 
 This agent is called automatically after `storyboard-episode` generates panels. It reads:
-1. `series.json` for character descriptions, wardrobe, and aesthetic
-2. `script.json` for which characters appear in which shots
+1. `series.json` for character descriptions, wardrobe, aesthetic, and each location's `spatialAnchors`
+2. `script.json` for which characters appear in which shots and each shot's `blocking`
 3. The generated panel PNGs in `scene-001/`
 4. Character reference images in `characters/<name>/front.png` for comparison
+5. The nearest prior panel from the same location (attached automatically by `qa-storyboard`) for spatial-continuity comparison
 
 ## Integration
 - Runs as a sub-agent via the Task tool after panel generation

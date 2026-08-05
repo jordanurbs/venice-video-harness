@@ -89,7 +89,10 @@ test('native dialogue may remain grouped while exact lip-sync stays single', () 
   const shots = [dialogueShot(1), dialogueShot(2)];
   const nativePlan = buildGenerationPlan(script(shots), seriesWith('native'));
   assert.equal(nativePlan.units.length, 1);
-  assert.equal(nativePlan.units[0].unitType, 'kling-multishot');
+  assert.equal(nativePlan.units[0].unitType, 'multishot');
+  // Multi-shot units render on the reference-first Seedance lane by default
+  // (2026-08-05) — never the referenceless Kling i2v model.
+  assert.equal(nativePlan.units[0].model, 'seedance-2-0-enhanced-reference-to-video');
 
   const exactPlan = buildGenerationPlan(script(shots), seriesWith('lip-sync'));
   assert.equal(exactPlan.units.length, 2);

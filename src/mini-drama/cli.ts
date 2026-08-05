@@ -274,12 +274,20 @@ async function mergeAndGenerateEpisodeLocations(
     const slug = loc.slug || locationSlugify(loc.name);
     const existing = getLocation(series, slug);
     const merged: Location = existing
-      ? { ...existing, description: loc.description || existing.description, lightingNotes: loc.lightingNotes ?? existing.lightingNotes }
+      ? {
+          ...existing,
+          description: loc.description || existing.description,
+          lightingNotes: loc.lightingNotes ?? existing.lightingNotes,
+          // Locked geography is sticky: an existing anchor set wins so the
+          // scene geography never silently rearranges between script parts.
+          spatialAnchors: existing.spatialAnchors ?? loc.spatialAnchors,
+        }
       : {
           name: loc.name,
           slug,
           description: loc.description,
           ...(loc.lightingNotes ? { lightingNotes: loc.lightingNotes } : {}),
+          ...(loc.spatialAnchors ? { spatialAnchors: loc.spatialAnchors } : {}),
           seed: Math.abs([...slug].reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0)) % 999_999_999,
         };
     addLocation(series, merged);
@@ -325,7 +333,9 @@ function resolveLocationRefForShot(
     ? ['medium.png', 'wide.png', 'detail.png']
     : ['wide.png', 'medium.png', 'detail.png'];
   const refPath = order.map(f => join(dir, f)).find(p => existsSync(p));
-  const note = ` Location: ${location.description}${location.lightingNotes ? ` Lighting: ${location.lightingNotes}.` : ''}`;
+  const note = ` Location: ${location.description}`
+    + (location.lightingNotes ? ` Lighting: ${location.lightingNotes}.` : '')
+    + (location.spatialAnchors ? ` Fixed layout (never rearrange): ${location.spatialAnchors}.` : '');
   return { location, refPath, note };
 }
 
@@ -1300,9 +1310,13 @@ program
   .requiredOption('--name <name>', 'Location name')
   .requiredOption('--description <desc>', 'Locked prose description of the environment')
   .option('--lighting <notes>', 'Lighting notes carried into every panel prompt for this location')
+  .option(
+    '--spatial-anchors <text>',
+    'Locked geography: 3-5 named landmarks and their fixed relative positions (e.g. "bar counter along the back wall; entrance door opposite it; neon window left of the door"). Carried into every panel/plate/video prompt so blocking language resolves to the same layout in every shot.',
+  )
   .option('--model <model>', 'Image-generation model for the reference angles (default nano-banana-pro)')
   .option('--skip-images', 'Skip reference image generation', false)
-  .action(async (opts: { project: string; name: string; description: string; lighting?: string; model?: string; skipImages: boolean }) => {
+  .action(async (opts: { project: string; name: string; description: string; lighting?: string; spatialAnchors?: string; model?: string; skipImages: boolean }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
@@ -1314,6 +1328,7 @@ program
       slug,
       description: opts.description,
       ...(opts.lighting ? { lightingNotes: opts.lighting } : {}),
+      ...(opts.spatialAnchors ? { spatialAnchors: opts.spatialAnchors } : {}),
       seed,
       ...(opts.model ? { referenceModel: opts.model } : {}),
     };
@@ -1457,7 +1472,7 @@ program
     // Build location summary (existing first-class Location entities). The LLM
     // is asked to reuse these slugs and only introduce new ones when needed.
     const locationSummaries = (series.locations ?? []).length > 0
-      ? (series.locations ?? []).map(l => `${l.slug}: ${l.name} — ${l.description}${l.lightingNotes ? ` (lighting: ${l.lightingNotes})` : ''}`).join('\n')
+      ? (series.locations ?? []).map(l => `${l.slug}: ${l.name} — ${l.description}${l.lightingNotes ? ` (lighting: ${l.lightingNotes})` : ''}${l.spatialAnchors ? ` (fixed layout: ${l.spatialAnchors})` : ''}`).join('\n')
       : 'None defined yet.';
 
     const systemPrompt = `You are a screenwriter for the ${language.projectNounLower} "${series.name}".
@@ -1518,10 +1533,22 @@ Every shot "description" MUST end with the literal phrase: "No background music,
 
 LOCATIONS — TAG EVERY SHOT WITH A LOCATION:
 Define the physical place(s) this ${language.containerNounLower} uses as first-class locations, and tag every shot with the location it plays in. Locations anchor the environment across shots (consistent architecture, set dressing, and lighting) the same way character references anchor identity.
-- Emit a top-level "locations" array. Each entry: {"name": "<Display Name>", "slug": "<kebab-case-slug>", "description": "<locked prose description of the environment — architecture, materials, set dressing, scale>", "lightingNotes": "<the established lighting for this place>"}.
+- Emit a top-level "locations" array. Each entry: {"name": "<Display Name>", "slug": "<kebab-case-slug>", "description": "<locked prose description of the environment — architecture, materials, set dressing, scale>", "lightingNotes": "<the established lighting for this place>", "spatialAnchors": "<the locked geography: 3-5 named landmarks and their FIXED positions relative to each other, e.g. 'bar counter along the back wall; entrance door opposite it; window with neon sign left of the door as seen from the counter'>"}.
 - REUSE the existing location slugs listed above when the scene is in a place already defined; only introduce a new location entry when the place is genuinely new.
 - Give every shot a "location" field set to the slug of the location it plays in.
 - ${language.locationGuidance}
+
+SPATIAL BLOCKING — EVERY MULTI-SUBJECT SHOT GETS A "blocking" FIELD (CRITICAL):
+Video models drift spatially between separately generated shots: characters swap sides, distances change, and props teleport unless every prompt states the geometry explicitly. For every shot with 1+ characters (and for object-driven inserts), write a "blocking" field: 1-2 sentences of CONCRETE geometry stating, for each character/key object:
+- WHERE they are relative to the location's named spatialAnchors ("at the bar counter", "in the doorway"),
+- WHERE they are in the frame (screen left / center / screen right; foreground / midground / background),
+- WHICH WAY they face and where their eyeline goes ("facing right toward the door", "looking down at the letter").
+Example: "MARA at the bar counter, screen left, facing right; JAX in the doorway, background screen right, facing her. The neon window is behind MARA's shoulder."
+Continuity rules for blocking across consecutive shots in the same scene:
+- Characters KEEP their screen side and relative positions from the previous shot unless someone visibly moves — and if they move, the movement is the shot's action, written into the description.
+- Preserve screen direction and eyelines (180-degree rule): if A looks right at B in one shot, A keeps looking right and B keeps looking left in the coverage that follows.
+- Reference the SAME named anchors from the location's spatialAnchors so "by the window" means the same window in every shot.
+- Establishing shots re-state the full geography; close-ups still name what's behind/beside the subject so backgrounds match the master.
 
 IMPORTANT: Every shot MUST include an "environment" field. This tells the pipeline when to adapt the project's aesthetic for bright daytime scenes. Values:
 - "DAY_INTERIOR" -- bright indoor scene (café, office, apartment in daylight)
@@ -1537,7 +1564,7 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
   "totalDuration": "<estimated total>",
   "status": "draft",
   "locations": [
-    {"name": "<Display Name>", "slug": "<kebab-case-slug>", "description": "<locked environment description>", "lightingNotes": "<established lighting>"}
+    {"name": "<Display Name>", "slug": "<kebab-case-slug>", "description": "<locked environment description>", "lightingNotes": "<established lighting>", "spatialAnchors": "<locked geography: named landmarks and their fixed relative positions>"}
   ],
   "shots": [
     {
@@ -1548,6 +1575,7 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
       "duration": "3s|4s|...|15s (PREFER 15s; use shorts only for deliberate quick beats)",
       "videoModel": "action|atmosphere",
       "description": "<full visual description, ending with 'No background music, no sound effects, no soundtrack, dry recording.'>",
+      "blocking": "<concrete geometry: each character/object's position relative to named location anchors, frame side, depth, and facing/eyeline — consistent with adjacent shots in the scene>",
       "panelDescription": "<optional single-frame description if description has sequential action>",
       "characters": ["<CHARACTER_NAME>"],
       "dialogue": {"character": "<NAME>", "line": "<text>", "delivery": "<rich voice-director cue: timbre, accent, pacing, emotion, breath, signature quirks>"} or null,
@@ -1659,6 +1687,30 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
           `  ⚠ ${shotsWithoutAudioNegative.length} shot(s) are missing the no-music/no-SFX negative in their description. ` +
             `The video model may bake music or sound effects into the dialogue track. ` +
             `The harness will still suppress these via its NEGATIVE_PROMPT, but the script LLM should also include them per the workshop instructions.`,
+        );
+      }
+
+      // Spatial-consistency advisory (rule 49): character shots without an
+      // authored "blocking" field re-infer placement per generation, which is
+      // where side-swaps and teleporting props come from.
+      const shotsMissingBlocking = script.shots.filter(
+        (s) => s.characters.length > 0 && !s.blocking,
+      );
+      if (shotsMissingBlocking.length > 0) {
+        console.warn(
+          `  ⚠ ${shotsMissingBlocking.length} character shot(s) have no "blocking" field ` +
+            `(shots ${shotsMissingBlocking.map(s => s.shotNumber).join(', ')}). ` +
+            `Without explicit geometry (who is where, relative to which location anchor, facing which way), ` +
+            `placement is re-inferred per generation and spatial continuity drifts between shots. ` +
+            `Add blocking to script.json before approving, or re-run workshop.`,
+        );
+      }
+      const locationsMissingAnchors = (script.locations ?? []).filter(l => !l.spatialAnchors);
+      if (locationsMissingAnchors.length > 0) {
+        console.warn(
+          `  ⚠ ${locationsMissingAnchors.length} location(s) have no "spatialAnchors" ` +
+            `(${locationsMissingAnchors.map(l => l.slug).join(', ')}). ` +
+            `Locked landmark geography is what lets shot blocking say "by the window" and mean the same window every time.`,
         );
       }
 
@@ -2233,13 +2285,19 @@ program
   )
   .option('--motion <motion>', 'Motion intensity: low | medium | high', 'medium')
   .option('--characters <names>', 'Character names (comma-separated)', '')
+  .option('--location <slug>', 'Location slug the shot plays in (defaults to the anchor shot\'s location)')
+  .option(
+    '--blocking <text>',
+    'Explicit spatial blocking: each character/object\'s position relative to the location\'s named anchors, frame side, depth, and facing/eyeline. Defaults to the anchor shot\'s blocking (same geography) when characters overlap.',
+  )
   .option('--dialogue <line>', 'Dialogue line (omit for action/insert shots)')
   .option('--speaker <name>', 'Dialogue speaker name')
   .option('--transition <name>', 'Transition into the next shot', 'CUT')
   .action(async (opts: {
     project: string; episode: number; after: string; description: string;
     type: string; duration: string; motion: string;
-    characters: string; dialogue?: string; speaker?: string; transition: string;
+    characters: string; location?: string; blocking?: string;
+    dialogue?: string; speaker?: string; transition: string;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -2287,6 +2345,27 @@ program
       process.exit(1);
     }
 
+    // Spatial continuity (rule 49): a spliced shot inherits the anchor shot's
+    // location by default, and — when it covers the same characters in the
+    // same place — the anchor's blocking too, so the new coverage keeps the
+    // scene's established geography instead of re-inferring placement.
+    const anchorShot = script.shots[anchorIdx];
+    const location = opts.location ?? anchorShot.location;
+    let blocking = opts.blocking;
+    if (!blocking && anchorShot.blocking && location === anchorShot.location
+      && characters.some(c => anchorShot.characters.map(n => n.toUpperCase()).includes(c.toUpperCase()))) {
+      blocking = anchorShot.blocking;
+      console.log(`  Inherited blocking from shot ${opts.after}: "${blocking}"`);
+      console.log('  (override with --blocking if the staging changes in this shot)');
+    }
+    if (characters.length > 0 && !blocking) {
+      console.warn(
+        '  ⚠ No --blocking supplied and none inheritable. Without explicit geometry ' +
+        '(who is where, relative to which location anchor, facing which way), placement ' +
+        'is re-inferred at generation time and spatial continuity can drift.',
+      );
+    }
+
     const newShot = {
       shotNumber: afterNumeric,
       shotIdSuffix: candidate,
@@ -2294,6 +2373,8 @@ program
       duration: opts.duration,
       videoModel: 'action' as const,
       description: opts.description,
+      ...(location ? { location } : {}),
+      ...(blocking ? { blocking } : {}),
       characters,
       dialogue,
       sfx: null,
@@ -2425,21 +2506,22 @@ program
     const { readFileSync: readFs } = await import('node:fs');
     const toDataUri = (p: string) => `data:image/png;base64,${readFs(p).toString('base64')}`;
 
-    const systemPrompt = `You are a visual QA analyst for an animated mini-drama series. Your job is to compare storyboard panels against character reference images and the series aesthetic to check for consistency issues.
+    const systemPrompt = `You are a visual QA analyst for an animated mini-drama series. Your job is to compare storyboard panels against character reference images, the series aesthetic, and adjacent panels to check for consistency issues.
 
 For each panel, evaluate:
 1. CHARACTER CONSISTENCY: Do characters match their reference images? Check hair color/style, facial features, body type, wardrobe, skin tone.
 2. SETTING CONTINUITY: Does the environment match the shot description? Time of day, weather, location details.
 3. COMPOSITION: Does the framing match the intended shot type and camera description?
+4. SPATIAL CONTINUITY: Does the panel match the shot's stated blocking — is each character/object on the stated frame side, at the stated depth, facing the stated direction, positioned correctly relative to the named location landmarks? When a previous panel from the same location is provided, verify characters keep their screen sides and relative positions, eyelines/screen direction are preserved (180-degree rule), and landmarks have not moved, mirrored, or rearranged.
 
 Respond ONLY in this exact JSON format (no markdown, no code fences):
 {"verdict":"PASS|FLAG-CRITICAL|FLAG-MODERATE|FLAG-LOW","issues":["issue 1","issue 2"],"notes":"brief overall assessment"}
 
 Verdict rules:
-- PASS: Panel matches references and description well
-- FLAG-CRITICAL: Major character identity mismatch (wrong hair color, wrong gender presentation, missing character)
-- FLAG-MODERATE: Noticeable wardrobe or feature deviation, wrong composition
-- FLAG-LOW: Minor stylistic drift, acceptable for production`;
+- PASS: Panel matches references, description, blocking, and spatial continuity well
+- FLAG-CRITICAL: Major character identity mismatch (wrong hair color, wrong gender presentation, missing character) OR a spatial flip that breaks the scene (characters swapped sides, geography mirrored/rearranged vs the previous panel)
+- FLAG-MODERATE: Noticeable wardrobe or feature deviation, wrong composition, character on the wrong side of frame vs the stated blocking, moved/relocated landmark
+- FLAG-LOW: Minor stylistic drift or small placement deviation, acceptable for production`;
 
     for (let i = 0; i < shotsToCheck.length; i++) {
       const shot = shotsToCheck[i];
@@ -2465,19 +2547,44 @@ Verdict rules:
         }
       }
 
+      // Spatial continuity: attach the nearest PRIOR panel from the same
+      // location (when one exists) so the vision model can verify screen
+      // sides, eyelines, and landmark geography against actual coverage
+      // instead of prose alone.
+      let prevPanelNote = '';
+      if (shot.location) {
+        const prior = [...script.shots]
+          .filter(s => s.location === shot.location && s.shotNumber < shot.shotNumber)
+          .sort((a, b) => b.shotNumber - a.shotNumber)[0];
+        if (prior) {
+          const priorPath = join(sceneDir, `shot-${String(prior.shotNumber).padStart(3, '0')}.png`);
+          if (existsSync(priorPath)) {
+            images.push(toDataUri(priorPath));
+            prevPanelNote = `The FINAL image is the previous panel in the same location (shot ${prior.shotNumber}`
+              + (prior.blocking ? `, blocking: ${prior.blocking}` : '')
+              + '). Check spatial continuity against it: same screen sides, preserved eyelines, unmoved landmarks.';
+          }
+        }
+      }
+
       const charDescs = shot.characters.map(name => {
         const char = series.characters.find(c => c.name.toUpperCase() === name.toUpperCase());
         return char ? `${char.name}: ${char.description}, wearing ${shot.episodeWardrobe?.[name.toUpperCase()] ?? char.wardrobe}` : name;
       });
 
+      const shotLocation = shot.location ? getLocation(series, shot.location) : undefined;
+
       const userPrompt = [
         `Analyze this storyboard panel (image 1) for shot ${shot.shotNumber}.`,
         `Shot type: ${shot.type}. Camera: ${shot.cameraMovement}.`,
         `Description: ${shot.panelDescription ?? shot.description}`,
+        shot.blocking ? `Stated blocking: ${shot.blocking}` : '',
+        shotLocation?.spatialAnchors ? `Location landmarks (fixed layout): ${shotLocation.spatialAnchors}` : '',
         shot.characters.length > 0
           ? `Characters in shot: ${charDescs.join('; ')}. Reference images follow the panel.`
           : 'No characters expected in this shot. Verify the scene is empty of people.',
-      ].join('\n');
+        prevPanelNote,
+      ].filter(Boolean).join('\n');
 
       try {
         const parsed = await client.chatJson<{ verdict: QaVerdict; issues: string[]; notes: string }>({
@@ -2626,9 +2733,12 @@ program
     const ccModel = series.videoDefaults.characterConsistencyModel ?? DEFAULT_CHARACTER_CONSISTENCY_MODEL;
     console.log(`Models: action=${series.videoDefaults.actionModel}, atmosphere=${series.videoDefaults.atmosphereModel}, character-consistency=${ccModel}\n`);
     console.log(`Generation units: ${generationPlan.units.length}`);
-    const multiUnitCount = generationPlan.units.filter(unit => unit.unitType === 'kling-multishot').length;
-    if (multiUnitCount > 0) {
-      console.log(`Kling multi-shot units: ${multiUnitCount}`);
+    const multiUnits = generationPlan.units.filter(
+      unit => unit.unitType === 'multishot' || unit.unitType === 'kling-multishot',
+    );
+    if (multiUnits.length > 0) {
+      const models = Array.from(new Set(multiUnits.map(u => u.model))).join(', ');
+      console.log(`Native multi-shot units: ${multiUnits.length} (${models})`);
     }
     const seedanceKeyframeCount = generationPlan.units.filter(unit => unit.useSeedanceKeyframe).length;
     if (seedanceKeyframeCount > 0) {

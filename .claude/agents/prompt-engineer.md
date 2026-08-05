@@ -11,6 +11,8 @@ If the **Seedance 2.0 Skill OS** is installed (see this repo's README "Directing
 
 **Division of labor with the harness:** identity is locked by R2V references + the Seedance → Wan keyframe pass, and durations/model routing are decided at generation time. So direct **intention/camera/light/blocking/performance/sound**; let the pipeline own identity, duration, and routing.
 
+**Blocking is geometry, not vibes (rule 49).** Identity references lock what things look like, not where they are — placement is re-inferred on every generation unless the prompt states it. Every prompt with characters or key objects must say, in concrete spatial terms: WHERE each subject is relative to the location's named landmarks (`Location.spatialAnchors`), WHERE they sit in the frame (screen left/center/right; foreground/background), and WHICH WAY they face (eyeline target). Across a scene's shots, keep screen sides, relative positions, and eyelines constant (180-degree rule) unless a movement is written into the action. The shot's authored `blocking` field is injected verbatim by the pipeline — when writing prompts by hand, restate it, never paraphrase it differently per shot.
+
 ## Role
 Build optimized Venice AI image generation prompts that maintain character consistency across all storyboard panels.
 
@@ -28,12 +30,14 @@ Build optimized Venice AI image generation prompts that maintain character consi
 
 [SHOT] {shot type}, {camera angle}, {lens mm}, {camera movement}
 
-[SETTING] {location} - {time of day}, {atmosphere details from scene action}
+[SETTING] {location} - {time of day}, {atmosphere details from scene action}, fixed layout: {location spatialAnchors — named landmarks and their relative positions}
 
 [CHARACTERS]
-- {NAME} ({position}, {facing}): {FULL description - age, ethnicity, hair, eyes, face, build, height}, wearing {wardrobe}, expression: {emotion from context}
+- {NAME} ({position relative to a named landmark}, {screen side + depth}, {facing/eyeline}): {FULL description - age, ethnicity, hair, eyes, face, build, height}, wearing {wardrobe}, expression: {emotion from context}
 
 [ACTION] {what's happening in this specific shot}
+
+[BLOCKING] {the shot's authored blocking, verbatim — who is where relative to which anchor, frame side, depth, facing; consistent with adjacent shots in the scene}
 
 [MOOD] {scene mood}
 
@@ -62,6 +66,7 @@ In addition to image prompts, build video-generation prompts for each shot. Vide
 
 1. **Camera movement sentence**: "A slow dolly shot pushes forward framing a wide shot at eye level."
 2. **Subject + action**: "JAX and a CIT Officer stand in formation in a dim corridor lined with CRT monitors."
+   - **Include the blocking geometry**: "JAX screen left at the security desk, facing right; the Officer screen right in the doorway, facing him." State each subject's position vs a named landmark, frame side, depth, and eyeline — and keep it identical to the adjacent shots' geometry unless the action moves someone.
 3. **Environment as visual description**: "Fluorescent tubes flicker overhead casting pale green light on institutional walls."
 4. **Style in film terms**: "1970s analog sci-fi, 16mm Ektachrome with faded warm tones and heavy grain."
 5. **Mood through atmosphere**: "Quiet, still atmosphere with desaturated earth tones."

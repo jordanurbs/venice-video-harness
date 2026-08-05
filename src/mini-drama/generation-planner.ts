@@ -10,11 +10,12 @@ import type {
   VideoModelDefaults,
 } from '../series/types.js';
 import {
-  KLING_MULTISHOT_MODEL,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   DEFAULT_LIP_SYNC_MODEL,
   MODELS_SUPPORTING_END_IMAGE,
+  MODELS_USING_IMAGE_TAGS,
   lipSyncModelNeedsKeyframe,
+  resolveMultiShotModel,
 } from '../series/types.js';
 
 const CHAIN_TRANSITIONS = new Set([
@@ -260,16 +261,27 @@ function canUseMultiShotWindow(
     return { ok: false, reasons: ['exact lip-sync dialogue shot in window — keep separate'] };
   }
 
+  // Both native multi-shot lanes cap a single generation at 15s
+  // (Seedance 2.0 R2V: 4-15s; Kling 3.0: 15s total across up to 6 shots).
   const totalDuration = window.reduce((sum, shot) => sum + parseShotDuration(shot.duration), 0);
   if (totalDuration > 15) {
-    return { ok: false, reasons: ['window exceeds 15 second Kling limit'] };
+    return { ok: false, reasons: ['window exceeds the 15 second single-generation limit'] };
   }
 
-  // Core rule: consecutive shots with overlapping characters that fit
-  // within Kling's duration limit should be grouped for consistency.
-  // Kling 3.0 supports up to 6 shots in a single generation.
+  // Core rule: consecutive shots with overlapping characters that fit within
+  // the duration limit should be grouped for consistency — identity,
+  // environment, and lighting hold inside one generation (rule 21).
   if (!hasOverlappingCharacters(window)) {
     return { ok: false, reasons: ['no overlapping characters across shots'] };
+  }
+
+  // Rule 21(b): beats spanning different locations split into separate
+  // renders. The reference-first unit builds ONE slot plan (one blocking
+  // plate + one location's angles) for the whole generation, so a location
+  // change inside the window would anchor the second beat to the wrong set.
+  const locations = new Set(window.map(shot => shot.location ?? ''));
+  if (locations.size > 1) {
+    return { ok: false, reasons: ['window spans multiple locations — keep separate (rule 21)'] };
   }
 
   // Build descriptive reason
@@ -281,7 +293,7 @@ function canUseMultiShotWindow(
   );
   if (hasMatchLikeTransition) reasons.push('match-like transitions');
   if (reasons.length === 0) reasons.push('character continuity');
-  reasons.push(`${window.length}-shot Kling multi-shot`);
+  reasons.push(`${window.length}-shot native multi-shot (${resolveMultiShotModel(videoDefaults)})`);
 
   return { ok: true, reasons };
 }
@@ -316,16 +328,22 @@ function buildMultiShotUnit(
   const last = shots[shots.length - 1];
   const durationSec = shots.reduce((sum, shot) => sum + parseShotDuration(shot.duration), 0);
   const unitId = `unit-${padShotNumber(first.shotNumber)}-${padShotNumber(last.shotNumber)}`;
+  const model = resolveMultiShotModel(videoDefaults);
+
+  // Reference-first multi-shot (Seedance R2V default): the unit renders in
+  // pure reference mode from the slot plan — no start frame, no end frame.
+  // Frame strategies only apply to i2v-family overrides (legacy Kling lane).
+  const referenceFirst = MODELS_USING_IMAGE_TAGS.has(model);
 
   return {
     unitId,
-    unitType: 'kling-multishot',
+    unitType: 'multishot',
     shotNumbers: shots.map(shot => shot.shotNumber),
     outputFile: `${unitId}.mp4`,
-    model: KLING_MULTISHOT_MODEL,
+    model,
     duration: formatShotDuration(durationSec),
-    startFrameStrategy: chooseStartFrameStrategy(previousShot, first),
-    endFrameStrategy: chooseEndFrameStrategy(last, nextShot, videoDefaults),
+    startFrameStrategy: referenceFirst ? 'panel' : chooseStartFrameStrategy(previousShot, first),
+    endFrameStrategy: referenceFirst ? 'natural' : chooseEndFrameStrategy(last, nextShot, videoDefaults),
     decisionReasons: reasons,
     fallbackToSingles: false,
   };

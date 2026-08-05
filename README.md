@@ -40,7 +40,7 @@ knowledge reaches you, which is the single largest predictor of output quality.
 
 | Surface | How it runs | What you get | Use when |
 |---|---|---|---|
-| **Repo-resident agent** | Agent's cwd is a clone of this repo | Everything: `AGENTS.md` (47 rules, 20 anti-patterns), `.claude/commands/`, `.claude/agents/`, `.claude/skills/`, `.cursor/rules/` | Authoring and iteration — the best results by a wide margin |
+| **Repo-resident agent** | Agent's cwd is a clone of this repo | Everything: `AGENTS.md` (49 rules, 28 anti-patterns), `.claude/commands/`, `.claude/agents/`, `.claude/skills/`, `.cursor/rules/` | Authoring and iteration — the best results by a wide margin |
 | **MCP** | `venice-video-mcp` (on npm) shells out to this CLI | 7 action-discriminated tools, structured JSON responses, progress notifications, plus 4 companion skills carrying the pipeline order | Any agent that supports MCP — Hermes, OpenClaw, Cursor, Claude — with no clone required |
 | **Bare global CLI** | `npm install -g`, shell tool, `--help` | The compiled CLI, this README, `AGENTS.md`, `.claude/skills/`, and the self-describing commands below (`agent-guide`, `pipeline`) | When your runner has a shell but no MCP — start with `venice-video agent-guide` |
 
@@ -420,8 +420,8 @@ everything else falls back to a default rather than prompting.
 
 ### The rules that most affect output quality
 
-Full text lives in `AGENTS.md` > "Agent Rules" (47 rules) and "Learned
-Anti-Patterns" (20 entries). If you can only carry a few, carry these:
+Full text lives in `AGENTS.md` > "Agent Rules" (49 rules) and "Learned
+Anti-Patterns" (28 entries). If you can only carry a few, carry these:
 
 1. **Direct the scene, don't decorate it.** Name one intention for the beat and
    derive camera, light, blocking, performance, and sound from it. Stacking
@@ -443,16 +443,23 @@ Anti-Patterns" (20 entries). If you can only carry a few, carry these:
 7. **Re-anchor every separately-rendered shot to the same locked references** and
    restate the character's invariant traits — including relative size — in every
    prompt.
-8. **Pass `aspectRatio` explicitly** on reference-to-video generation.
-9. **Never multi-edit close-up face shots on 16:9 panels.** The square-to-16:9
-   crop removes roughly 25% top and bottom, losing foreheads and chins.
-10. **Archive prior renders; never delete generated shot assets.**
-11. **Validate model capabilities before sending** `elements`,
+8. **State placement explicitly — spatial consistency is authored, not
+   inferred.** Lock each location's landmark geography in
+   `Location.spatialAnchors` and give every character shot a `blocking` field:
+   each subject's position relative to the named anchors, screen side, depth,
+   and facing/eyeline. Keep screen sides and eyelines constant across a scene's
+   shots unless a movement is scripted (180-degree rule). The harness injects
+   both verbatim into panel, blocking-plate, and video prompts.
+9. **Pass `aspectRatio` explicitly** on reference-to-video generation.
+10. **Never multi-edit close-up face shots on 16:9 panels.** The square-to-16:9
+    crop removes roughly 25% top and bottom, losing foreheads and chins.
+11. **Archive prior renders; never delete generated shot assets.**
+12. **Validate model capabilities before sending** `elements`,
     `reference_image_urls`, `scene_image_urls`, `end_image_url`, or `audio_url`.
     The registry is `src/venice/models.ts` in a clone; from a global install use
     `.claude/skills/venice-video-model-routing/SKILL.md` or the model tables
     below.
-12. **Ask before burning in subtitles**, and derive caption timings from
+13. **Ask before burning in subtitles**, and derive caption timings from
     `ffmpeg silencedetect` on the rendered voiceover rather than estimating them.
 
 ### Checkpoints where you should stop and ask

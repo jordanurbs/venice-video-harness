@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // The core operating rules, shipped inside the binary.
 //
-// AGENTS.md is 81KB — 47 rules and 27 anti-patterns. A repo-resident agent
+// AGENTS.md is 84KB — 49 rules and 28 anti-patterns. A repo-resident agent
 // reads it from the checkout; an MCP-connected agent reads it from the clone.
 // A user who ran `npm install -g venice-video-harness` and talks to a
 // persistent assistant (Hermes, OpenClaw) has neither, and until now the only
@@ -61,13 +61,14 @@ export const AGENT_GUIDE: readonly GuideSection[] = [
       'Front-load style at the START of every prompt; keep Seedance prompts under ~60 words with the 5-part structure (Subject, Action, Camera, Style, Constraints).',
       'Direct the beat, do not decorate it: name one intention and derive camera/light/blocking/performance from it. Do not stack "cinematic / epic / 4k" adjectives.',
       'Re-anchor every separately-rendered shot to the SAME locked references and restate the character invariant traits (including relative size) in every prompt.',
+      'State placement explicitly in every prompt: lock each location\'s landmark geography (spatialAnchors) and give every character shot a blocking field (position vs named anchors, screen side, depth, facing/eyeline). Keep screen sides and eyelines constant across a scene unless a movement is scripted.',
       'Prefer native model dialogue (Seedance 2.0, HappyHorse 1.1 with voice-donor references) over exact TTS lip-sync.',
     ],
   },
   {
     title: 'Where the full knowledge lives',
     points: [
-      'AGENTS.md — 47 rules and 27 production anti-patterns, shipped in the package.',
+      'AGENTS.md — 49 rules and 28 production anti-patterns, shipped in the package.',
       '.claude/skills/ — venice-api, venice-video-model-routing, character-consistency, shot-composition, burn-in-subtitles, video-editing, and more.',
       '.claude/commands/ — 20 step-by-step playbooks; .claude/agents/ — 10 sub-agent roles.',
       'Read the relevant playbook before running a workflow. Validate model capabilities against src/venice/models.ts before an API call.',

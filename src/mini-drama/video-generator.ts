@@ -29,7 +29,7 @@ import { padAudioForModel, probeAudioDurationSec } from '../venice/audio-preflig
 import { generateSpeech } from '../venice/audio.js';
 import { getCharacterDir, getLocationDir, getLocation } from '../series/manager.js';
 import {
-  buildKlingMultiShotPrompt,
+  buildMultiShotPrompt,
   buildVideoPrompt,
   resolveVideoModel,
   type MiniDramaVideoPrompt,
@@ -509,7 +509,8 @@ async function logFailedRequest(
 
 interface RenderVideoOptions {
   prompt: MiniDramaVideoPrompt;
-  anchorImagePath: string;
+  /** Start-frame image. Omitted in pure reference mode (slot-plan renders). */
+  anchorImagePath?: string;
   outputPath: string;
   endFrameImagePath?: string;
   elements?: VideoElement[];
@@ -1471,16 +1472,33 @@ async function renderMultiShotUnit(
     return shotOutputPaths;
   }
 
+  const unitOutputPath = join(sceneDir, unit.outputFile);
+  const prompt = buildMultiShotPrompt(shots, unit, series);
+  unit.model = prompt.model;
+
+  // Reference-first multi-shot (Seedance R2V default): pure reference mode.
+  // The slot plan carries all consistency; no panel anchor is needed or sent
+  // (renderVideoFile omits image_url when a slot plan is present on an
+  // @Image-tag model). Legacy i2v overrides still anchor on the first panel.
+  const hasSlotPlan = (prompt.referenceSlots?.length ?? 0) > 0
+    && MODELS_USING_IMAGE_TAGS.has(prompt.model);
+
   const firstPanelPath = getShotPanelPath(sceneDir, shots[0].shotNumber);
-  if (!existsSync(firstPanelPath)) {
+  if (!existsSync(firstPanelPath) && !hasSlotPlan) {
     console.warn(`  Panel not found: ${firstPanelPath}, skipping unit ${unit.unitId}`);
     return [];
   }
 
-  const unitOutputPath = join(sceneDir, unit.outputFile);
-  const prompt = buildKlingMultiShotPrompt(shots, unit, series);
-  const anchorImagePath = chooseAnchorImagePath(unit, sceneDir, unitOutputPath, previousRenderedShotPath);
-  const endFramePath = chooseEndFrameImagePath(unit, sceneDir, nextShotNumber);
+  const anchorImagePath = hasSlotPlan
+    ? undefined
+    : chooseAnchorImagePath(unit, sceneDir, unitOutputPath, previousRenderedShotPath);
+  const endFramePath = hasSlotPlan
+    ? undefined
+    : chooseEndFrameImagePath(unit, sceneDir, nextShotNumber);
+
+  if (prompt.modelResolution) {
+    console.log(`  Model: ${prompt.model} (${prompt.modelResolution.reason})`);
+  }
 
   // Resolve elements and references for multi-shot — same identity anchoring as single shots
   const allCharNames = Array.from(new Set(shots.flatMap(s => s.characters)));
@@ -1493,7 +1511,21 @@ async function renderMultiShotUnit(
   let elements: VideoElement[] | undefined;
   let referenceImagePaths: string[] | undefined;
 
-  if (prompt.characterElements && prompt.characterElements.length > 0
+  if (hasSlotPlan) {
+    // Push reference_image_urls in EXACTLY the slot-plan order so the
+    // prompt's @ImageN bindings match the request array (same invariant as
+    // resolveCharacterElements on the single-shot path).
+    const paths = prompt.referenceSlots!
+      .map(slot => slot.path)
+      .filter(p => existsSync(p));
+    if (paths.length !== prompt.referenceSlots!.length) {
+      console.warn('  ⚠ Multi-shot reference slot images missing on disk — @ImageN bindings may misalign; regenerate refs.');
+    }
+    referenceImagePaths = paths.length > 0 ? paths : undefined;
+    if (referenceImagePaths) {
+      console.log(`  Multi-shot slot plan: ${referenceImagePaths.length} reference(s) (pure reference mode)`);
+    }
+  } else if (prompt.characterElements && prompt.characterElements.length > 0
     && MODELS_SUPPORTING_ELEMENTS.has(prompt.model)) {
     elements = prompt.characterElements.map(slot => {
       const dir = charDirFn2(slot.characterName);
@@ -1520,6 +1552,10 @@ async function renderMultiShotUnit(
     if (referenceImagePaths.length === 0) referenceImagePaths = undefined;
   }
 
+  // Voice-donor clips for the unit's dialogue speakers, in @AudioN order
+  // (only used by reference-audio-capable models with ≥1 reference image).
+  const voiceReferencePaths = resolveVoiceReferencePaths(series, prompt);
+
   const savedUnitPath = await renderVideoFile(client, {
     prompt,
     anchorImagePath,
@@ -1527,6 +1563,7 @@ async function renderMultiShotUnit(
     endFrameImagePath: endFramePath,
     elements,
     referenceImagePaths,
+    voiceReferencePaths: voiceReferencePaths.length > 0 ? voiceReferencePaths : undefined,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
     project: series.outputDir,

@@ -119,7 +119,8 @@ venice-video-model-routing/
 - `veo3.1-fast-image-to-video` -- atmosphere tier (establishing shots, inserts)
 - `kling-o3-standard-reference-to-video` -- character consistency tier (identity-critical shots, default)
 - `kling-o3-pro-reference-to-video` -- character consistency tier (higher quality, slower)
-- `kling-o3-pro-image-to-video` -- multi-shot units
+- `seedance-2-0-enhanced-reference-to-video` -- multi-shot units (default since 2026-08-05; reference-first with `Lens switch.` separators)
+- `kling-o3-pro-image-to-video` -- legacy multi-shot lane (explicit `videoDefaults.multiShotModel` override only; no reference support)
 - `vidu-q3-image-to-video` -- 1080p output with reference image support
 - `wan-2.6-image-to-video` -- configurable audio, various durations
 - `sora-2-image-to-video` -- high quality, requires aspect ratio

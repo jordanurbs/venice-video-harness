@@ -113,9 +113,13 @@ export async function generateStoryboardReference(
 
   // Location environment ref (wide angle), appended after face refs.
   let locationSuffix = '';
+  let locationSpatialAnchors = '';
   if (ref.location) {
     const loc = getLocation(series, ref.location);
     if (loc) {
+      if (loc.spatialAnchors) {
+        locationSpatialAnchors = ` Fixed location layout (never rearrange): ${loc.spatialAnchors}.`;
+      }
       const locDir = getLocationDir(series, loc.slug);
       const wide = ['wide.png', 'medium.png', 'detail.png']
         .map(f => join(locDir, f))
@@ -139,7 +143,9 @@ export async function generateStoryboardReference(
     `STYLE: ${aestheticStr}.`,
     'Single cinematic frame, one continuous image, NOT a comic panel layout, NO panel borders, NO speech bubbles, NO text overlays.',
     'Medium-wide blocking shot: every character fully visible, positions and spatial relationships unambiguous, clear staging.',
+    'Place each character exactly where the description says — screen side, distance from camera, facing direction, and position relative to named landmarks all legible in one look.',
     `${ref.description}.`,
+    ...(locationSpatialAnchors ? [locationSpatialAnchors.trim()] : []),
     `STYLE REMINDER: ${aestheticStr}.`,
   ];
   const prompt = promptParts.join(' ') + locationSuffix;
@@ -277,9 +283,17 @@ export function planStoryboardBeats(script: EpisodeScript): StoryboardReference[
       ...(shot.location ? [shot.location] : []),
     ].join('-').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
+    // The plate's description is the beat's first shot plus its authored
+    // spatial blocking (when present) — the blocking sentence is exactly the
+    // geometry the plate exists to encode.
+    const baseDescription = shot.panelDescription ?? shot.description;
+    const plateDescription = shot.blocking
+      ? `${baseDescription} ${shot.blocking}`
+      : baseDescription;
+
     refs.push({
       slug,
-      description: shot.panelDescription ?? shot.description,
+      description: plateDescription,
       characters: allChars,
       ...(shot.location ? { location: shot.location } : {}),
       episode: script.episode,

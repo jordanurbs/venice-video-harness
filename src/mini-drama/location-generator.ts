@@ -102,6 +102,10 @@ export async function generateLocationReferences(
       `${ANGLE_PROMPTS[angle]}.`,
       `${location.description}.`,
       location.lightingNotes ? `Lighting: ${location.lightingNotes}.` : '',
+      // Locked geography (rule 49): bake the named landmarks and their fixed
+      // relative positions into every reference angle so the three angles
+      // depict ONE coherent space the video model can navigate.
+      location.spatialAnchors ? `Layout: ${location.spatialAnchors}.` : '',
       'Empty environment, no people present, no human figures, uninhabited scene.',
       `STYLE REMINDER: ${aestheticStr}.`,
     ].filter(Boolean);

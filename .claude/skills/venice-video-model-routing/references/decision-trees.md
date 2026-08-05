@@ -202,7 +202,12 @@ Legend: Y = supported, X = not supported, (400) = returns HTTP 400 error
 
 ## 7. Multi-Shot Grouping Decision Tree
 
-Determines whether consecutive shots should be grouped into a single Kling multi-shot unit or rendered as individual R2V singles.
+Determines whether consecutive shots should be grouped into a single native
+multi-shot unit or rendered as individual R2V singles. Multi-shot units render
+on `seedance-2-0-enhanced-reference-to-video` by default (2026-08-05) — one
+reference-first generation with `Lens switch.` separators, carrying the full
+@Image slot plan. The Kling i2v lane is an explicit
+`videoDefaults.multiShotModel` override only.
 
 ```
 INPUT: window of consecutive shots
@@ -216,13 +221,16 @@ START
   |   -> SINGLES (these should always render independently)
   |
   +-- total duration exceeds 15s?
-  |   -> SINGLES (exceeds Kling multi-shot limit)
+  |   -> SINGLES (exceeds the single-generation limit on both lanes)
+  |
+  +-- shots span more than one location?
+  |   -> SINGLES (one slot plan per generation — rule 21b)
   |
   +-- do consecutive pairs share at least one character?
   |   |
   |   NO -> SINGLES (different characters lose R2V anchoring)
   |   |
-  |   YES -> GROUP (temporal continuity benefits outweigh)
+  |   YES -> GROUP (identity/environment/lighting hold inside one generation)
   |
   +-- CRITICAL: for talk shows / interviews / panels:
       -> PREFER SINGLES (identity anchoring > temporal continuity)

@@ -95,8 +95,8 @@ The most critical consistency layer for video generation. **R2V models are the o
 - **Prompt integration:** Character names replaced with `@Element1`, `@Element2` tokens
 
 ### Critical Rules
-1. **Only R2V models support elements/reference_image_urls.** The Kling multi-shot model (`kling-o3-pro-image-to-video`), Kling V3 Pro, Veo 3.1, and all other non-R2V models have ZERO reference support.
-2. **Never group shots with different characters into multi-shot units.** Multi-shot units use non-R2V models. Characters lose all identity anchoring.
+1. **Only R2V models support elements/reference_image_urls.** Kling V3 Pro, Veo 3.1, `kling-o3-pro-image-to-video`, and all other non-R2V models have ZERO reference support.
+2. **Never group shots with different characters into multi-shot units.** Multi-shot units render on Seedance R2V Enhanced by default (2026-08-05) with ONE slot plan per generation — disjoint characters can't all anchor correctly. (Legacy `videoDefaults.multiShotModel: kling-o3-pro-image-to-video` overrides have no references at all.)
 3. **For talk shows, interviews, and panel formats:** Set `mustStaySingle: true` on all shots to force R2V singles.
 
 ### Format-Specific Guidance
@@ -106,6 +106,31 @@ The most critical consistency layer for video generation. **R2V models are the o
 | Talk show / interview | All singles with R2V | Frequent speaker cuts, identity > continuity |
 | Continuous action scene | Multi-shot OK if same characters | Temporal continuity benefits outweigh |
 | Drama with cuts | Singles for close-ups/reactions, multi-shot for continuous action | Balance both |
+
+## Layer 5: Spatial Anchoring (placement, not just appearance)
+
+Identity references lock what a character LOOKS like; they say nothing about
+WHERE the character is. Placement is re-inferred on every generation unless
+each prompt states the geometry the same way (rule 49):
+
+- **`Location.spatialAnchors`** locks a place's geography: 3-5 named landmarks
+  and their fixed relative positions. Injected as "Fixed layout (never
+  rearrange): …" into every panel/plate/video prompt for shots in that
+  location, and baked into the location's reference angles.
+- **`ShotScript.blocking`** locks the shot's geometry: each character/object's
+  position relative to the named anchors, frame side (screen left/center/
+  right), depth, and facing/eyeline. Injected verbatim (with @ImageN name
+  substitution) into panel, plate, and video prompts.
+- **Storyboard blocking plates** encode the same geometry visually and carry a
+  role clause restricting them to composition/blocking authority; the video
+  prompt additionally forbids mirroring/swapping who stands where.
+- **Continuity rules:** characters keep their screen sides and relative
+  positions across a scene's shots unless a movement is scripted; eyelines
+  and screen direction obey the 180-degree rule; close-ups still name what's
+  behind/beside the subject.
+- **QA:** `qa-storyboard` checks a SPATIAL CONTINUITY dimension against the
+  stated blocking and the previous same-location panel; a side-swap or
+  mirrored geography is FLAG-CRITICAL.
 
 ## Usage
 ```typescript

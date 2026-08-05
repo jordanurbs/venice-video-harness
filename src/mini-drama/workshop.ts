@@ -225,6 +225,8 @@ ${language.locationGuidance}
 
 Treat 4K as a final delivery/finishing target, never as a reason to make every draft generation at 4K. Native dialogue means the selected video model speaks in-frame; Seedance and HappyHorse use voice-donor references when available. Exact lip-sync means Venice speech is rendered first, passed to the video model as an audio file, and the character's mouth follows that recording. Respect the project's selected audio strategy.
 
+SPATIAL CONSISTENCY IS A FIRST-CLASS DELIVERABLE. Every location gets a "spatialAnchors" field: 3-5 named landmarks and their FIXED positions relative to each other (e.g. "bar counter along the back wall; entrance door opposite it; neon window left of the door as seen from the counter"). Every shot with characters gets a "blocking" field: 1-2 sentences of concrete geometry — each character's position relative to the location's named anchors, their frame side (screen left/center/right) and depth (foreground/background), and their facing/eyeline direction. Across consecutive shots in a scene, characters keep their screen side and relative positions unless a movement is written into the action; preserve screen direction and eyelines (180-degree rule); and always reference the SAME named anchors so "by the window" means one specific window. This geometry is injected verbatim into every image, blocking-plate, and video prompt, so vague blocking becomes spatial drift on screen.
+
 Every shot must have one dramatic intention, specific camera/blocking/light/performance direction, a location slug, a valid duration string, and no background music or sound effects baked into its description. Return ONLY valid JSON matching the requested schema.`;
 }
 
@@ -274,8 +276,8 @@ ${JSON.stringify({
     structure: [{ name: 'Act or movement', purpose: 'dramatic purpose', beats: ['beat'] }],
     aesthetic: { style: '', palette: '', lighting: '', lensCharacteristics: '', filmStock: '' },
     characters: [{ name: '', gender: 'other', age: '', description: '', fullDescription: '', wardrobe: '', voiceDescription: '', locked: false, seed: 1 }],
-    locations: [{ name: '', slug: '', description: '', lightingNotes: '', seed: 1 }],
-    script: { episode: 1, title: '', seriesName: series.name, totalDuration: '', status: 'draft', locations: [], shots: [{ shotNumber: 1, type: 'establishing', environment: 'DAY_EXTERIOR', location: '', duration: '10s', videoModel: 'atmosphere', description: '', panelDescription: '', characters: [], dialogue: null, sfx: null, cameraMovement: '', transition: 'CUT' }] },
+    locations: [{ name: '', slug: '', description: '', lightingNotes: '', spatialAnchors: 'named landmarks and their fixed relative positions', seed: 1 }],
+    script: { episode: 1, title: '', seriesName: series.name, totalDuration: '', status: 'draft', locations: [], shots: [{ shotNumber: 1, type: 'establishing', environment: 'DAY_EXTERIOR', location: '', duration: '10s', videoModel: 'atmosphere', description: '', blocking: 'each character/object: position vs named location anchors, frame side, depth, facing/eyeline — consistent with adjacent shots', panelDescription: '', characters: [], dialogue: null, sfx: null, cameraMovement: '', transition: 'CUT' }] },
     productionNotes: { delivery: inputs.delivery, audioApproach: '', continuityPriorities: [''], risks: [''], openQuestions: [''] },
     feedbackHistory: [],
   }, null, 2)}`;

@@ -32,11 +32,18 @@ Run a visual QA analysis on generated storyboard panels for character and settin
    - Art style matches locked aesthetic?
    - Color grading consistent?
 
+   **Spatial Continuity** (compare against the shot's `blocking`, the location's `spatialAnchors`, and the nearest prior panel in the same location):
+   - Each character/object on the stated frame side, at the stated depth, facing the stated direction?
+   - Positions correct relative to the location's named landmarks?
+   - Screen sides held from the previous same-location panel (no side-swaps)?
+   - Eyelines / screen direction preserved (180-degree rule)?
+   - Landmarks (doors, windows, counters, key props) unmoved — no mirroring, vanishing, or rearranging?
+
 5. Rate each panel:
-   - **PASS**: Character and setting match descriptions
-   - **FLAG-CRITICAL**: Character appearance is wrong (wrong hair, wrong outfit, wrong body type)
-   - **FLAG-MODERATE**: Minor drift but recognizable (slightly different shade, small detail off)
-   - **FLAG-LOW**: Stylistic variance within acceptable range
+   - **PASS**: Character, setting, and spatial geometry match descriptions
+   - **FLAG-CRITICAL**: Character appearance is wrong (wrong hair, wrong outfit, wrong body type) OR a spatial flip that breaks the scene (characters swapped sides, geography mirrored/rearranged vs the previous panel)
+   - **FLAG-MODERATE**: Minor drift but recognizable (slightly different shade, small detail off); character on the wrong frame side vs stated blocking; a relocated landmark
+   - **FLAG-LOW**: Stylistic variance or small placement deviation within acceptable range
 
 6. Present the QA report to the user:
    - Show each flagged panel inline with the specific issues
@@ -52,5 +59,6 @@ Run a visual QA analysis on generated storyboard panels for character and settin
 ## Important
 - Always load and show the character reference images alongside flagged panels for visual comparison
 - Be specific about what's wrong: "Sera's hair is shoulder-length bob in shot 4 but should be long flowing dark hair per her description"
-- Focus most on CRITICAL issues (wrong appearance) -- these break immersion across episodes
+- Be equally specific about spatial issues: "JAX was screen left at the counter in shot 3 but is screen right in shot 4 with no scripted movement — side-swap, regenerate"
+- Focus most on CRITICAL issues (wrong appearance, broken scene geography) -- these break immersion across episodes
 - Run this QA automatically after every storyboard-episode generation

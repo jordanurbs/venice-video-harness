@@ -20,6 +20,7 @@ import {
   MODELS_USING_IMAGE_TAGS,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   getMaxReferenceImages,
+  resolveMultiShotModel,
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { parseShotDuration } from './generation-planner.js';
@@ -327,6 +328,13 @@ export function buildImagePrompt(
   parts.push(`Camera: ${shot.cameraMovement}.`);
   parts.push(shot.panelDescription ?? shot.description);
 
+  // Spatial blocking: restate the shot's authored geometry (who is where,
+  // relative to what, facing which way) so the panel encodes the same
+  // placement the plate and video prompts will ask for (rule 49).
+  if (shot.blocking) {
+    parts.push(`BLOCKING: ${shot.blocking}`);
+  }
+
   // Silhouette characters appear in the panel but don't trigger R2V
   if (shot.silhouetteCharacters && shot.silhouetteCharacters.length > 0) {
     for (const charName of shot.silhouetteCharacters) {
@@ -495,15 +503,26 @@ export function buildVideoPrompt(
     }
   }
 
-  if ((useElements || useImageTags) && characterElements) {
-    let desc = shot.description;
+  // Substitute character names with their @ImageN/@ElementN tags so identity
+  // binding stays consistent in both the action description and the blocking.
+  const substituteTags = (text: string): string => {
+    if (!((useElements || useImageTags) && characterElements)) return text;
+    let out = text;
     for (const slot of characterElements) {
       const re = new RegExp(`\\b${slot.characterName}\\b`, 'gi');
-      desc = desc.replace(re, `${tagPrefix}${slot.elementIndex}`);
+      out = out.replace(re, `${tagPrefix}${slot.elementIndex}`);
     }
-    parts.push(desc);
-  } else {
-    parts.push(shot.description);
+    return out;
+  };
+
+  parts.push(substituteTags(shot.description));
+
+  // Spatial blocking (rule 49): state each subject's position relative to the
+  // location's fixed anchors, to each other, and to the frame — the same
+  // authored geometry the panel and blocking plate used, restated verbatim so
+  // every generation of this beat asks for identical placement.
+  if (shot.blocking) {
+    parts.push(`Blocking: ${substituteTags(shot.blocking)}`);
   }
 
   // NARRATOR / V.O. lines are voice-over — there is no on-camera speaker, so
@@ -602,7 +621,14 @@ export function buildVideoPrompt(
   if (shot.location) {
     const loc = getLocation(series, shot.location);
     if (loc) {
-      const envNote = [loc.description, loc.lightingNotes ? `Lighting: ${loc.lightingNotes}.` : '']
+      const envNote = [
+        loc.description,
+        loc.lightingNotes ? `Lighting: ${loc.lightingNotes}.` : '',
+        // Locked geography: the named landmarks and their fixed positions.
+        // Restated per shot so placement language ("at the counter", "by the
+        // door") resolves to the same physical layout in every generation.
+        loc.spatialAnchors ? `Fixed layout (never rearrange): ${loc.spatialAnchors}.` : '',
+      ]
         .filter(Boolean).join(' ');
       if (envNote) parts.push(`Location: ${envNote}`);
     }
@@ -626,7 +652,17 @@ export function buildVideoPrompt(
       parts.push(
         'Every reference must stay consistent across space and time: characters keep their ' +
         'appearance, the location keeps its geography, and the blocking follows ' +
-        `@Image${sbSlot.imageIndex} even as the camera angle changes.`,
+        `@Image${sbSlot.imageIndex} even as the camera angle changes. ` +
+        `Each character stays on the same side of the scene and keeps the same position ` +
+        `relative to the landmarks visible in @Image${sbSlot.imageIndex}; do not mirror, ` +
+        'swap, or rearrange who stands where.',
+      );
+    } else if (locationEnvSlot) {
+      // No blocking plate — anchor spatial consistency to the location refs.
+      parts.push(
+        `Keep the geography of @Image${locationEnvSlot.imageIndex} fixed: landmarks stay ` +
+        'where they are, and each subject holds their stated position and screen side ' +
+        'relative to them for the whole shot.',
       );
     }
   }
@@ -680,10 +716,268 @@ export function buildVideoPrompt(
   };
 }
 
+/**
+ * Build the prompt for a multi-shot generation unit, dispatching on the
+ * project's resolved multi-shot model (rule 21; default Seedance R2V
+ * Enhanced since 2026-08-05):
+ *
+ *   - @Image-tag R2V models (Seedance family) -> Seedance native multi-shot:
+ *     one generation with `Lens switch.` separators, anchored to the FULL
+ *     reference slot plan (character sheets, blocking plate, location angles),
+ *     so identity AND geography hold across the internal cuts.
+ *   - Anything else (explicit `videoDefaults.multiShotModel` override, e.g.
+ *     Kling O3 Pro i2v) -> the legacy Kling 3.0 multi-shot format.
+ */
+export function buildMultiShotPrompt(
+  shots: ShotScript[],
+  unit: GenerationUnit,
+  series: SeriesState,
+): MiniDramaVideoPrompt {
+  const modelId = unit.model && unit.model !== 'action' && unit.model !== 'atmosphere'
+    ? unit.model
+    : resolveMultiShotModel(series.videoDefaults);
+  if (MODELS_USING_IMAGE_TAGS.has(modelId)) {
+    return buildSeedanceMultiShotPrompt(shots, unit, series, modelId);
+  }
+  return buildKlingMultiShotPrompt(shots, unit, series, modelId);
+}
+
+/**
+ * Seedance native multi-shot: one R2V generation covering 2+ beats, with
+ * literal `Lens switch.` lines between the per-beat blocks (rule 21). The
+ * reference stack is the union slot plan for the unit's shots — character
+ * primaries, the beat's storyboard blocking plate, location angles — pushed
+ * in exactly the plan order so the prompt's @ImageN bindings match.
+ */
+function buildSeedanceMultiShotPrompt(
+  shots: ShotScript[],
+  unit: GenerationUnit,
+  series: SeriesState,
+  modelId: string,
+): MiniDramaVideoPrompt {
+  if (!series.aesthetic) {
+    throw new Error('Series aesthetic must be set before generating videos.');
+  }
+
+  const uniqueCharNames = Array.from(
+    new Set(shots.flatMap(shot => shot.characters)),
+  );
+
+  // Build ONE slot plan for the whole unit from a synthetic shot that unions
+  // the window's characters and carries the first shot's location/plate —
+  // multi-shot windows share a location and overlapping characters by
+  // construction (canUseMultiShotWindow).
+  const planShot: ShotScript = {
+    ...shots[0],
+    characters: uniqueCharNames,
+  };
+  const plan = buildReferenceSlotPlan(series, planShot, modelId, {
+    characterNames: uniqueCharNames,
+  });
+  for (const note of plan.dropped) {
+    console.warn(`  ⚠ Reference budget (multi-shot): dropped ${note}`);
+  }
+
+  const characterElements: CharacterElementSlot[] = uniqueCharNames
+    .filter(name => plan.characterSlotByName.has(name.toUpperCase()))
+    .map(name => ({
+      characterName: name,
+      elementIndex: plan.characterSlotByName.get(name.toUpperCase())!,
+    }));
+
+  const substituteTags = (text: string): string => {
+    let out = text;
+    for (const slot of characterElements) {
+      const re = new RegExp(`\\b${slot.characterName}\\b`, 'gi');
+      out = out.replace(re, `@Image${slot.elementIndex}`);
+    }
+    return out;
+  };
+
+  const wardrobeByChar = new Map<string, string>();
+  for (const shot of shots) {
+    if (!shot.episodeWardrobe) continue;
+    for (const [charName, wardrobe] of Object.entries(shot.episodeWardrobe)) {
+      if (!wardrobeByChar.has(charName.toUpperCase())) {
+        wardrobeByChar.set(charName.toUpperCase(), wardrobe);
+      }
+    }
+  }
+
+  const parts: string[] = [];
+
+  // Identity declarations (rule 37): @ImageN -> name + wardrobe, up front.
+  for (const slot of characterElements) {
+    const char = series.characters.find(
+      c => c.name.toUpperCase() === slot.characterName.toUpperCase(),
+    );
+    if (!char) continue;
+    const wardrobe = wardrobeByChar.get(char.name.toUpperCase()) ?? char.wardrobe;
+    parts.push(`@Image${slot.elementIndex} is ${char.name} — wearing ${wardrobe}.`);
+  }
+
+  // Role clauses for the non-character slots (plate, location angles), same
+  // clause text as singles so the two paths can never disagree.
+  for (const slot of plan.slots) {
+    if (slot.kind === 'character-primary') continue;
+    parts.push(`@Image${slot.imageIndex} ${slot.roleClause}.`);
+  }
+
+  parts.push(
+    `${shots.length}-shot continuous sequence in one take family. ` +
+    'Lock face, wardrobe, environment, and geography across all shots.',
+  );
+
+  // Voice-donor slots for the unit's dialogue speakers (@AudioN). Same
+  // binding contract as singles: audioIndex MUST match the push order of
+  // reference_audio_urls in the video generator. Venice budget: <=3 clips.
+  const voiceRefEnabled = series.videoDefaults.voiceReferenceForDialogue !== false
+    && MODELS_SUPPORTING_REFERENCE_AUDIO.has(modelId);
+  let voiceReferenceSlots: VoiceReferenceSlot[] | undefined;
+  if (voiceRefEnabled) {
+    const slots: VoiceReferenceSlot[] = [];
+    const seen = new Set<string>();
+    for (const shot of shots) {
+      if (!shot.dialogue) continue;
+      const speakerUpper = shot.dialogue.character.toUpperCase();
+      if (speakerUpper === 'NARRATOR' || speakerUpper === 'V.O.' || speakerUpper === 'VO') continue;
+      if (seen.has(speakerUpper) || slots.length >= 3) continue;
+      const speakingChar = series.characters.find(c => c.name.toUpperCase() === speakerUpper);
+      if (speakingChar?.voiceReferencePath) {
+        seen.add(speakerUpper);
+        slots.push({ characterName: speakingChar.name, audioIndex: slots.length + 1 });
+      }
+    }
+    if (slots.length > 0) {
+      voiceReferenceSlots = slots;
+      for (const slot of slots) {
+        const charSlot = characterElements.find(
+          s => s.characterName.toUpperCase() === slot.characterName.toUpperCase(),
+        );
+        const ref = charSlot ? `@Image${charSlot.elementIndex}` : slot.characterName;
+        parts.push(
+          `Use @Audio${slot.audioIndex} only for ${ref}'s voice identity — timbre, accent, pacing; ` +
+          'regenerate clean studio dialogue, do not copy any noise from the reference.',
+        );
+      }
+    }
+  }
+
+  // Per-beat blocks, separated by literal `Lens switch.` lines (rule 21).
+  for (let index = 0; index < shots.length; index++) {
+    const shot = shots[index];
+    const cameraTerm = CAMERA_TERMS[shot.cameraMovement.toLowerCase()] ?? shot.cameraMovement;
+    const shotParts: string[] = [];
+
+    shotParts.push(`Shot ${index + 1} (${parseShotDuration(shot.duration)}s): ${cameraTerm}.`);
+    shotParts.push(substituteTags(shot.description));
+
+    // Restate authored spatial blocking per beat so placement and screen
+    // direction hold across the internal cuts (rule 49).
+    if (shot.blocking) {
+      shotParts.push(`Blocking: ${substituteTags(shot.blocking)}`);
+    }
+
+    if (shot.dialogue) {
+      const speakingChar = series.characters.find(
+        c => c.name.toUpperCase() === shot.dialogue!.character.toUpperCase(),
+      );
+      const voiceDesc = speakingChar?.voiceDescription ?? '';
+      const delivery = shot.dialogue.delivery || '';
+      const slot = characterElements.find(
+        s => s.characterName.toUpperCase() === shot.dialogue!.character.toUpperCase(),
+      );
+      const charRef = slot ? `@Image${slot.elementIndex}` : shot.dialogue.character;
+      const voiceParts = [voiceDesc, delivery].filter(Boolean).join(', ');
+      shotParts.push(`[${charRef}, ${voiceParts}]: "${shot.dialogue.line}"`);
+    }
+
+    if (shot.sfx) {
+      shotParts.push(`Sound of ${shot.sfx}.`);
+    }
+
+    parts.push(shotParts.join(' '));
+
+    if (index < shots.length - 1) {
+      parts.push('Lens switch.');
+    }
+  }
+
+  // Geography hold across the internal cuts, pinned to the plate when one
+  // exists, otherwise to the first location angle (rule 49).
+  const sbSlot = plan.slots.find(s => s.kind === 'storyboard');
+  const locSlot = plan.slots.find(s => s.kind === 'location');
+  if (sbSlot) {
+    parts.push(
+      `The blocking follows @Image${sbSlot.imageIndex} in every shot: each character stays ` +
+      'on the same side of the scene and keeps the same position relative to its landmarks; ' +
+      'do not mirror, swap, or rearrange who stands where.',
+    );
+  } else if (locSlot) {
+    parts.push(
+      `Keep the geography of @Image${locSlot.imageIndex} fixed across every shot: landmarks ` +
+      'stay where they are, and each subject holds their stated position and screen side.',
+    );
+  }
+
+  const anyDaytime = shots.some(s => isDaytimeShot(s));
+  let compactAesthetic = buildCompactAestheticString(series.aesthetic);
+  if (anyDaytime) {
+    compactAesthetic = stripDarkAesthetic(compactAesthetic);
+    parts.push('Bright daytime scene, natural light, no rain.');
+  }
+  parts.push(`Visual style: ${compactAesthetic}.`);
+  parts.push(VIDEO_NO_MUSIC_SUFFIX);
+
+  // Venice video prompt limit (2500 chars on the Seedance family). NOT
+  // getMaxPositivePromptChars — that is the image-model cap (default 300).
+  let prompt = parts.join(' ').trim();
+  const VENICE_VIDEO_PROMPT_LIMIT = 2500;
+  if (prompt.length > VENICE_VIDEO_PROMPT_LIMIT) {
+    console.warn(`  Multi-shot prompt is ${prompt.length} chars (limit: ${VENICE_VIDEO_PROMPT_LIMIT}). Trimming the aesthetic to fit.`);
+    const overBy = prompt.length - VENICE_VIDEO_PROMPT_LIMIT + 20;
+    const aestheticPart = buildCompactAestheticString(series.aesthetic);
+    const truncatedAesthetic = aestheticPart.slice(0, Math.max(40, aestheticPart.length - overBy));
+    const idx = parts.findIndex(p => p.startsWith('Visual style: '));
+    if (idx >= 0) parts[idx] = `Visual style: ${truncatedAesthetic}.`;
+    prompt = parts.join(' ').trim();
+    if (prompt.length > VENICE_VIDEO_PROMPT_LIMIT) {
+      prompt = prompt.slice(0, VENICE_VIDEO_PROMPT_LIMIT);
+      console.warn(`  Prompt still over limit after truncation. Hard-cut to ${VENICE_VIDEO_PROMPT_LIMIT} chars.`);
+    }
+  }
+
+  return {
+    prompt,
+    model: modelId,
+    duration: unit.duration,
+    audio: true,
+    characterElements: characterElements.length > 0 ? characterElements : undefined,
+    voiceReferenceSlots,
+    referenceSlots: plan.slots.length > 0 ? plan.slots : undefined,
+    referenceImageUrls: plan.slots.length > 0 ? [] : undefined,
+    modelResolution: {
+      modelId,
+      upgraded: false,
+      reason: `multi-shot unit — Seedance native multi-shot with Lens switch separators (rule 21)`,
+      autoUseElements: false,
+      autoUseReferenceImages: true,
+      useImageTags: true,
+    },
+  };
+}
+
+/**
+ * Legacy Kling 3.0 native multi-shot format. Used only when the project
+ * explicitly overrides `videoDefaults.multiShotModel` to a non-@Image-tag
+ * model (e.g. `kling-o3-pro-image-to-video`). Note that model has NO
+ * reference support — identity anchoring is prompt-text only.
+ */
 export function buildKlingMultiShotPrompt(
   shots: ShotScript[],
   unit: GenerationUnit,
   series: SeriesState,
+  modelId: string = KLING_MULTISHOT_MODEL,
 ): MiniDramaVideoPrompt {
   if (!series.aesthetic) {
     throw new Error('Series aesthetic must be set before generating videos.');
@@ -697,7 +991,7 @@ export function buildKlingMultiShotPrompt(
     .filter((char): char is MiniDramaCharacter => Boolean(char));
 
   // Build element slots for identity anchoring (Kling O3 Pro supports elements)
-  const useElements = MODELS_SUPPORTING_ELEMENTS.has(KLING_MULTISHOT_MODEL);
+  const useElements = MODELS_SUPPORTING_ELEMENTS.has(modelId);
   let characterElements: CharacterElementSlot[] | undefined;
   if (useElements && uniqueCharacters.length > 0) {
     characterElements = uniqueCharacters.slice(0, 2).map((char, index) => ({
@@ -706,7 +1000,7 @@ export function buildKlingMultiShotPrompt(
     }));
   }
 
-  const useRefs = MODELS_SUPPORTING_REFERENCE_IMAGES.has(KLING_MULTISHOT_MODEL);
+  const useRefs = MODELS_SUPPORTING_REFERENCE_IMAGES.has(modelId);
 
   const wardrobeByChar = new Map<string, string>();
   for (const shot of shots) {
@@ -750,14 +1044,22 @@ export function buildKlingMultiShotPrompt(
 
     shotParts.push(`Shot ${index + 1} (${parseShotDuration(shot.duration)}s): ${cameraTerm}.`);
 
-    let desc = shot.description;
-    if (useElements && characterElements) {
+    const substituteMultiShotTags = (text: string): string => {
+      if (!useElements || !characterElements) return text;
+      let out = text;
       for (const slot of characterElements) {
         const re = new RegExp(`\\b${slot.characterName}\\b`, 'gi');
-        desc = desc.replace(re, `@Element${slot.elementIndex}`);
+        out = out.replace(re, `@Element${slot.elementIndex}`);
       }
+      return out;
+    };
+    shotParts.push(substituteMultiShotTags(shot.description));
+
+    // Restate authored spatial blocking per shot so placement and screen
+    // direction hold across the multi-shot sequence's internal cuts.
+    if (shot.blocking) {
+      shotParts.push(`Blocking: ${substituteMultiShotTags(shot.blocking)}`);
     }
-    shotParts.push(desc);
 
     // Kling 3.0 dialogue format: [Character, voice description]: "line"
     if (shot.dialogue) {
@@ -816,7 +1118,7 @@ export function buildKlingMultiShotPrompt(
 
   return {
     prompt,
-    model: KLING_MULTISHOT_MODEL,
+    model: modelId,
     duration: unit.duration,
     audio: true,
     characterElements,
