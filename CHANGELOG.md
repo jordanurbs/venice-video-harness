@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.13.1 — 2026-08-05
+
+### Changed
+
+- **README: Video Model Routing catches up with the 2.13.0 multi-shot default.**
+  The routing table gained a "Multi-shot units" row naming
+  `seedance-2-0-enhanced-reference-to-video` as the default lane (`Lens switch.`
+  separators, pure reference mode from the full slot plan) with
+  `kling-o3-pro-image-to-video` demoted to an explicit
+  `videoDefaults.multiShotModel` override, and the "carry these" rule 3 now
+  notes the planner applies Seedance native multi-shot by default. Docs only.
+
 ## 2.13.0 — 2026-08-05
 
 ### Changed

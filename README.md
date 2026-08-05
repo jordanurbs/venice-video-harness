@@ -433,6 +433,8 @@ Anti-Patterns" (28 entries). If you can only carry a few, carry these:
 3. **Prefer Seedance native multi-shot for any 2–3 beat scene.** One generation
    with `Lens switch.` separators holds identity, environment, and lighting
    across the beats and costs roughly 3× less than three separate renders.
+   (Since 2026-08-05 the planner does this by default: multi-shot units render
+   on Seedance R2V Enhanced with the full reference slot plan.)
 4. **Front-load style.** Aesthetic descriptions go at the start of a prompt, not
    the end, or style drifts across angles.
 5. **Keep Seedance prompts under 60 words**, using Subject, Action, Camera,
@@ -944,6 +946,7 @@ Every shot renders in **pure reference mode** — no start image — from an ord
 | **Character shots (up to ~6 characters)** | `seedance-2-0-enhanced-reference-to-video` | Default R2V — up to 9 `reference_image_urls` with `@Image` tags (chars + blocking plate + location angles), 1080p, up to 15s, native stereo audio |
 | **Character shots (budget overflow)** | `kling-o3-standard-reference-to-video` | Auto-fallback — structured `elements` for multi-character identity |
 | **Establishing / mood / action** | `seedance-2-0-enhanced-reference-to-video` | Anchors to location reference angles via `@Image` tags |
+| **Multi-shot units (2+ grouped beats)** | `seedance-2-0-enhanced-reference-to-video` | Default since 2026-08-05 — ONE native multi-shot generation with `Lens switch.` separators, pure reference mode from the full slot plan. The old default `kling-o3-pro-image-to-video` (no reference support at all) is an explicit `videoDefaults.multiShotModel` override only |
 
 These defaults are overridable per-project via `series.json` → `videoDefaults`. To target a non-Seedance family (e.g. for accounts that lack Seedance access, or projects that need a different look), set `videoDefaults` to `kling-o3-standard-reference-to-video` (character consistency) and `veo3.1-fast-image-to-video` (atmosphere). Image models default to `nano-banana-2` / `nano-banana-2-edit` for all panels regardless of video family.
 
