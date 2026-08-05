@@ -4,6 +4,8 @@ A standalone, Venice-optimized CLI for **consistency-first video creation** at a
 
 Install it, enter a Venice API key, and create films directly from the terminal. No coding agent, IDE extension, or MCP host is required. The same repository also includes optional orchestration material for agent-driven workflows.
 
+> **If you are an AI agent driving this CLI, read [Driving this from an agent](#driving-this-from-an-agent) before running any command.** The pipeline is gated and the commands are order-dependent; `--help` alone is not enough to operate it, and several stages spend money at queue time.
+
 Use it for:
 
 - **Character-consistent video projects** (any genre, any length)
@@ -19,11 +21,401 @@ Use it for:
 
 Most Venice integrations are thin wrappers around API calls. This package is the higher-level production layer:
 
-- **Standalone `venice-video` CLI** with setup, diagnostics, project creation, generation, QA, assembly, and export commands
+- **Standalone `venice-video` CLI** with setup, diagnostics, self-update, project creation, generation, QA, assembly, and export commands
 - **Direct Venice API client** with retries, rate limiting, deprecation warnings, and async media polling
 - **Persistent project state** for characters, locations, episodes, references, recipes, and provenance
 - **Comprehensive model registry** covering Venice video, image, audio, and music models
 - **Optional agent orchestration** in `AGENTS.md` and `.claude/` for users who want natural-language operation
+
+## Driving this from an agent
+
+Instructions for a coding agent operating the harness — Claude Code, Cursor,
+Hermes Agent, OpenClaw, OpenCode, Codex, or anything else with a shell tool.
+Read this section in full before the first command.
+
+### Pick your surface, and know what it gives you
+
+Three surfaces exist. They differ in how much of the harness's operating
+knowledge reaches you, which is the single largest predictor of output quality.
+
+| Surface | How it runs | What you get | Use when |
+|---|---|---|---|
+| **Repo-resident agent** | Agent's cwd is a clone of this repo | Everything: `AGENTS.md` (47 rules, 20 anti-patterns), `.claude/commands/`, `.claude/agents/`, `.claude/skills/`, `.cursor/rules/` | Authoring and iteration — the best results by a wide margin |
+| **MCP** | `venice-video-mcp` shells out to this CLI | 7 action-discriminated tools, structured JSON responses, progress notifications, plus 4 companion skills carrying the pipeline order | Any agent that supports MCP but is not sitting in this repo |
+| **Bare global CLI** | `npm install -g`, shell tool, `--help` | The compiled CLI, this README, and the self-describing commands below (`agent-guide`, `pipeline`) | Last resort, but no longer knowledge-free — start with `venice-video agent-guide` |
+
+**The bare-CLI trap, and how to check whether you are in it.** Through version
+**2.9.0** the npm package published only `dist`, `README.md`, `CHANGELOG.md`,
+`LICENSE`, and `scripts/postinstall.mjs`. `AGENTS.md` and `.claude/` were left
+out, so an agent working from a global install of those versions had no access to
+the anti-patterns, the model-routing rules, or the pipeline playbooks. It saw a
+flat list of 40-plus commands with no ordering information and no indication of
+which stages were gated. That is the most common reason agent-driven runs produce
+poor output, and it is a knowledge problem rather than a capability problem.
+
+From **2.10.0** onward the package ships `AGENTS.md`, `.claude/commands/`,
+`.claude/agents/`, and `.claude/skills/`. Check what your install actually has:
+
+```bash
+ls "$(npm root -g)/venice-video-harness/AGENTS.md"
+```
+
+If that file is present, read its "Agent Rules" and "Learned Anti-Patterns"
+sections before generating anything. If it is missing, you are on an older
+package and must do one of the following first:
+
+1. **Upgrade**, then read the shipped `AGENTS.md`.
+2. **Register the MCP server** (see below). It carries the pipeline order in its
+   companion skills and returns JSON instead of prose.
+3. **Clone this repo** and work inside it, so `AGENTS.md` and `.claude/` load
+   from the working tree.
+4. **Read `AGENTS.md` from GitHub** and hold its rules in context for the session.
+
+`.cursor/rules/` is intentionally repo-only; it is IDE configuration, not
+operating knowledge.
+
+### The CLI describes itself (start here on any surface)
+
+From **2.11.0** the essential knowledge travels inside the binary, so even a bare
+global install is not knowledge-free. Three things to run first, all of which
+support `--json` for machine consumption:
+
+```bash
+venice-video agent-guide          # the core rules: gates, queue-time billing, long-render handling
+venice-video pipeline --json      # the ordered stages, their gates, and the next command for each
+venice-video status -p <dir> --json   # where a project stands and the exact command to run next
+```
+
+`agent-guide` is the ~80/20 subset of `AGENTS.md` — read it before generating
+anything, then reach for the full rules and playbooks when you need depth. The
+same core rules are installable as a skill for runners that pull skills from
+GitHub: `hermes skills install jordanurbs/venice-video-harness/venice-agent-guide`
+(and any of the other `.claude/skills/` by name).
+
+### ACP does not run the harness, and it does not provision a runtime
+
+ACP is the **Agent Client Protocol**, and it is worth being precise about the
+direction it points, because two different readings lead to two different setups.
+
+ACP connects an **editor (the client) to an agent**. The editor spawns the agent
+as a subprocess and speaks JSON-RPC to it over stdio, and the **editor supplies
+the working directory** — in Hermes's adapter, `session/new` receives `cwd` from
+the client and the agent adopts it. So ACP does not start a runtime, does not
+provision a sandbox, and does not move work off the workspace; it standardizes an
+editor driving an agent against a workspace the editor already has open. It is
+also stdio-only and local-trust by design, so there is no remote endpoint in the
+picture.
+
+That means the harness has no position in an ACP conversation. The harness is a
+**tool the agent calls**; ACP describes who calls the agent. The tool-side
+protocol is MCP, which already exists as a separate package. The two stack rather
+than compete: an editor drives your agent over ACP, and that agent drives the
+harness over MCP or a shell.
+
+### Running the harness in a separate runtime (this is the real question)
+
+Starting a fresh runtime to run long workflows off the main workspace is a real
+and useful capability — it is just not ACP. In Hermes it is the **terminal
+backend**, configured independently of any protocol:
+
+```yaml
+# ~/.hermes/config.yaml
+terminal:
+  backend: local        # local | docker | ssh | modal | daytona | singularity
+  timeout: 180
+  lifetime_seconds: 300
+```
+
+A remote or containerized backend is a good fit for this harness, because renders
+are long, CPU-idle, and network-bound — exactly the work you want off a laptop.
+But the harness keeps state on disk, so four things have to be true before a
+non-`local` backend produces usable output:
+
+| Requirement | Why |
+|---|---|
+| `venice-video`, `ffmpeg`, `ffprobe` installed **in the runtime image** | The default images are generic Node/Python; none of the three is present |
+| `VENICE_API_KEY` reaches the runtime | Via the backend's env passthrough, not your shell |
+| `VENICE_VIDEO_WORKSPACE` on a **persistent volume** | Renders land next to the process. On an ephemeral container they are deleted with it |
+| A retrieval step back to the host | Nothing copies `masters/` or `output/` home for you |
+
+**The trap specific to this harness.** `pending-jobs.json` — the record that makes
+an interrupted render re-attachable instead of re-billable — is written to the
+**per-machine config directory** (`~/Library/Application Support/venice-video` on
+macOS, `~/.config/venice-video` on Linux). In an ephemeral runtime that directory
+dies with the container, so a render that was already queued and billed becomes
+unrecoverable: the new runtime has no record to re-attach to. If you run renders
+in a container, mount the config directory persistently, or keep generation on a
+`local`/persistent backend and use the remote runtime only for assembly.
+
+### Long renders need a background invocation, not a longer timeout
+
+This applies to every agent runner with a command timeout, and it is a common
+cause of half-finished runs that look like harness failures.
+
+`generate-videos`, `assemble-episode`, `produce-episode`, `finish`, and
+`upscale` routinely run **3–10 minutes**. Hermes's terminal tool defaults to a
+**180-second** timeout and hard-caps a *foreground* command at 600s, rejecting
+anything higher with a note to use `background=true` with
+`notify_on_complete=true`. A foreground render therefore gets killed partway
+through on the default settings.
+
+Because Venice bills at queue time, a killed render is **already paid for**. So:
+
+- Run every generation or assembly stage as a **background command with
+  completion notification**, not a foreground call with a raised timeout.
+- If one does get killed, **re-run the identical command** — see below on
+  re-attaching. Do not treat the kill as a failed render and start over.
+- Raise `terminal.timeout` only for the short commands (`status`, `doctor`,
+  `validate-*`); it is the wrong tool for a 10-minute render.
+
+### Registering the MCP server
+
+```bash
+# Hermes Agent
+hermes mcp add venice-video --command node \
+  --args /ABS/PATH/venice-video-mcp/bin/venice-video-mcp.js
+hermes mcp test venice-video     # confirm the handshake before relying on it
+
+# Cursor / Claude Desktop: see venice-video-mcp/examples/
+```
+
+This path does not depend on a published release: pointed at a built clone, it
+runs whatever you have checked out, so it works ahead of npm.
+
+Environment for the server process:
+
+| Variable | Purpose |
+|---|---|
+| `VENICE_API_KEY` | Required. Forwarded to the harness |
+| `HARNESS_BIN` | Absolute path to `dist/mini-drama/cli.js` in a built clone. **Set this** |
+| `HARNESS_PATH` | Absolute path to a built clone. Fallback only — see below |
+| `HARNESS_WORKSPACE` | Absolute path where projects are created. Must already exist |
+
+**Resolution order (fixed in `venice-video-mcp` 0.4.0).** The server now resolves
+the harness as `HARNESS_BIN`, then `HARNESS_PATH/dist/mini-drama/cli.js`, then a
+`venice-video` on `PATH`. An explicit `HARNESS_PATH` now outranks an ambient
+global install, because setting it is a statement of intent — the old order let a
+stale global (npm `latest` trails this repo) silently win over a clone you pointed
+at deliberately. The server also logs the resolved binary once to stderr
+(`[venice-video-mcp] harness: …`), so the choice is never silent. `HARNESS_BIN` is
+still the most explicit and is recommended when you have a specific build in mind.
+
+Every MCP response includes the exact command it ran, so you can confirm which
+binary answered:
+
+```json
+{ "ok": true, "command": "node /path/to/harness/dist/mini-drama/cli.js list-series" }
+```
+
+If that shows a path under a global npm prefix when you meant to use a clone,
+`HARNESS_BIN` is missing.
+
+Then install its companion skills, which carry the pipeline order the tool
+descriptions deliberately leave out:
+
+```bash
+node /ABS/PATH/venice-video-mcp/bin/install-skills.js --global      # Claude/Cursor: ~/.claude/skills/
+node /ABS/PATH/venice-video-mcp/bin/install-skills.js --target hermes # Hermes: ~/.hermes/skills/venice/
+node /ABS/PATH/venice-video-mcp/bin/install-skills.js --dir <path>    # any other runner's skills dir
+```
+
+The four skills are `venice-mcp-pipeline` (request-to-tool-call mapping and the
+gate flowchart), `venice-mcp-cookbook` (one worked example per action),
+`venice-mcp-directing` (shot-prompt quality), and `venice-mcp-troubleshooting`
+(every known failure mode). Without them the MCP tools are thin per-command
+wrappers and you will reconstruct the pipeline by trial and error. Claude Code and
+Cursor read `.claude/skills/`; Hermes reads `~/.hermes/skills/`, so `--target
+hermes` installs a `venice` category there. OpenClaw's skills path is not verified
+yet — pass `--dir` once you know it.
+
+### Preflight: run these three checks first
+
+```bash
+venice-video --version          # must match the docs you are reading
+venice-video doctor             # API key, ffmpeg, ffprobe
+venice-video status -p <dir>    # pipeline stage + the next command to run
+```
+
+**Version-drift check is not optional.** The published npm `latest` trails this
+repo. Documentation for an unreleased version describes flags the installed
+binary rejects:
+
+```bash
+$ venice-video new --intelligence kimi-k3
+error: unknown option '--intelligence'
+```
+
+If `--version` does not match the version documented here, either upgrade or
+work from the `--help` output of the binary you actually have. Never construct a
+command from documentation you have not version-matched. When upgrading, pass
+the prefix explicitly, because a global install can silently land in a different
+Node prefix than the `venice-video` on your PATH:
+
+```bash
+npm install -g venice-video-harness@latest --prefix "$(npm prefix -g)" --foreground-scripts
+command -v venice-video && venice-video --version
+```
+
+### Set the workspace explicitly — always
+
+The project workspace resolves to `VENICE_VIDEO_WORKSPACE`, then the stored
+config value, then **`./output` relative to the current working directory**. A
+daemon-launched or GUI-launched agent has an arbitrary cwd, so projects get
+created in unpredictable places and every later `-p` lookup fails.
+
+```bash
+export VENICE_VIDEO_WORKSPACE=~/VeniceVideos
+```
+
+Pass `-p <project>` and `-e <episode>` explicitly on **every** command. The
+`use` / `unuse` selection is stored in user config and is meant for a human in
+`venice-video shell`; an agent inheriting whatever the operator last selected is
+a silent-wrong-project bug.
+
+### The pipeline is gated. This is the order
+
+```
+new  ->  workshop  ->  workshop --approve  ->  storyboard-episode
+                                                     |
+                                                     v
+                              qa-storyboard  ->  qa-approve
+                                                     |
+                                                     v
+                    generate-videos  ->  generate-music  ->  assemble-episode  ->  finish
+```
+
+Two gates block progress by design:
+
+| Gate | Cleared by | Blocks |
+|---|---|---|
+| Script approval | `workshop --approve` or `approve-script` | `storyboard-episode` |
+| Storyboard QA | `qa-approve`, after `qa-storyboard` reports no critical issues | `generate-videos` |
+
+**Do not route around a gate.** `--skip-approval` and `--skip-qa` exist for
+operators who have already reviewed the work by other means. An agent that hits
+a gate error and retries with a skip flag is spending money to render
+unreviewed panels, which is the exact outcome the gate prevents. When a gate
+blocks you, run `venice-video status -p <dir>`, which reports the stage and
+prints the next command in full copy-pasteable form, and clear the gate properly.
+
+`produce-episode` runs the whole pipeline in one command. It is not a reliable
+unattended path on a clean project, because it reaches stages that require a QA
+approval artifact that does not exist yet. Prefer the explicit stage-by-stage
+sequence.
+
+### Money is spent at queue time, so never blind-retry a render
+
+Venice charges when a render is **queued**, not when it is downloaded. A lost
+`queue_id` is money already spent.
+
+- Every queued render is recorded in `pending-jobs.json` keyed by output path
+  *before* the first poll. If a generation command is interrupted, **re-run the
+  identical command with the identical output path** — the harness re-attaches
+  to the in-flight job and resumes polling. Do not "start fresh."
+- Inspect in-flight work with `venice-video queue`. Only `queue clear` a record
+  you know is dead. Do not delete a pending record to silence a warning.
+- `venice-video queue` is Venice's side of the work; the shell's `/jobs` is only
+  the current session's background commands. Different lists.
+- A render produces no output for long stretches. That is normal, not a hang. Do
+  not kill and reissue a quiet command; see the timeout note above for how to
+  invoke these stages in the first place.
+- Use `POST /video/quote` (surfaced by the CLI before paid steps) to price a run
+  before committing. `finish` prints an estimate and requires `--yes` to proceed.
+
+### Parsing output
+
+The CLI is written for humans reading a terminal, but the agent-facing commands
+now also emit JSON:
+
+- **`--json` on the agent-facing commands** — `status`, `pipeline`, `agent-guide`,
+  `doctor`, and `queue` (plus a global `venice-video --json <command>`) print
+  exactly one JSON object on stdout, or use the MCP server, which returns
+  `{ ok, message, paths, data, warnings, ... }` as `structuredContent`. Commands
+  without `--json` still print prose — parse those conservatively.
+- **Exit codes are honest** (from 2.11.0). `venice-video status` with no project
+  now exits non-zero, not 0. `$?` is a reliable success signal for the
+  agent-facing commands.
+- **Ordinary errors are a clean `error:` line, not a stack trace** (from 2.11.0).
+  A usage error in a non-TTY prints the message and exits 1; set
+  `VENICE_VIDEO_DEBUG=1` to see the stack.
+- **Deprecation warnings go to stderr**, prefixed `⚠ MODEL DEPRECATION:`, once
+  per unique model/date pair. Surface them; they are the early signal that a
+  model is about to start failing.
+
+### Interactive commands, and how to run them non-interactively
+
+`new` and `workshop` prompt when attached to a TTY. In a non-TTY they require
+their arguments up front. A complete non-interactive project creation:
+
+```bash
+export VENICE_VIDEO_WORKSPACE=~/VeniceVideos
+
+venice-video new \
+  --type film \
+  --name "signal-drift" \
+  --concept "A radio astronomer starts hearing her own voice in the background noise" \
+  --genre "science fiction" \
+  --setting "a decommissioned desert array, present day" \
+  --audio-strategy native \
+  --video-family seedance
+
+venice-video workshop -p ~/VeniceVideos/signal-drift \
+  --outcome "Leave viewers unsettled by the signal" \
+  --duration "3 minutes" \
+  --audience "science fiction short-film viewers"
+
+venice-video workshop -p ~/VeniceVideos/signal-drift --status
+venice-video workshop -p ~/VeniceVideos/signal-drift --approve
+venice-video status -p ~/VeniceVideos/signal-drift
+```
+
+`new` requires at minimum `--type`, `--name`, and `--concept` without a TTY;
+everything else falls back to a default rather than prompting.
+
+### The rules that most affect output quality
+
+Full text lives in `AGENTS.md` > "Agent Rules" (47 rules) and "Learned
+Anti-Patterns" (20 entries). If you can only carry a few, carry these:
+
+1. **Direct the scene, don't decorate it.** Name one intention for the beat and
+   derive camera, light, blocking, performance, and sound from it. Stacking
+   "cinematic / epic / 4k / masterpiece" adjectives gives the model nothing to
+   serve.
+2. **Prefer 15s shots.** Two 15s shots beat five 6s shots on identity stability,
+   motion completion, continuity, and cost. Reserve short durations for
+   deliberate quick beats.
+3. **Prefer Seedance native multi-shot for any 2–3 beat scene.** One generation
+   with `Lens switch.` separators holds identity, environment, and lighting
+   across the beats and costs roughly 3× less than three separate renders.
+4. **Front-load style.** Aesthetic descriptions go at the start of a prompt, not
+   the end, or style drifts across angles.
+5. **Keep Seedance prompts under 60 words**, using Subject, Action, Camera,
+   Style, Constraints.
+6. **Never group shots with different characters into one multi-shot unit.**
+   Cuts between different speakers must be separate singles so each gets its own
+   identity anchoring.
+7. **Re-anchor every separately-rendered shot to the same locked references** and
+   restate the character's invariant traits — including relative size — in every
+   prompt.
+8. **Pass `aspectRatio` explicitly** on reference-to-video generation.
+9. **Never multi-edit close-up face shots on 16:9 panels.** The square-to-16:9
+   crop removes roughly 25% top and bottom, losing foreheads and chins.
+10. **Archive prior renders; never delete generated shot assets.**
+11. **Validate model capabilities before sending** `elements`,
+    `reference_image_urls`, `scene_image_urls`, `end_image_url`, or `audio_url`.
+    The registry is `src/venice/models.ts` in a clone; from a global install use
+    `.claude/skills/venice-video-model-routing/SKILL.md` or the model tables
+    below.
+12. **Ask before burning in subtitles**, and derive caption timings from
+    `ffmpeg silencedetect` on the rendered voiceover rather than estimating them.
+
+### Checkpoints where you should stop and ask
+
+The harness is quality-first and several stages are expensive and hard to undo.
+Stop for confirmation before: rendering an EDL cut, replacing native dialogue
+with TTS, burning in subtitles, upscaling to a 4K master, and any run whose
+quote you have not shown the operator. Post a short summary of what you are
+about to do and wait.
 
 ## Supported Venice Models (April 2026)
 
@@ -39,7 +431,8 @@ Live catalog as of **2026-05-20** (synced against `GET /api/v1/models?type=video
 | **HappyHorse 1.1** | i2v, R2V (up to 9 refs) | t2v | 15s | Yes (joint single-pass, 7-lang phoneme lip-sync) | **#1 blind-preference T2V + I2V** (Alibaba 15B). 3-15s, 720p/1080p, nine aspect ratios. Best for talking characters + multilingual localization; SFW/commercial-leaning. The `happyhorse` video-family now routes here. |
 | **HappyHorse 1.0** | i2v, R2V | t2v | 15s | Yes | Prior line, kept for back-compat. Livelier hand-camera realism / cinematic grain vs Seedance. |
 | **MiniMax H3** | i2v, R2V (up to 9 refs) | t2v | 15s (**5s floor**) | Yes (native stereo, not toggleable) | Open-weight omni-modal model — one net covers T2V/I2V/reference. **2K is the only resolution** (no draft tier) at ~1/3 the per-second cost of other families; 24fps, 2500-char prompts. The `minimax-h3` video-family routes here. Sub-5s durations are a hard 400. |
-| **Wan 2.7** | i2v, R2V, V2V, Spicy | t2v | 15s | Wan i2v has no audio; lip-syncs via `audio_url` input | **Lip-sync flagship.** Only Venice model with proper `audio_url`-driven mouth motion. R2V exposes per-element `audio_url` for multi-speaker. Spicy = uncensored i2v variant. |
+| **Wan 3.0** | i2v, R2V (up to 9 refs), Enhanced | t2v | **30s** | Yes (always on, not toggleable) | **Longest shots on Venice** — 5/10/15/20/25/30s at 480p/720p/1080p, five aspect ratios plus adaptive, 5000-char prompts. The `wan-3-0` video-family routes here. No audio input anywhere in the family, so it can't lip-sync to a supplied recording. `*-enhanced-*` variants are beta. |
+| **Wan 2.7** | i2v, R2V, V2V, Spicy | t2v | 15s | Wan i2v has no audio; lip-syncs via `audio_url` input | **The audio-driven fallback for exact lip-sync.** R2V exposes per-element `audio_url` for multi-speaker. Spicy = uncensored i2v variant. Seedance 2.x R2V and MiniMax H3 R2V also accept a top-level `audio_url`, so those families never route here. |
 | **Wan 2.6** | Standard, Flash, R2V | Standard | 15s | Yes (i2v/t2v); R2V capped at 10s | Now has R2V variant with `audio_url` input. 1080p. |
 | **Wan 2.5 Preview** | i2v | t2v | 10s | Yes | `audio_url` input. |
 | **Wan 2.2 A14B** | — | t2v | 5s | No | Legacy text-to-video. |
@@ -79,6 +472,41 @@ New since the last sync: `grok-imagine-image`, `grok-imagine-image-quality`, `lu
 - **Expressive speech / prompt-driven audio**: `seed-audio-1-0` (BytePlus Seed Audio 1.0 — 25 named voices, speed 0.5–2, up to a 2048-char prompt; premium prompt-directed narration/VO via the async audio queue). Use `generate-audio --prompt … [--voice … --speed …]`.
 - **SFX**: `elevenlabs-sound-effects-v2`, `mmaudio-v2-text-to-audio`
 - **TTS (ElevenLabs)**: `elevenlabs-tts-v3`, `elevenlabs-tts-multilingual-v2`
+
+### The intelligence model (2026-08-05 sync)
+
+Three steps in the pipeline reason rather than render: the **workshop** develops
+the project, **workshop-script** writes the shot script, and **qa-storyboard**
+reads the rendered panels back and flags identity, wardrobe, setting and framing
+drift. One model does all three, chosen when the project is created and stored on
+`series.intelligence`. It generates none of the pixels or audio.
+
+| Model | Tier | Reads panels | $/M out |
+|---|---|---|---|
+| **Kimi K3** (default) | private | yes | 18.75 |
+| GLM 5.2 | private | no | 4.40 |
+| Grok 4.5 | private | yes | 6.80 |
+| Fable 5 | anonymized | yes | 60.00 |
+| Opus 5 | anonymized | yes | 30.00 |
+| GPT 5.6 Sol | anonymized | yes | 37.50 |
+| Qwen 3.8 Max | anonymized | yes | 7.50 |
+
+**Private** means the prompt stays on Venice infrastructure. **Anonymized** means
+it is routed to an external provider with identifying metadata stripped.
+
+A text-only model cannot do storyboard QA, so it is paired with a vision-capable
+companion **from the same privacy tier** — GLM 5.2 borrows Grok 4.5, never an
+anonymized model. The pairing is shown before you commit to it, in the wizard and
+on the treatment page.
+
+```bash
+venice-video new                                   # asks, defaulting to Kimi K3
+venice-video new --intelligence claude-opus-5      # or state it upfront
+venice-video workshop -p <project> --model grok-4-5   # override one run
+```
+
+GLM 5.2 needs a second attempt at valid JSON about one time in three; the client
+retries automatically, so the choice costs latency rather than a failed command.
 
 ## What Makes It Venice-Optimized
 
@@ -228,6 +656,31 @@ venice-video workshop -p ~/VeniceVideos/my-film --approve
 Approval materializes the accepted aesthetic, cast, locations, and script into
 the existing production pipeline.
 
+### The treatment page tracks the run
+
+`WORKSHOP.html` is not written once and left to go stale. Every command that
+produces an artifact rewrites it, so the browser tab you already have open is
+one reload away from the current state. The page gains:
+
+- a **Production progress** card: the pipeline stage, panel/clip/dialogue
+  counts, and the next command in full copy-pasteable form (`-p` and `-e`
+  included, so it works pasted into any terminal, not only the shell)
+- an **Output** column on the shot script: each shot's panel thumbnail,
+  replaced by the clip's poster frame once the shot renders, with badges for
+  panel, clip, voiceover and its QA verdict — hover a flagged verdict to read
+  the issue
+
+Images are embedded as WebP data URIs, so the page stays a single self-contained
+file that survives being moved or emailed. Encoding is cached against each
+file's mtime in `.treatment-thumbs.json`, so a refresh only re-encodes what
+actually changed (a typical refresh is ~10ms). The refresh can never fail the
+command that triggered it: an undecodable panel or a half-written QA report
+just leaves that cell blank.
+
+Commands that refresh the page: `approve-script`, `storyboard-episode`,
+`fix-panel`, `insert-shot`, `qa-storyboard`, `qa-approve`, `generate-videos`,
+`generate-music`, `override-audio`, `assemble-episode`, and `finish`.
+
 The workshop also asks for the final delivery target. Choose **4K master** to
 keep generation/drafts economical and upscale only the approved assembled cut:
 
@@ -288,8 +741,38 @@ venice-video config show
 venice-video config set-workspace ~/VeniceVideos
 venice-video config unset-api-key
 venice-video list-series
+venice-video update
 venice-video --help
 ```
+
+### Staying up to date
+
+```bash
+venice-video update           # install the latest published release
+venice-video update --check   # report what is available, install nothing
+venice-video update --dry-run # print the npm command it would run
+venice-video update --tag next
+```
+
+The install goes to the prefix the running copy lives in, not to whatever `npm`
+happens to be first on your `PATH`. Those are the same directory in a plain
+install, but a Node version manager can leave them pointing at different
+prefixes — in which case `npm install -g` reports success while the executable
+you actually run stays on the old version. `update` reads the new version back
+off disk afterwards and says so if they disagree.
+
+A build that is ahead of the published tag — an unreleased local build, or a
+dist-tag that was rolled back — is reported rather than downgraded; pass
+`--force` to install the published version anyway.
+
+Two installs `update` will not overwrite, because it does not own them:
+
+- a copy in a project's `node_modules`, whose version belongs to that project's
+  lockfile (`npm install venice-video-harness@latest` there instead)
+- a copy running from a git checkout, where npm would clobber local work
+  (`git pull && npm install && npm run build`)
+
+In both cases the command prints the right instructions and exits non-zero.
 
 ### Interactive shell
 
@@ -413,21 +896,32 @@ These defaults are overridable per-project via `series.json` → `videoDefaults`
 
 ### Picking a family at project creation
 
-`venice-video new` asks which family to use, and `venice-video new-series` asks too when it's run on a terminal without `--video-family`. Both write the answer to `series.json` → `videoDefaults.videoFamilyPreference` and swap the action / atmosphere / character-consistency models to match. The wizard orders the families as Automatic, Seedance, MiniMax H3, HappyHorse, Grok Imagine, then Kling O3.
+`venice-video new` asks which family to use, and `venice-video new-series` asks too when it's run on a terminal without `--video-family`. Both write the answer to `series.json` → `videoDefaults.videoFamilyPreference` and swap the action / atmosphere / character-consistency models to match. The wizard orders the families as Automatic, Seedance, Wan 3.0, MiniMax H3, HappyHorse, Grok Imagine, then Kling O3.
 
 ### Choosing dialogue audio
 
 - **Native dialogue** keeps the shot on the selected video family. Seedance and HappyHorse attach each character's short voice-donor clip through `reference_audio_urls`, then generate the authored line in-frame with that voice identity.
-- **Exact lip-sync** renders the exact line with Venice speech, creates a Seedance identity keyframe, and drives Wan 2.7 mouth movement from that speech file through `audio_url`.
+- **Exact lip-sync** renders the exact line with Venice speech and passes that file to the video model as `audio_url`, so the character's mouth follows the recording.
 - **Narrator voice-over** keeps spoken narration out of the video prompt and mixes Venice speech over the picture in post.
 
-A voice-donor reference preserves timbre, accent, and pacing; it is not the exact dialogue recording. Wan 2.7 is used only when the project explicitly selects exact lip-sync.
+A voice-donor reference preserves timbre, accent, and pacing; it is not the exact dialogue recording. The two are separate API capabilities and separate strategies — a project only renders TTS up front when it explicitly selects exact lip-sync.
+
+Which model handles exact lip-sync depends on the family, because only some lanes accept an audio file:
+
+| Family | Lip-sync route | Cost per shot |
+|--------|----------------|---------------|
+| `seedance`, `auto` | In-family on `seedance-2-0-enhanced-reference-to-video`, which accepts a top-level `audio_url` | One render — the reference stack already anchors identity |
+| `minimax-h3` | In-family on `minimax-h3-reference-to-video`, the one H3 lane with `audio_input` | One render |
+| `happyhorse`, `wan-3-0`, `grok-imagine`, `kling-o3` | Out to `wan-2-7-image-to-video` | Two renders (~$0.85) — Wan 2.7 i2v takes no reference images, so a Seedance R2V pass supplies its keyframe first. See AGENTS.md rule 32 |
+
+Override the choice per project with `series.json` → `videoDefaults.lipSyncModel`.
 
 | Family | Picks | Trade-off |
 |--------|-------|-----------|
 | `seedance` | Seedance 2.0 Enhanced R2V for all three lanes | The default. Strongest identity anchoring, 720p drafts, 4-15s. |
+| `wan-3-0` | Wan 3.0 i2v (action/atmosphere) + Wan 3.0 R2V (identity) | The only family that renders past 15s: 5-30s at 480p/720p/1080p, native audio always on, 9-image reference stack. Takes no audio input, so exact lip-sync leaves the family. |
 | `minimax-h3` | H3 i2v (action/atmosphere) + H3 R2V (identity) | 2K with native stereo audio at ~1/3 the per-second cost. But 2K is the only resolution, so there's no cheap draft pass, and the 5s floor means 3-4s beats have to be re-scripted. |
-| `happyhorse` | HappyHorse 1.1 i2v + R2V | Best lip-sync (7 languages, phoneme-level), 3-15s, 720p/1080p. |
+| `happyhorse` | HappyHorse 1.1 i2v + R2V | Best native lip-sync (7 languages, phoneme-level), 3-15s, 720p/1080p. |
 | `grok-imagine` | Grok Imagine i2v + R2V | Atmosphere-forward look; R2V durations stepped at 5s/8s/10s. |
 | `kling-o3` | Kling O3 Standard i2v + R2V | Stylized and illustrated aesthetics; `elements` + `scene_image_urls`. |
 | `auto` | Whatever the harness currently defaults to | Tracks the default as it moves; Seedance Enhanced today. |

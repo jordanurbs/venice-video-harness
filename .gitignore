@@ -23,5 +23,6 @@ voices.json
 # part of the reusable harness surface. The harness's own roadmap lives in
 # HARNESS_IMPLEMENTATION_NOTES.md.
 HANDOFF.md
+HANDOFF-*.md
 HARNESS_HANDOFF.md
 HARNESS_EXTENSIONS_NOTE.md

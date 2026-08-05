@@ -227,22 +227,27 @@ export function resolveVideoModel(
     };
   }
 
-  // Only the explicit exact-lip-sync strategy routes dialogue through Wan 2.7.
-  // Native dialogue stays on the selected R2V family and uses voice-donor
-  // reference_audio_urls when supported (Seedance / HappyHorse).
-  // High-motion dialogue stays on R2V because Wan 2.7 prioritizes motion
-  // over reference adherence (hair color shifts, shirt pattern simplifies,
-  // eyes change) when forced to handle big movement.
+  // Only the explicit exact-lip-sync strategy routes dialogue to the lip-sync
+  // model. Native dialogue stays on the selected R2V family and uses
+  // voice-donor reference_audio_urls when supported (Seedance / HappyHorse).
+  // High-motion dialogue stays on R2V either way, because the audio-driven
+  // i2v lanes prioritize motion over reference adherence (hair color shifts,
+  // shirt pattern simplifies, eyes change) when forced to handle big movement.
+  //
+  // The reference/tag flags come from the capability sets rather than being
+  // hardcoded off: a reference-capable lip-sync model (Seedance or MiniMax H3
+  // R2V, which take a top-level audio_url) should still carry its full
+  // reference stack, while Wan 2.7 i2v genuinely has neither.
   const lipSyncModel = series.videoDefaults.lipSyncModel;
   const exactLipSync = series.videoDefaults.audioStrategy === 'lip-sync';
   if (exactLipSync && lipSyncModel && shotWantsLipSync(shot) && shot.characters.length <= 1) {
     return {
       modelId: lipSyncModel,
       upgraded: true,
-      reason: 'single-speaker dialogue, low/medium motion — Wan 2.7 lip-sync',
-      autoUseElements: false,
-      autoUseReferenceImages: false,
-      useImageTags: false,
+      reason: `single-speaker dialogue, low/medium motion — exact lip-sync via ${lipSyncModel}`,
+      autoUseElements: MODELS_SUPPORTING_ELEMENTS.has(lipSyncModel),
+      autoUseReferenceImages: MODELS_SUPPORTING_REFERENCE_IMAGES.has(lipSyncModel),
+      useImageTags: MODELS_USING_IMAGE_TAGS.has(lipSyncModel),
     };
   }
 

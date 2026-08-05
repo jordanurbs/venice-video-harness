@@ -18,10 +18,27 @@ export interface SeriesState {
   locations?: Location[];
   episodes: EpisodeMeta[];
   videoDefaults: VideoModelDefaults;
+  /**
+   * The reasoning model behind the project. Separate from `videoDefaults`
+   * because it makes none of the pixels -- it decides what gets made.
+   * Absent on projects created before 2.9.0, which fall back to the default.
+   */
+  intelligence?: IntelligenceDefaults;
   storyboardAspectRatio?: '16:9' | '9:16' | '1:1';
   outputDir: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Which model develops the workshop, writes the script, and reads panels back
+ * during QA. `visionModel` equals `model` unless the chosen model cannot see,
+ * in which case it is a companion from the same privacy tier -- see
+ * `resolveIntelligence` in `venice/text-models.ts`.
+ */
+export interface IntelligenceDefaults {
+  model: string;
+  visionModel: string;
 }
 
 export interface VideoModelDefaults {
@@ -44,20 +61,25 @@ export interface VideoModelDefaults {
    * Exact lip-sync model for dialogue shots whose character is a non-narrator
    * with a visible face. Consulted only when `audioStrategy === 'lip-sync'`.
    * Native dialogue stays on the selected R2V family and uses voice-donor
-   * references when supported. Defaults to `wan-2-7-image-to-video`.
+   * references when supported. Defaults to `resolveLipSyncModel(family)`:
+   * the family's own audio-driven R2V lane where one exists, otherwise
+   * `wan-2-7-image-to-video`.
    */
   lipSyncModel?: string;
   /**
-   * Auto-keyframe Wan 2.7 i2v from a Seedance R2V render instead of the
-   * panel image. Wan 2.7 has no `reference_image_urls` capability; its
-   * only identity anchor is the single `image_url` keyframe. A panel-derived
-   * keyframe drifts mid-clip because the panel was generated without strong
-   * character anchoring. When this flag is true (the default), every shot
-   * routed to the lip-sync model first renders a quick Seedance R2V pass
-   * (no audio, all character refs), extracts frame 1, and uses that frame
-   * as the Wan 2.7 keyframe — locking identity from frame 0 + adding
-   * lip-sync from the dialogue MP3. Doubles per-shot cost (~$0.85 total).
-   * Skip per-shot with `ShotScript.disableSeedanceKeyframe = true`.
+   * Auto-keyframe the lip-sync render from a Seedance R2V pass instead of the
+   * panel image. Applies only to lip-sync models with no
+   * `reference_image_urls` capability (Wan 2.7 i2v), whose only identity
+   * anchor is the single `image_url` keyframe. A panel-derived keyframe
+   * drifts mid-clip because the panel was generated without strong character
+   * anchoring. When this flag is true (the default), such a shot first
+   * renders a quick Seedance R2V pass (no audio, all character refs),
+   * extracts frame 1, and uses that frame as the keyframe — locking identity
+   * from frame 0 while the dialogue MP3 drives the mouth. Doubles per-shot
+   * cost (~$0.85 total). Skip per-shot with
+   * `ShotScript.disableSeedanceKeyframe = true`.
+   *
+   * Reference-capable lip-sync models skip the pre-pass entirely.
    *
    * See AGENTS.md rule 32 for the underlying motivation.
    */
@@ -140,12 +162,13 @@ export type SeedanceCompatibilityMode = 'prompt' | 'fallback' | 'launder';
  *                     range suffices, and you don't need precise control.
  *                     `assemble-episode` keeps `dialogueReplace: false`.
  *   - 'lip-sync'    — exact lip-sync mode: Venice TTS renders each dialogue
- *                     line, and Wan 2.7 i2v lip-syncs the character's mouth to the audio. Best when
- *                     a character speaks many times (so a single voice picks
- *                     up across the episode), the user wants accent control,
- *                     or the dialogue needs deterministic delivery.
- *                     The planner routes face-visible low/medium-motion
- *                     dialogue shots to `videoDefaults.lipSyncModel`.
+ *                     line and the video model receives it as `audio_url`, so
+ *                     the character's mouth follows that exact recording.
+ *                     Best when a character speaks many times (so a single
+ *                     voice picks up across the episode), the user wants
+ *                     accent control, or the dialogue needs deterministic
+ *                     delivery. The planner routes face-visible low/medium-
+ *                     motion dialogue shots to `videoDefaults.lipSyncModel`.
  *                     `assemble-episode` defaults `dialogueReplace: true`.
  *   - 'narrator-vo' — the speaker is a NARRATOR / voice-over only (no on-camera
  *                     speaking mouth). Every dialogue-bearing shot is queued
@@ -182,6 +205,12 @@ export type AudioStrategy = 'native' | 'lip-sync' | 'narrator-vo';
  *                      so every take is a finish-quality spend) and the
  *                      duration ladder starts at 5s, so 3-4s beats have to be
  *                      re-scripted or routed elsewhere.
+ *   - 'wan-3-0'      — Wan 3.0. The only family that renders past 15s: the
+ *                      ladder runs 5/10/15/20/25/30s at 480p/720p/1080p with
+ *                      native audio always on. Its R2V lane takes the same
+ *                      9-image reference stack as Seedance. It accepts no
+ *                      audio input at all, so exact lip-sync shots fall back
+ *                      to Wan 2.7.
  *   - 'grok-imagine' — Grok Imagine i2v + R2V (R2V durations stepped at
  *                      5s/8s/10s only). Pick for atmosphere-rich shots or
  *                      when the user wants Grok's signature look.
@@ -193,6 +222,7 @@ export type VideoFamilyPreference =
   | 'seedance'
   | 'happyhorse'
   | 'minimax-h3'
+  | 'wan-3-0'
   | 'grok-imagine'
   | 'kling-o3';
 
@@ -236,6 +266,14 @@ export function resolveVideoFamilyDefaults(
         actionModel: 'grok-imagine-image-to-video',
         atmosphereModel: 'grok-imagine-image-to-video',
         characterConsistencyModel: 'grok-imagine-reference-to-video',
+      };
+    case 'wan-3-0':
+      // Wan 3.0 (2026-08-05): 30s natives, 480p drafts, native audio always
+      // on. R2V carries identity with up to 9 reference images.
+      return {
+        actionModel: 'wan-3-0-image-to-video',
+        atmosphereModel: 'wan-3-0-image-to-video',
+        characterConsistencyModel: 'wan-3-0-reference-to-video',
       };
     case 'kling-o3':
       return {
@@ -734,12 +772,56 @@ export const KLING_R2V_MODEL = 'kling-o3-standard-reference-to-video';
 export const KLING_MULTISHOT_MODEL = 'kling-o3-pro-image-to-video';
 
 /**
- * Default exact lip-sync model. Used only when `audioStrategy === 'lip-sync'`
- * for visible, low/medium-motion single-speaker dialogue. Wan 2.7 i2v inherits
- * aspect ratio from the input image and follows the exact supplied `audio_url`.
- * Native dialogue remains on Seedance/HappyHorse with voice references.
+ * Fallback exact-lip-sync model, used when the project's chosen family has no
+ * audio-driven lane of its own. Wan 2.7 i2v inherits aspect ratio from the
+ * input image and follows the exact supplied `audio_url`, but it takes no
+ * reference images, so it needs the keyframe pre-pass in rule 32.
+ *
+ * Prefer `resolveLipSyncModel(family)` over reading this directly.
  */
 export const DEFAULT_LIP_SYNC_MODEL = 'wan-2-7-image-to-video';
+
+/**
+ * Exact-lip-sync model for a family, consulted only when
+ * `audioStrategy === 'lip-sync'` on visible, low/medium-motion single-speaker
+ * dialogue. Native dialogue never routes through here.
+ *
+ * Families whose own R2V lane accepts a top-level `audio_url` stay in-family,
+ * which is both cheaper and more faithful than leaving the family for Wan 2.7:
+ * the R2V lane keeps the full reference stack, so identity is anchored from
+ * frame 0 and the two-stage keyframe pre-pass (rule 32) is unnecessary.
+ * Everything else falls back to Wan 2.7 i2v.
+ */
+export function resolveLipSyncModel(family: VideoFamilyPreference): string {
+  switch (family) {
+    case 'seedance':
+    case 'auto':
+      // Seedance 2.0 R2V accepts a top-level `audio_url` (live queue probe
+      // 2026-07-23; the i2v/t2v lanes still reject it).
+      return 'seedance-2-0-enhanced-reference-to-video';
+    case 'minimax-h3':
+      // The only H3 lane with `audio_input: true` in GET /models.
+      return 'minimax-h3-reference-to-video';
+    case 'happyhorse':
+    case 'wan-3-0':
+    case 'grok-imagine':
+    case 'kling-o3':
+    default:
+      return DEFAULT_LIP_SYNC_MODEL;
+  }
+}
+
+/**
+ * Does this lip-sync model need the Seedance R2V keyframe pre-pass (rule 32)?
+ *
+ * Only models with no `reference_image_urls` lane do. Their single identity
+ * anchor is the `image_url` keyframe, and a panel-derived keyframe drifts
+ * mid-clip. A reference-capable lip-sync model already carries the full
+ * reference stack into the render, so the extra pass is wasted spend.
+ */
+export function lipSyncModelNeedsKeyframe(modelId: string): boolean {
+  return !MODELS_SUPPORTING_REFERENCE_IMAGES.has(modelId);
+}
 
 /**
  * Default image models for ALL panels — character-bearing and faceless alike.
@@ -821,6 +903,10 @@ export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   // it still exposes reference_image_urls at the API level.
   'wan-2-7-reference-to-video',
   'wan-2.6-reference-to-video',
+  // Wan 3.0 R2V (standard + enhanced). Reference images need a short side
+  // of at least 240px.
+  'wan-3-0-reference-to-video',
+  'wan-3-0-enhanced-reference-to-video',
   'vidu-q3-image-to-video',
   'vidu-q3-text-to-video',
 ]);
@@ -942,6 +1028,8 @@ export const MAX_REFERENCE_IMAGES_BY_MODEL: Record<string, number> = {
   'seedance-2-0-fast-reference-to-video': 9,
   'happyhorse-1-1-reference-to-video': 9,
   'minimax-h3-reference-to-video': 9,
+  'wan-3-0-reference-to-video': 9,
+  'wan-3-0-enhanced-reference-to-video': 9,
 };
 
 export const DEFAULT_MAX_REFERENCE_IMAGES = 4;

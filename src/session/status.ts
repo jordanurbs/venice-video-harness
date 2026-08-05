@@ -75,7 +75,12 @@ function classifyEpisode(
     title: series.episodes.find(e => e.number === episode)?.title,
     hasScript: Boolean(script),
     shotCount: script?.shots?.length ?? 0,
-    scriptApproved: existsSync(join(episodeDir, 'script-approved.json')),
+    // Mirror the gate in `storyboard-episode`, which accepts either marker.
+    // `approve-script` writes the artifact; `workshop --approve` instead sets
+    // the script's own status, and checking only the file told every
+    // workshop-driven project to re-approve a script it had already shot.
+    scriptApproved: existsSync(join(episodeDir, 'script-approved.json'))
+      || script?.status === 'approved',
     qaReported: existsSync(join(episodeDir, 'qa-report.json')),
     qaApproved: existsSync(join(episodeDir, 'qa-approved.json')),
     panelCount: countMatching(sceneDir, /^shot-\d+\.png$/),
@@ -117,6 +122,25 @@ function classifyEpisode(
   }
 
   return status;
+}
+
+/**
+ * Turn a shell-form suggestion (`qa-storyboard -e 3`) into one that also works
+ * pasted into a plain terminal (`qa-storyboard -p "<dir>" -e 3`).
+ *
+ * Inside the shell `-p` defaults to the selection, so the short form is what
+ * gets suggested there. Anywhere the project is not implied -- the treatment
+ * page, a log someone reads tomorrow -- the command needs the directory or it
+ * fails on a missing required option. A trailing `# comment` stays trailing.
+ */
+export function qualifyCommand(command: string, projectDir: string): string {
+  if (/(^|\s)(-p|--project)(\s|=)/.test(command)) return command;
+  const [body, ...comment] = command.split('#');
+  const tokens = body.trimEnd().split(/\s+/);
+  const head = tokens.shift() ?? command;
+  const rest = tokens.length > 0 ? ` ${tokens.join(' ')}` : '';
+  const suffix = comment.length > 0 ? `   #${comment.join('#')}` : '';
+  return `${head} -p "${projectDir}"${rest}${suffix}`;
 }
 
 export async function collectProjectStatus(projectDir: string): Promise<ProjectStatus | null> {

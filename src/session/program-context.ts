@@ -26,7 +26,7 @@ import {
  */
 const CONTEXT_EXEMPT_COMMANDS = new Set([
   'use', 'unuse', 'status', 'queue', 'shell',
-  'setup', 'config', 'doctor', 'new', 'new-series', 'list-series',
+  'setup', 'config', 'doctor', 'update', 'new', 'new-series', 'list-series',
 ]);
 
 interface RelaxedOption {

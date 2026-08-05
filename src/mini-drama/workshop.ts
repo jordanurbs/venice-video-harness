@@ -1,12 +1,15 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
+import { REFERENCE_THUMBNAIL_PX, ThumbnailCache, type Thumbnails } from './thumbnails.js';
+import type { ShotArtifacts, TreatmentProgress } from './treatment.js';
 import type { VeniceClient } from '../venice/client.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import type { Character, EpisodeScript, Location, SeriesState } from '../series/types.js';
 import { addEpisode, saveEpisodeScript, saveSeries } from '../series/manager.js';
 import { getProjectLanguage } from '../series/project-language.js';
+import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence } from '../venice/text-models.js';
 
 export interface WorkshopInputs {
   objective: string;
@@ -86,6 +89,42 @@ export async function inventoryReferencePath(value: string): Promise<WorkshopRef
       truncated: full.length > MAX_TEXT_CHARS_PER_FILE || undefined,
     };
   }));
+}
+
+/** @deprecated Use {@link Thumbnails} from `./thumbnails.js`. */
+export type ReferenceThumbnails = Thumbnails;
+
+const MAX_THUMBNAILS = 24;
+
+/**
+ * Renders inline previews for the image and video references so the workshop
+ * page shows the creative direction instead of a list of file paths.
+ *
+ * Best-effort throughout: a reference that can't be decoded (corrupt file,
+ * exotic codec, no ffmpeg on PATH) is simply left out and falls back to its
+ * path row in the page.
+ */
+export async function buildReferenceThumbnails(
+  sources: ReadonlyArray<WorkshopReferenceSource>,
+  cache?: ThumbnailCache,
+): Promise<Thumbnails> {
+  const previewable = sources
+    .filter(source => source.kind === 'image' || source.kind === 'video')
+    .slice(0, MAX_THUMBNAILS);
+  if (previewable.length === 0) return new Map();
+
+  const thumbnails = new Map<string, string>();
+  const store = cache ?? ThumbnailCache.ephemeral();
+  for (const source of previewable) {
+    const dataUri = await store.get(
+      source.path,
+      REFERENCE_THUMBNAIL_PX,
+      source.kind === 'video' ? 'video' : 'image',
+    );
+    if (dataUri) thumbnails.set(source.path, dataUri);
+  }
+  if (!cache) await store.save();
+  return thumbnails;
 }
 
 export interface WorkshopDraft {
@@ -184,7 +223,7 @@ ${language.structureGuidance}
 ${language.closingShotGuidance}
 ${language.locationGuidance}
 
-Treat 4K as a final delivery/finishing target, never as a reason to make every draft generation at 4K. Native dialogue means the selected video model speaks in-frame; Seedance and HappyHorse use voice-donor references when available. Exact lip-sync means Venice speech drives Wan 2.7 mouth movement. Respect the project's selected audio strategy.
+Treat 4K as a final delivery/finishing target, never as a reason to make every draft generation at 4K. Native dialogue means the selected video model speaks in-frame; Seedance and HappyHorse use voice-donor references when available. Exact lip-sync means Venice speech is rendered first, passed to the video model as an audio file, and the character's mouth follows that recording. Respect the project's selected audio strategy.
 
 Every shot must have one dramatic intention, specific camera/blocking/light/performance direction, a location slug, a valid duration string, and no background music or sound effects baked into its description. Return ONLY valid JSON matching the requested schema.`;
 }
@@ -250,18 +289,14 @@ export async function generateWorkshop(
   previous?: WorkshopDraft | null,
   feedback?: string,
 ): Promise<WorkshopDraft> {
-  const response = await client.post<{ choices: Array<{ message: { content: string } }> }>('/api/v1/chat/completions', {
+  const parsed = await client.chatJson<WorkshopDraft>({
     model,
-    messages: [
-      { role: 'system', content: buildWorkshopSystemPrompt(series) },
-      { role: 'user', content: buildWorkshopUserPrompt(series, inputs, previous, feedback) },
-    ],
-    max_tokens: 16_000,
+    systemPrompt: buildWorkshopSystemPrompt(series),
+    userPrompt: buildWorkshopUserPrompt(series, inputs, previous, feedback),
+    maxTokens: 16_000,
     temperature: 0.65,
+    label: 'workshop',
   });
-  const raw = response.choices?.[0]?.message?.content ?? '';
-  const json = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-  const parsed = JSON.parse(json) as WorkshopDraft;
   return normalizeDraft(
     parsed,
     series,
@@ -271,12 +306,42 @@ export async function generateWorkshop(
   );
 }
 
-export function renderWorkshopMarkdown(draft: WorkshopDraft): string {
+/**
+ * Image references become markdown embeds so a preview pane shows them
+ * inline; everything else stays a plain path row.
+ */
+function renderReferenceMarkdown(refs: ReadonlyArray<WorkshopReferenceSource>): string[] {
+  if (refs.length === 0) return ['- None supplied; the workshop proposed the creative direction.'];
+  return refs.map(source => (source.kind === 'image'
+    ? `![${basename(source.path)}](${source.path})`
+    : `- ${source.kind}: \`${source.path}\``));
+}
+
+function renderProgressMarkdown(progress: TreatmentProgress | undefined): string[] {
+  if (!progress) return [];
+  return [
+    '## Production progress',
+    `Stage: **${progress.stage}** · refreshed ${new Date(progress.refreshedAt).toLocaleString()}`,
+    '',
+    `- Panels: ${progress.panelCount} / ${progress.shotCount}`,
+    `- Clips: ${progress.videoCount} / ${progress.shotCount}`,
+    `- Dialogue: ${progress.dialogueCount} / ${progress.shotCount}`,
+    `- Music: ${progress.hasMusic ? 'rendered' : 'not yet'}`,
+    ...(progress.finalCutPath ? [`- Final cut: \`${progress.finalCutPath}\``] : []),
+    '',
+    ...(progress.nextCommand
+      ? ['Next command:', '', '```bash', progress.nextCommand, '```', '']
+      : ['Nothing pending — this episode is assembled.', '']),
+  ];
+}
+
+export function renderWorkshopMarkdown(draft: WorkshopDraft, progress?: TreatmentProgress): string {
   const lines = [
     `# ${draft.projectName} — workshop`,
     '',
     `Status: **${draft.status}** · Revision ${draft.revision}`,
     '',
+    ...renderProgressMarkdown(progress),
     '## Logline', draft.logline, '',
     '## Synopsis', draft.synopsis, '',
     '## Themes', ...draft.themes.map(item => `- ${item}`), '',
@@ -299,6 +364,8 @@ export function renderWorkshopMarkdown(draft: WorkshopDraft): string {
     ...draft.productionNotes.risks.map(item => `- Risk: ${item}`),
     '', '## Open questions',
     ...(draft.productionNotes.openQuestions.length ? draft.productionNotes.openQuestions.map(item => `- ${item}`) : ['- None']),
+    '', '## Creative references',
+    ...renderReferenceMarkdown(draft.inputs.referenceSources ?? []),
     '', `## Script`,
     `- Title: ${draft.script.title}`,
     `- Duration: ${draft.script.totalDuration}`,
@@ -325,7 +392,118 @@ function htmlList(items: string[], empty = 'None'): string {
     : `<p class="muted">${escapeHtml(empty)}</p>`;
 }
 
-export function renderWorkshopHtml(draft: WorkshopDraft): string {
+function renderReferences(
+  refs: ReadonlyArray<WorkshopReferenceSource>,
+  thumbnails: ReferenceThumbnails,
+): string {
+  if (refs.length === 0) {
+    return '<p class="muted">No references supplied; the workshop proposed the creative direction.</p>';
+  }
+  const shown = refs.filter(source => thumbnails.has(source.path));
+  const listed = refs.filter(source => !thumbnails.has(source.path));
+  const gallery = shown.length
+    ? `<div class="reference-gallery">${shown.map(source => `
+      <figure>
+        <a href="${escapeHtml(source.path)}"><img src="${thumbnails.get(source.path)}" alt="${escapeHtml(basename(source.path))}" loading="lazy"></a>
+        <figcaption title="${escapeHtml(source.path)}"><span class="pill">${escapeHtml(source.kind)}</span> <code>${escapeHtml(basename(source.path))}</code></figcaption>
+      </figure>`).join('')}</div>`
+    : '';
+  const list = listed.length
+    ? `<div class="reference-list">${listed.map(source => `<div><span class="pill">${escapeHtml(source.kind)}</span> <code>${escapeHtml(source.path)}</code></div>`).join('')}</div>`
+    : '';
+  return gallery + list;
+}
+
+const STAGE_ORDER: ReadonlyArray<{ label: string; done: (p: TreatmentProgress) => boolean }> = [
+  { label: 'Script', done: p => p.scriptApproved },
+  { label: 'Panels', done: p => p.shotCount > 0 && p.panelCount >= p.shotCount },
+  { label: 'QA', done: p => p.qaApproved },
+  { label: 'Clips', done: p => p.shotCount > 0 && p.videoCount >= p.shotCount },
+  { label: 'Final cut', done: p => Boolean(p.finalCutPath) },
+];
+
+function renderProgressSection(progress: TreatmentProgress): string {
+  const steps = STAGE_ORDER.map(step => {
+    const done = step.done(progress);
+    return `<li class="${done ? 'done' : 'todo'}"><span class="tick">${done ? '●' : '○'}</span>${escapeHtml(step.label)}</li>`;
+  }).join('');
+
+  const counts: Array<[string, string]> = [
+    ['Panels', `${progress.panelCount} / ${progress.shotCount}`],
+    ['Clips', `${progress.videoCount} / ${progress.shotCount}`],
+    ['Dialogue', `${progress.dialogueCount} / ${progress.shotCount}`],
+    ['Music', progress.hasMusic ? 'rendered' : 'not yet'],
+  ];
+  const countRows = counts
+    .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`)
+    .join('');
+
+  const next = progress.nextCommand
+    ? `<p class="next-label">Next command</p><pre class="next"><code>${escapeHtml(progress.nextCommand)}</code></pre>`
+    : '<p class="next-label">Next command</p><p class="muted">Nothing pending — this episode is assembled.</p>';
+
+  const finalCut = progress.finalCutPath
+    ? `<p class="final-cut">Final cut: <a href="${escapeHtml(progress.finalCutPath)}"><code>${escapeHtml(basename(progress.finalCutPath))}</code></a></p>`
+    : '';
+
+  const others = progress.otherEpisodes.length > 0
+    ? `<p class="muted others">Other parts: ${progress.otherEpisodes
+      .map(item => `${String(item.episode).padStart(2, '0')}${item.title ? ` ${escapeHtml(item.title)}` : ''} — ${escapeHtml(item.stage)}`)
+      .join(' · ')}</p>`
+    : '';
+
+  return `<h2>Production progress</h2>
+<section class="card progress">
+  <div class="progress-head">
+    <div><p class="eyebrow">Stage</p><h3>${escapeHtml(progress.stage)}</h3></div>
+    <p class="muted refreshed">Refreshed ${escapeHtml(new Date(progress.refreshedAt).toLocaleString())}<br>Re-run any command, then reload this page.</p>
+  </div>
+  <ol class="stage-track">${steps}</ol>
+  <dl class="counts">${countRows}</dl>
+  ${next}
+  ${finalCut}
+  ${others}
+</section>`;
+}
+
+const VERDICT_CLASS: Record<string, string> = {
+  PASS: 'qa-pass',
+  'FLAG-LOW': 'qa-low',
+  'FLAG-MODERATE': 'qa-moderate',
+  'FLAG-CRITICAL': 'qa-critical',
+};
+
+/** The leading cell of a shot row: the newest artifact, plus what exists. */
+function renderShotProgressCell(artifacts: ShotArtifacts | undefined): string {
+  if (!artifacts) return '<td class="shot-art"><span class="muted">—</span></td>';
+
+  // A rendered clip supersedes its panel: seeing the shot move is the point.
+  const thumbnail = artifacts.clipThumbnail ?? artifacts.panelThumbnail;
+  const target = artifacts.clipPath ?? artifacts.panelPath;
+  const preview = thumbnail && target
+    ? `<a href="${escapeHtml(target)}"><img src="${thumbnail}" alt="Shot ${escapeHtml(artifacts.key)}" loading="lazy"></a>`
+    : '<div class="pending">Not generated yet</div>';
+
+  const badges: string[] = [];
+  if (artifacts.panelPath) badges.push('<span class="pill">panel</span>');
+  if (artifacts.clipPath) badges.push('<span class="pill live">clip</span>');
+  if (artifacts.dialoguePath) badges.push('<span class="pill">vo</span>');
+  if (artifacts.qaVerdict) {
+    const cls = VERDICT_CLASS[artifacts.qaVerdict] ?? 'qa-low';
+    const title = artifacts.qaIssues?.length ? ` title="${escapeHtml(artifacts.qaIssues.join('; '))}"` : '';
+    badges.push(`<span class="pill ${cls}"${title}>${escapeHtml(artifacts.qaVerdict.replace('FLAG-', ''))}</span>`);
+  }
+
+  return `<td class="shot-art">${preview}<div class="badges">${badges.join('')}</div></td>`;
+}
+
+export function renderWorkshopHtml(
+  draft: WorkshopDraft,
+  thumbnails: ReferenceThumbnails = new Map(),
+  progress?: TreatmentProgress,
+  /** Which reasoning model produced this, shown alongside the other settings. */
+  intelligence?: string,
+): string {
   const structure = draft.structure.map((section, index) => `
     <article class="card structure-card">
       <span class="index">${String(index + 1).padStart(2, '0')}</span>
@@ -347,17 +525,18 @@ export function renderWorkshopHtml(draft: WorkshopDraft): string {
       <p>${escapeHtml(location.description)}</p>
       <dl><dt>Lighting</dt><dd>${escapeHtml(location.lightingNotes ?? 'Not specified')}</dd></dl>
     </article>`).join('');
-  const shots = draft.script.shots.map(shot => `
+  const shots = draft.script.shots.map(shot => {
+    const key = String(shot.shotNumber).padStart(3, '0') + (shot.shotIdSuffix ?? '');
+    return `
     <tr>
-      <td class="shot-number">${escapeHtml(shot.shotNumber)}</td>
+      <td class="shot-number">${escapeHtml(shot.shotNumber)}${shot.shotIdSuffix ? escapeHtml(shot.shotIdSuffix) : ''}</td>
+      ${progress ? renderShotProgressCell(progress.shots.get(key)) : ''}
       <td><span class="pill">${escapeHtml(shot.type)}</span><br><span class="muted">${escapeHtml(shot.duration)} · ${escapeHtml(shot.location ?? 'No location')}</span></td>
       <td>${escapeHtml(shot.description)}</td>
-      <td>${shot.dialogue ? `<strong>${escapeHtml(shot.dialogue.character)}</strong><br>“${escapeHtml(shot.dialogue.line)}”` : '<span class="muted">—</span>'}</td>
-    </tr>`).join('');
-  const refs = draft.inputs.referenceSources ?? [];
-  const references = refs.length
-    ? `<div class="reference-list">${refs.map(source => `<div><span class="pill">${escapeHtml(source.kind)}</span> <code>${escapeHtml(source.path)}</code></div>`).join('')}</div>`
-    : '<p class="muted">No references supplied; the workshop proposed the creative direction.</p>';
+      <td>${shot.dialogue?.line?.trim() ? `<strong>${escapeHtml(shot.dialogue.character)}</strong><br>“${escapeHtml(shot.dialogue.line)}”` : '<span class="muted">—</span>'}</td>
+    </tr>`;
+  }).join('');
+  const references = renderReferences(draft.inputs.referenceSources ?? [], thumbnails);
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -365,17 +544,25 @@ export function renderWorkshopHtml(draft: WorkshopDraft): string {
 <style>
 :root{color-scheme:dark;--bg:#0c0e12;--panel:#141820;--line:#29303d;--text:#f2efe7;--muted:#9da5b4;--accent:#7cb7ff;--warm:#d6b98c}
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 85% 0,#17263d 0,transparent 32%),var(--bg);color:var(--text);font:16px/1.6 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-main{width:min(1180px,calc(100% - 40px));margin:auto;padding:64px 0 100px}.hero{padding:48px;border:1px solid var(--line);background:linear-gradient(135deg,#151a24e8,#10141be8);border-radius:24px}.eyebrow{text-transform:uppercase;letter-spacing:.16em;font-size:12px;color:var(--accent);font-weight:700;margin:0 0 10px}h1{font:clamp(42px,7vw,82px)/.95 Georgia,serif;margin:0 0 24px;max-width:900px}h2{font:36px/1.1 Georgia,serif;margin:70px 0 24px}h3{font:24px/1.2 Georgia,serif;margin:4px 0 14px}.logline{font-size:22px;max-width:850px;color:#dce4ef}.meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}.pill{display:inline-block;padding:4px 10px;border:1px solid #3b4658;border-radius:999px;color:#cbd7e7;font-size:12px;text-transform:uppercase;letter-spacing:.08em}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}.card{position:relative;padding:24px;border:1px solid var(--line);border-radius:18px;background:var(--panel)}.structure-card{padding-left:64px}.index{position:absolute;left:22px;color:var(--warm);font:18px/1 ui-monospace,monospace}dl{display:grid;grid-template-columns:84px 1fr;gap:6px 12px;margin:18px 0 0}dt{color:var(--muted)}dd{margin:0}.muted{color:var(--muted)}.split{display:grid;grid-template-columns:1.2fr .8fr;gap:18px}.aesthetic{border-left:3px solid var(--warm)}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden}th,td{text-align:left;padding:16px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}.shot-number{font:20px ui-monospace,monospace;color:var(--warm)}code{font-size:12px;word-break:break-all}.reference-list{display:grid;gap:10px}.status{color:${draft.status === 'approved' ? '#8ee6b2' : '#ffd48a'}}@media(max-width:760px){main{width:min(100% - 24px,1180px);padding-top:20px}.hero{padding:28px}.split{grid-template-columns:1fr}table{display:block;overflow:auto}}
+main{width:min(1180px,calc(100% - 40px));margin:auto;padding:64px 0 100px}.hero{padding:48px;border:1px solid var(--line);background:linear-gradient(135deg,#151a24e8,#10141be8);border-radius:24px}.eyebrow{text-transform:uppercase;letter-spacing:.16em;font-size:12px;color:var(--accent);font-weight:700;margin:0 0 10px}h1{font:clamp(42px,7vw,82px)/.95 Georgia,serif;margin:0 0 24px;max-width:900px}h2{font:36px/1.1 Georgia,serif;margin:70px 0 24px}h3{font:24px/1.2 Georgia,serif;margin:4px 0 14px}.logline{font-size:22px;max-width:850px;color:#dce4ef}.meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}.pill{display:inline-block;padding:4px 10px;border:1px solid #3b4658;border-radius:999px;color:#cbd7e7;font-size:12px;text-transform:uppercase;letter-spacing:.08em}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}.card{position:relative;padding:24px;border:1px solid var(--line);border-radius:18px;background:var(--panel)}.structure-card{padding-left:64px}.index{position:absolute;left:22px;color:var(--warm);font:18px/1 ui-monospace,monospace}dl{display:grid;grid-template-columns:84px 1fr;gap:6px 12px;margin:18px 0 0}dt{color:var(--muted)}dd{margin:0}.muted{color:var(--muted)}.split{display:grid;grid-template-columns:1.2fr .8fr;gap:18px}.aesthetic{border-left:3px solid var(--warm)}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden}th,td{text-align:left;padding:16px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}.shot-number{font:20px ui-monospace,monospace;color:var(--warm)}code{font-size:12px;word-break:break-all}.reference-list{display:grid;gap:10px;margin-top:16px}.reference-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}.reference-gallery figure{margin:0;border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden}.reference-gallery a{display:block;line-height:0}.reference-gallery img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}.reference-gallery figcaption{display:flex;align-items:center;gap:8px;padding:10px 12px;font-size:12px;color:var(--muted)}.reference-gallery figcaption .pill{flex:none}.reference-gallery figcaption code{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;word-break:normal}.status{color:${draft.status === 'approved' ? '#8ee6b2' : '#ffd48a'}}
+.progress{border-left:3px solid var(--accent)}.progress-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap}.progress-head h3{margin:0;text-transform:capitalize}.refreshed{font-size:12px;text-align:right;line-height:1.5}
+.stage-track{display:flex;flex-wrap:wrap;gap:8px 22px;list-style:none;margin:22px 0;padding:0;font-size:13px;text-transform:uppercase;letter-spacing:.08em}.stage-track li{display:flex;align-items:center;gap:7px;color:var(--muted)}.stage-track li.done{color:#8ee6b2}.tick{font-size:11px}
+.counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:14px;margin:0 0 22px;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.counts>div{display:block}.counts dt{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.counts dd{margin:4px 0 0;font:19px/1.2 ui-monospace,monospace;color:var(--text)}
+.next-label{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:0 0 8px}pre.next{margin:0;padding:14px 16px;background:#0a0c10;border:1px solid var(--line);border-radius:12px;overflow-x:auto}pre.next code{font-size:13px;color:var(--accent);word-break:normal;white-space:pre}
+.final-cut{margin:18px 0 0}.final-cut a{color:var(--accent)}.others{margin:14px 0 0;font-size:13px}
+.shot-art{width:220px}.shot-art img{width:200px;aspect-ratio:16/9;object-fit:cover;border-radius:10px;display:block;border:1px solid var(--line)}.shot-art .pending{width:200px;aspect-ratio:16/9;border:1px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px}.badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.badges .pill{font-size:10px;padding:2px 8px}.pill.live{border-color:#3f7f5c;color:#8ee6b2}.pill.qa-pass{border-color:#3f7f5c;color:#8ee6b2}.pill.qa-low{border-color:#5d6a80;color:#b9c4d6}.pill.qa-moderate{border-color:#8a7233;color:#ffd48a}.pill.qa-critical{border-color:#8f4747;color:#ff9d9d}
+@media(max-width:760px){main{width:min(100% - 24px,1180px);padding-top:20px}.hero{padding:28px}.split{grid-template-columns:1fr}table{display:block;overflow:auto}.refreshed{text-align:left}}
 </style></head><body><main>
-<section class="hero"><p class="eyebrow">${escapeHtml(draft.projectType)} workshop · revision ${draft.revision}</p><h1>${escapeHtml(draft.projectName)}</h1><p class="logline">${escapeHtml(draft.logline)}</p><div class="meta"><span class="pill status">${escapeHtml(draft.status)}</span><span class="pill">${escapeHtml(draft.script.totalDuration)}</span><span class="pill">${draft.script.shots.length} shots</span><span class="pill">${draft.productionNotes.delivery === '4k' ? '4K delivery' : 'Standard delivery'}</span></div></section>
+<section class="hero"><p class="eyebrow">${escapeHtml(draft.projectType)} workshop · revision ${draft.revision}</p><h1>${escapeHtml(draft.projectName)}</h1><p class="logline">${escapeHtml(draft.logline)}</p><div class="meta"><span class="pill status">${escapeHtml(draft.status)}</span><span class="pill">${escapeHtml(draft.script.totalDuration)}</span><span class="pill">${draft.script.shots.length} shots</span><span class="pill">${draft.productionNotes.delivery === '4k' ? '4K delivery' : 'Standard delivery'}</span>${intelligence ? `<span class="pill">${escapeHtml(intelligence)}</span>` : ''}</div></section>
 <section class="split"><div><h2>Story</h2><p>${escapeHtml(draft.synopsis)}</p><h3>Themes</h3>${htmlList(draft.themes)}</div><div><h2>Workshop inputs</h2><div class="card"><dl><dt>Outcome</dt><dd>${escapeHtml(draft.inputs.objective || 'Workshop-generated')}</dd><dt>Audience</dt><dd>${escapeHtml(draft.inputs.audience || 'Workshop-generated')}</dd><dt>Runtime</dt><dd>${escapeHtml(draft.inputs.targetDuration)}</dd><dt>Must include</dt><dd>${escapeHtml(draft.inputs.mustInclude || 'Workshop-generated')}</dd><dt>Avoid</dt><dd>${escapeHtml(draft.inputs.avoid || 'None specified')}</dd></dl></div></div></section>
 <h2>Structure</h2><section class="grid">${structure}</section>
 <h2>Visual language</h2><section class="card aesthetic"><dl><dt>Style</dt><dd>${escapeHtml(draft.aesthetic.style)}</dd><dt>Palette</dt><dd>${escapeHtml(draft.aesthetic.palette)}</dd><dt>Lighting</dt><dd>${escapeHtml(draft.aesthetic.lighting)}</dd><dt>Lens</dt><dd>${escapeHtml(draft.aesthetic.lensCharacteristics)}</dd><dt>Texture</dt><dd>${escapeHtml(draft.aesthetic.filmStock)}</dd></dl></section>
 <h2>Cast</h2><section class="grid">${characters || '<p class="muted">No characters.</p>'}</section>
 <h2>Locations</h2><section class="grid">${locations || '<p class="muted">No locations.</p>'}</section>
 <section class="split"><div><h2>Production plan</h2><div class="card"><p><strong>Audio:</strong> ${escapeHtml(draft.productionNotes.audioApproach)}</p><h3>Continuity</h3>${htmlList(draft.productionNotes.continuityPriorities)}<h3>Risks</h3>${htmlList(draft.productionNotes.risks)}</div></div><div><h2>Open questions</h2><div class="card">${htmlList(draft.productionNotes.openQuestions)}</div></div></section>
+${progress ? renderProgressSection(progress) : ''}
 <h2>Creative references</h2>${references}
-<h2>Shot script</h2><table><thead><tr><th>#</th><th>Shot</th><th>Direction</th><th>Dialogue</th></tr></thead><tbody>${shots}</tbody></table>
+<h2>Shot script</h2><table><thead><tr><th>#</th>${progress ? '<th>Output</th>' : ''}<th>Shot</th><th>Direction</th><th>Dialogue</th></tr></thead><tbody>${shots}</tbody></table>
 </main></body></html>`;
 }
 
@@ -386,8 +573,15 @@ export async function saveWorkshop(series: SeriesState, draft: WorkshopDraft): P
     if (!existsSync(archive)) await rename(jsonPath, archive);
   }
   await writeFile(jsonPath, `${JSON.stringify(draft, null, 2)}\n`, 'utf-8');
+  const cache = await ThumbnailCache.open(series.outputDir);
+  const thumbnails = await buildReferenceThumbnails(draft.inputs.referenceSources ?? [], cache);
+  await cache.save();
   await writeFile(join(series.outputDir, 'WORKSHOP.md'), renderWorkshopMarkdown(draft), 'utf-8');
-  await writeFile(join(series.outputDir, 'WORKSHOP.html'), renderWorkshopHtml(draft), 'utf-8');
+  await writeFile(
+    join(series.outputDir, 'WORKSHOP.html'),
+    renderWorkshopHtml(draft, thumbnails, undefined, describeIntelligence(series.intelligence?.model ?? DEFAULT_INTELLIGENCE_MODEL)),
+    'utf-8',
+  );
 }
 
 export async function approveWorkshop(series: SeriesState, draft: WorkshopDraft): Promise<WorkshopDraft> {

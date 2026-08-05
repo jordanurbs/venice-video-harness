@@ -154,6 +154,60 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 15, minAudioInputSec: 3,
     privacy: 'anonymized', offline: false,
   },
+  // -- Wan 3.0 (live catalog 2026-08-05) --
+  // The successor to 2.7, and the first family on Venice with a duration
+  // ladder past 15s: 5/10/15/20/25/30s at 480p/720p/1080p, native audio on
+  // by default and not configurable. Notes:
+  //   - NO audio input. `audio_input` and `per_reference_audio` are both
+  //     false across the whole family, so 3.0 cannot lip-sync to a supplied
+  //     recording the way Wan 2.7 i2v does. Exact lip-sync stays on 2.7 or on
+  //     a reference-audio R2V lane; 3.0 is for native in-frame dialogue.
+  //   - i2v and R2V accept `adaptive` aspect (inherit from the input image)
+  //     plus the five concrete ratios. Only the concrete ratios are listed
+  //     here so the aspect pre-flight has real values to compare against.
+  //   - Reference images need a short side ≥ 240px.
+  //   - `wan-3-0-enhanced-*` are flagged beta by Venice.
+  //   - Cost reference: ~$0.55 per 5s clip at 720p (quote, 2026-08-05).
+  {
+    id: 'wan-3-0-text-to-video', name: 'Wan 3.0', type: 'text-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'],
+    resolutions: ['1080p', '720p', '480p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'wan-3-0-image-to-video', name: 'Wan 3.0', type: 'image-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'],
+    resolutions: ['1080p', '720p', '480p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'wan-3-0-reference-to-video', name: 'Wan 3.0 R2V', type: 'image-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'],
+    resolutions: ['1080p', '720p', '480p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'wan-3-0-enhanced-text-to-video', name: 'Wan 3.0 Enhanced', type: 'text-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'],
+    resolutions: ['1080p', '720p', '480p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'wan-3-0-enhanced-reference-to-video', name: 'Wan 3.0 R2V Enhanced', type: 'image-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'],
+    resolutions: ['1080p', '720p', '480p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
   // Post-production 2x/4x upscaler. Requires `upscale_factor`, the real
   // input duration as a string, and chunking for large payloads. It strips
   // audio; src/venice/upscale.ts remuxes the original audio after processing.

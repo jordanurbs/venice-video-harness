@@ -5,7 +5,6 @@
 // and a simple inter-request rate-limit delay.
 // ---------------------------------------------------------------------------
 
-import type { VeniceApiError } from "./types.js";
 import { abortableSleep, currentSignal, isAbortError } from "./operation-context.js";
 
 // ---- Configuration constants ----------------------------------------------
@@ -27,6 +26,66 @@ export class VeniceRequestError extends Error {
     this.status = status;
     this.body = body;
   }
+}
+
+// ---- Error message extraction ----------------------------------------------
+
+/**
+ * Pull the human-readable reason out of a Venice error body.
+ *
+ * The API uses three shapes depending on where the request failed, and reading
+ * only `error.message` -- as this client used to -- threw away the two most
+ * useful ones:
+ *
+ *   {"error": {"message": "..."}}                     upstream provider error
+ *   {"error": "Specified model not found: x. Did      routing error, including
+ *              you mean: a, b, c?"}                   the suggestion list
+ *   {"issues": [{"message": "Image content is not     request validation
+ *              supported by this model..."}]}
+ *
+ * Losing those turned "this model cannot see images" into a bare HTTP 400.
+ */
+export function describeApiError(errorBody: unknown, status: number): string {
+  const body = errorBody as {
+    error?: string | { message?: string };
+    issues?: Array<{ message?: string }>;
+    detail?: string;
+  } | null | undefined;
+
+  if (typeof body?.error === 'string' && body.error.trim()) return body.error;
+  if (typeof body?.error === 'object' && body.error?.message) return body.error.message;
+
+  const issues = (body?.issues ?? [])
+    .map(issue => issue?.message)
+    .filter((message): message is string => Boolean(message && message.trim()));
+  if (issues.length > 0) return issues.join('; ');
+
+  if (typeof body?.detail === 'string' && body.detail.trim()) return body.detail;
+  return `Venice API returned HTTP ${status}`;
+}
+
+// ---- JSON extraction --------------------------------------------------------
+
+/**
+ * Pull the JSON document out of a chat reply.
+ *
+ * Models fence JSON in ```json blocks inconsistently, and some prepend a line
+ * of narration despite being told not to. Stripping fences handles the common
+ * case; falling back to the outermost brace pair handles the rest.
+ */
+export function extractJsonBlock(raw: string): string {
+  const unfenced = raw.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+  if (unfenced.startsWith('{') || unfenced.startsWith('[')) return unfenced;
+
+  const firstObject = unfenced.indexOf('{');
+  const firstArray = unfenced.indexOf('[');
+  const start = firstObject === -1
+    ? firstArray
+    : firstArray === -1 ? firstObject : Math.min(firstObject, firstArray);
+  if (start === -1) return unfenced;
+
+  const end = Math.max(unfenced.lastIndexOf('}'), unfenced.lastIndexOf(']'));
+  return end > start ? unfenced.slice(start, end + 1) : unfenced;
 }
 
 // ---- Deprecation header surfacing -----------------------------------------
@@ -159,9 +218,8 @@ export class VeniceClient {
     } catch {
       errorBody = { raw: await response.text().catch(() => '') };
     }
-    const apiError = errorBody as Partial<VeniceApiError>;
     throw new VeniceRequestError(
-      apiError?.error?.message ?? `Venice API returned HTTP ${response.status}`,
+      describeApiError(errorBody, response.status),
       response.status,
       errorBody,
     );
@@ -220,10 +278,7 @@ export class VeniceClient {
           errorBody = { raw: await response.text().catch(() => "") };
         }
 
-        const apiError = errorBody as Partial<VeniceApiError>;
-        const message =
-          apiError?.error?.message ??
-          `Venice API returned HTTP ${response.status}`;
+        const message = describeApiError(errorBody, response.status);
 
         // Retry on rate-limit (429) and server errors (5xx).
         if (response.status === 429 || response.status >= 500) {
@@ -310,10 +365,7 @@ export class VeniceClient {
           errorBody = { raw: await response.text().catch(() => "") };
         }
 
-        const apiError = errorBody as Partial<VeniceApiError>;
-        const message =
-          apiError?.error?.message ??
-          `Venice API returned HTTP ${response.status}`;
+        const message = describeApiError(errorBody, response.status);
 
         if (response.status === 429 || response.status >= 500) {
           lastError = new VeniceRequestError(message, response.status, errorBody);
@@ -393,10 +445,7 @@ export class VeniceClient {
           errorBody = { raw: await response.text().catch(() => "") };
         }
 
-        const apiError = errorBody as Partial<VeniceApiError>;
-        const message =
-          apiError?.error?.message ??
-          `Venice API returned HTTP ${response.status}`;
+        const message = describeApiError(errorBody, response.status);
 
         if (response.status === 429 || response.status >= 500) {
           lastError = new VeniceRequestError(message, response.status, errorBody);
@@ -429,6 +478,7 @@ export class VeniceClient {
     systemPrompt: string,
     imageDataUris: string[],
     userPrompt: string,
+    maxTokens = 4000,
   ): Promise<string> {
     const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
     for (const uri of imageDataUris) {
@@ -442,7 +492,9 @@ export class VeniceClient {
         { role: 'system', content: systemPrompt },
         { role: 'user', content },
       ],
-      max_tokens: 2000,
+      // Reasoning models spend part of this budget thinking, and what is left
+      // over is the visible answer. Too low and `content` comes back empty.
+      max_tokens: maxTokens,
       temperature: 0.3,
     };
 
@@ -451,6 +503,85 @@ export class VeniceClient {
     }>('/api/v1/chat/completions', body as unknown as Record<string, unknown>);
 
     return response.choices?.[0]?.message?.content ?? '';
+  }
+
+  /**
+   * Chat completion that must come back as JSON, with one corrective retry.
+   *
+   * Every reasoning step in the harness -- workshop, script, storyboard QA --
+   * asks for JSON and parses the reply. Three things make that fragile, and
+   * this handles all of them in one place:
+   *
+   *  - Models fence their JSON in ```json blocks inconsistently.
+   *  - A model can emit *almost* valid JSON. GLM 5.2 drops a closing brace
+   *    roughly one attempt in three, which used to fail the whole command.
+   *    A single retry quoting the parse error fixes it.
+   *  - A model with no real vision returns EMPTY content rather than an error
+   *    when handed an image, which reads as an unhelpful parse failure. That
+   *    case is named explicitly so the operator can change models.
+   *
+   * Reasoning text arrives in a separate `reasoning_content` field on every
+   * model checked, so it never pollutes what gets parsed.
+   */
+  async chatJson<T>(options: {
+    model: string;
+    systemPrompt: string;
+    userPrompt: string;
+    /** Data URIs. Supplying any makes this a vision request. */
+    images?: string[];
+    maxTokens?: number;
+    temperature?: number;
+    /** What is being generated, for error messages, e.g. 'workshop'. */
+    label?: string;
+  }): Promise<T> {
+    const { model, systemPrompt, userPrompt, images = [], label = 'response' } = options;
+    const maxTokens = options.maxTokens ?? 8000;
+    const temperature = options.temperature ?? 0.65;
+
+    const userContent = images.length > 0
+      ? [
+        ...images.map(url => ({ type: 'image_url', image_url: { url } })),
+        { type: 'text', text: userPrompt },
+      ]
+      : userPrompt;
+
+    const messages: Array<Record<string, unknown>> = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userContent },
+    ];
+
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await this.post<{
+        choices: Array<{ message: { content: string | null } }>;
+      }>('/api/v1/chat/completions', { model, messages, max_tokens: maxTokens, temperature });
+
+      const raw = response.choices?.[0]?.message?.content ?? '';
+      if (!raw.trim()) {
+        throw new Error(
+          images.length > 0
+            ? `${model} returned no content for the ${label}. Models without image support answer an image prompt with silence rather than an error -- pick a model that reads images.`
+            : `${model} returned no content for the ${label}. It may have spent the whole ${maxTokens}-token budget reasoning.`,
+        );
+      }
+
+      const cleaned = extractJsonBlock(raw);
+      try {
+        return JSON.parse(cleaned) as T;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (attempt === 0) {
+          // Hand the model its own broken output plus the parser's complaint.
+          messages.push({ role: 'assistant', content: raw });
+          messages.push({
+            role: 'user',
+            content: `That did not parse as JSON: ${lastError.message}. Return the same content again as one valid JSON document. No prose, no markdown fences.`,
+          });
+        }
+      }
+    }
+
+    throw new Error(`${model} did not return valid JSON for the ${label} after a retry: ${lastError?.message}`);
   }
 
   // ---- Internals ----------------------------------------------------------

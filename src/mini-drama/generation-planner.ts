@@ -12,6 +12,9 @@ import type {
 import {
   KLING_MULTISHOT_MODEL,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
+  DEFAULT_LIP_SYNC_MODEL,
+  MODELS_SUPPORTING_END_IMAGE,
+  lipSyncModelNeedsKeyframe,
 } from '../series/types.js';
 
 const CHAIN_TRANSITIONS = new Set([
@@ -60,16 +63,21 @@ function isIdentitySensitive(shot: ShotScript): boolean {
   return shot.type === 'close-up' || shot.type === 'reaction';
 }
 
+/** The lip-sync model this project would use, whether or not it is selected. */
+function lipSyncModelFor(videoDefaults?: VideoModelDefaults): string {
+  return videoDefaults?.lipSyncModel ?? DEFAULT_LIP_SYNC_MODEL;
+}
+
 /**
- * A shot must render as a single Wan 2.7 exact-lip-sync clip only when the
- * series explicitly selected `audioStrategy: 'lip-sync'`, it has dialogue
- * from a visible non-narrator, and motion is not high. Native dialogue stays
- * on the selected R2V family and may use voice-donor references.
+ * A shot must render as a single exact-lip-sync clip only when the series
+ * explicitly selected `audioStrategy: 'lip-sync'`, it has dialogue from a
+ * visible non-narrator, and motion is not high. Native dialogue stays on the
+ * selected R2V family and may use voice-donor references.
  *
- * High-motion dialogue stays on the R2V model for identity preservation
- * (Wan 2.7 prioritizes motion over reference adherence; see  notes).
+ * High-motion dialogue stays on the R2V model for identity preservation — the
+ * audio-driven lanes prioritize motion over reference adherence.
  */
-export function mustStayAsWanLipSync(
+export function mustRenderAsExactLipSync(
   shot: ShotScript,
   videoDefaults?: VideoModelDefaults,
 ): boolean {
@@ -84,6 +92,12 @@ export function mustStayAsWanLipSync(
   if (shot.faceVisible === false) return false;
   return true;
 }
+
+/**
+ * @deprecated Renamed to `mustRenderAsExactLipSync` once lip-sync stopped
+ * meaning "Wan 2.7". Kept so external importers keep compiling.
+ */
+export const mustStayAsWanLipSync = mustRenderAsExactLipSync;
 
 function hasNewCharacters(previous: ShotScript | undefined, current: ShotScript): boolean {
   if (!previous) return false;
@@ -142,13 +156,15 @@ function chooseEndFrameStrategy(
   if (!nextShot) return 'natural';
   if (hasNewCharacters(lastShot, nextShot)) return 'natural';
   if (isTitleLikeInsert(nextShot)) return 'natural';
-  // for lip-sync shots, bookend the clip with the next shot's panel
-  // as the end keyframe. Wan 2.7 reference adherence is weaker than Seedance
-  // R2V's reference_image_urls — passing end_image_url provides natural cut
+  // Bookend a keyframe-anchored lip-sync clip with the next shot's panel as
+  // the end keyframe. Wan 2.7's reference adherence is weaker than an R2V
+  // lane's reference_image_urls — passing end_image_url gives natural cut
   // continuity into the next shot AND anchors the character's identity at
-  // both ends of the clip. Independent of the transition because the cut
-  // continuity benefit applies even for hard cuts.
-  if (mustStayAsWanLipSync(lastShot, videoDefaults)) {
+  // both ends of the clip. Independent of the transition, because the cut
+  // continuity benefit applies even for hard cuts. Reference-capable
+  // lip-sync models don't need it and mostly reject end_image_url anyway.
+  if (mustRenderAsExactLipSync(lastShot, videoDefaults)
+    && MODELS_SUPPORTING_END_IMAGE.has(lipSyncModelFor(videoDefaults))) {
     return 'next-panel-target';
   }
   return END_FRAME_TRANSITIONS.has(lastShot.transition.toUpperCase())
@@ -157,16 +173,21 @@ function chooseEndFrameStrategy(
 }
 
 /**
- * does the planner expect this shot to render with the Seedance
- * R2V → Wan 2.7 keyframe pipeline? True when the shot must stay as a Wan 2.7
- * lip-sync clip, has at least one character, and neither the series nor the
- * shot opts out. See AGENTS.md rule 32.
+ * Does the planner expect this shot to render with the Seedance R2V keyframe
+ * pipeline? True when the shot must render as an exact-lip-sync clip on a
+ * model that takes no reference images, has at least one character, and
+ * neither the series nor the shot opts out. See AGENTS.md rule 32.
+ *
+ * A reference-capable lip-sync model (Seedance or MiniMax H3 R2V) skips the
+ * pre-pass entirely — it already anchors identity from the reference stack,
+ * so the extra render would just double the cost.
  */
 export function shouldUseSeedanceKeyframe(
   shot: ShotScript,
   videoDefaults?: VideoModelDefaults,
 ): boolean {
-  if (!mustStayAsWanLipSync(shot, videoDefaults)) return false;
+  if (!mustRenderAsExactLipSync(shot, videoDefaults)) return false;
+  if (!lipSyncModelNeedsKeyframe(lipSyncModelFor(videoDefaults))) return false;
   if (shot.characters.length === 0) return false;
   if (shot.disableSeedanceKeyframe === true) return false;
   if (videoDefaults?.seedanceKeyframeForWan === false) return false;
@@ -189,7 +210,7 @@ function buildSingleUnit(
     ? (videoDefaults?.characterConsistencyModel ?? DEFAULT_CHARACTER_CONSISTENCY_MODEL)
     : undefined;
   if (useSeedanceKeyframe) {
-    reasons.push(`Seedance R2V keyframe → Wan 2.7 lip-sync (via ${keyframeModel})`);
+    reasons.push(`Seedance R2V keyframe → ${lipSyncModelFor(videoDefaults)} lip-sync (via ${keyframeModel})`);
   }
 
   return {
@@ -233,10 +254,10 @@ function canUseMultiShotWindow(
   if (window.some(isEstablishingShot)) {
     return { ok: false, reasons: ['establishing/empty shot in window -- keep separate'] };
   }
-  // a shot that needs Wan 2.7 lip-sync must render as a single clip.
-  // Bundling it into a Seedance multi-shot unit drops the lip-sync entirely.
-  if (window.some(shot => mustStayAsWanLipSync(shot, videoDefaults))) {
-    return { ok: false, reasons: ['lip-sync dialogue shot in window — keep separate for Wan 2.7'] };
+  // A shot that needs exact lip-sync must render as a single clip. Bundling
+  // it into a multi-shot unit drops the lip-sync entirely.
+  if (window.some(shot => mustRenderAsExactLipSync(shot, videoDefaults))) {
+    return { ok: false, reasons: ['exact lip-sync dialogue shot in window — keep separate'] };
   }
 
   const totalDuration = window.reduce((sum, shot) => sum + parseShotDuration(shot.duration), 0);

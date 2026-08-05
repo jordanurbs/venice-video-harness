@@ -42,6 +42,7 @@ import {
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   DEFAULT_IMAGE_GENERATION_MODEL,
   DEFAULT_IMAGE_EDIT_MODEL,
+  DEFAULT_LIP_SYNC_MODEL,
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
@@ -50,7 +51,7 @@ import { generateImage, generateWithReferences } from '../venice/generate.js';
 import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { appendRecipePass } from '../venice/recipe.js';
 import { getVeniceApiKey } from '../config.js';
-import { promptChoice, promptText } from '../interactive.js';
+import { printSkippableQuestionsNote, promptChoice, promptText } from '../interactive.js';
 import {
   getConfigPath,
   getDefaultSetupWorkspace,
@@ -102,7 +103,12 @@ import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
 import type { MultiEditModel } from '../venice/types.js';
 import { assembleEpisode, collectShotVideos } from './assembler.js';
 import { buildGenerationPlan, saveGenerationPlan } from './generation-planner.js';
-import { AUDIO_STRATEGY_CHOICES, VIDEO_FAMILY_CHOICES } from './choices.js';
+import { AUDIO_STRATEGY_CHOICES, INTELLIGENCE_CHOICES, VIDEO_FAMILY_CHOICES } from './choices.js';
+import {
+  DEFAULT_INTELLIGENCE_MODEL,
+  describeIntelligence,
+  resolveIntelligence,
+} from '../venice/text-models.js';
 import { getProjectLanguage } from '../series/project-language.js';
 import {
   approveWorkshop,
@@ -113,6 +119,21 @@ import {
   saveWorkshop,
   type WorkshopInputs,
 } from './workshop.js';
+import { hasTreatment, refreshTreatment } from './treatment.js';
+import {
+  PACKAGE_NAME,
+  compareVersions,
+  currentInstall,
+  fetchPublishedVersion,
+  isSessionActive,
+  manualUpdateInstructions,
+  npmInvocation,
+  readInstalledVersion,
+  runInstall,
+} from '../update.js';
+import { emitJson, failJson, jsonRequested } from '../agent/output.js';
+import { formatGuide, guideAsJson } from '../agent/guide.js';
+import { formatPipeline, pipelineAsJson } from '../agent/pipeline.js';
 
 // Read from package.json rather than a literal, which drifts on every release.
 const packageVersion: string = (() => {
@@ -129,9 +150,29 @@ program
   .name('venice-video')
   .description('Standalone consistency-first video production with Venice AI')
   .version(packageVersion)
-  .option('--workspace <dir>', 'Workspace containing Venice Video projects');
+  .option('--workspace <dir>', 'Workspace containing Venice Video projects')
+  .option('--json', 'Emit machine-readable JSON on stdout (supported by agent-facing commands)');
+
+/** True when `--json` was passed globally or on the command itself. */
+function wantsJson(localOpts?: { json?: unknown }): boolean {
+  return jsonRequested(program.opts().json, localOpts?.json);
+}
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
+
+/**
+ * Which reasoning model this invocation should use.
+ *
+ * Precedence is explicit `--model` first, then the project's saved choice,
+ * then the harness default. Projects created before 2.9.0 have no saved
+ * choice and land on the default.
+ */
+function intelligenceFor(series: SeriesState, override?: string) {
+  if (override) return resolveIntelligence(override);
+  const saved = series.intelligence;
+  if (saved?.model) return { model: saved.model, visionModel: saved.visionModel || saved.model };
+  return resolveIntelligence(DEFAULT_INTELLIGENCE_MODEL);
+}
 
 
 function openInDefaultBrowser(path: string): boolean {
@@ -143,6 +184,20 @@ function openInDefaultBrowser(path: string): boolean {
       : { name: 'xdg-open', args: [path] };
   const result = spawnSync(command.name, command.args, { stdio: 'ignore' });
   return result.status === 0;
+}
+
+/**
+ * Re-render the treatment page after a step that changed the episode, and
+ * point the operator at it.
+ *
+ * Called at the end of every command that produces an artifact, so the browser
+ * tab holding WORKSHOP.html is one reload away from showing the new panels,
+ * clips and QA verdicts. Silent for projects that never ran the workshop.
+ */
+async function updateTreatment(series: SeriesState, episode?: number): Promise<void> {
+  if (!hasTreatment(series)) return;
+  const path = await refreshTreatment(series, { episode });
+  if (path) console.log(`\nTreatment updated — reload ${path}`);
 }
 
 /**
@@ -343,28 +398,143 @@ configCommand
 program
   .command('doctor')
   .description('Check API credentials and local media dependencies')
-  .action(async () => {
-    let failed = false;
-    const checkCommand = (name: string, args: string[] = ['-version']) => {
-      const result = spawnSync(name, args, { stdio: 'ignore' });
-      const ok = result.status === 0;
-      console.log(`${ok ? '✓' : '✗'} ${name}`);
-      if (!ok) failed = true;
+  .option('--json', 'Emit the check results as JSON')
+  .action(async (opts: { json?: boolean }) => {
+    const json = wantsJson(opts);
+    const checks: Array<{ name: string; ok: boolean; detail?: string }> = [];
+    const record = (name: string, ok: boolean, detail?: string) => {
+      checks.push({ name, ok, detail });
+      if (!json) console.log(`${ok ? '✓' : '✗'} ${name}${detail ? `  ${detail}` : ''}`);
+    };
+    const checkCommand = (name: string) => {
+      const result = spawnSync(name, ['-version'], { stdio: 'ignore' });
+      record(name, result.status === 0);
     };
 
-    console.log(`✓ Node ${process.versions.node}`);
+    record('node', true, process.versions.node);
     checkCommand('ffmpeg');
     checkCommand('ffprobe');
     try {
       const apiKey = await getVeniceApiKey();
       await validateVeniceApiKey(apiKey);
-      console.log(`✓ Venice API key ${maskApiKey(apiKey)}`);
+      record('venice-api-key', true, maskApiKey(apiKey));
     } catch (error) {
-      failed = true;
-      console.log(`✗ Venice API key: ${(error as Error).message}`);
+      record('venice-api-key', false, (error as Error).message);
     }
-    console.log(`✓ Workspace ${await getWorkspaceDir(program.opts().workspace)}`);
+    record('workspace', true, await getWorkspaceDir(program.opts().workspace));
+
+    const failed = checks.some(c => !c.ok);
+    if (json) emitJson({ ok: !failed, checks });
     if (failed) process.exitCode = 1;
+  });
+
+program
+  .command('agent-guide')
+  .description('Print the core rules for driving this CLI from an agent (ships inside the binary)')
+  .option('--json', 'Emit the guide as JSON')
+  .action((opts: { json?: boolean }) => {
+    if (wantsJson(opts)) emitJson(guideAsJson());
+    else console.log(formatGuide());
+  });
+
+program
+  .command('pipeline')
+  .description('Describe the production pipeline: ordered stages, gates, and the command that advances each')
+  .option('--json', 'Emit the pipeline as JSON')
+  .action((opts: { json?: boolean }) => {
+    if (wantsJson(opts)) emitJson(pipelineAsJson());
+    else console.log(formatPipeline());
+  });
+
+program
+  .command('update')
+  .alias('upgrade')
+  .description('Install the latest published version of the CLI')
+  .option('--check', 'Report whether a newer version exists without installing it', false)
+  .option('--tag <tag>', 'npm dist-tag to install', 'latest')
+  .option('--force', 'Reinstall even when already on the target version', false)
+  .option('--dry-run', 'Print the install command instead of running it', false)
+  .action(async (opts: { check: boolean; tag: string; force: boolean; dryRun: boolean }) => {
+    const install = currentInstall();
+    console.log(`Installed  ${packageVersion}  (${install.packageDir})`);
+
+    process.stdout.write(`Published  checking ${opts.tag}... `);
+    let target: string;
+    try {
+      target = await fetchPublishedVersion(opts.tag);
+    } catch (error) {
+      console.log('failed');
+      console.error(`Could not reach the npm registry: ${(error as Error).message}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(target);
+
+    const difference = compareVersions(packageVersion, target);
+
+    // --check only ever reports, so it ignores --force.
+    if (opts.check) {
+      if (difference === 0) console.log(`\nAlready on the latest ${opts.tag} release.`);
+      else if (difference > 0) console.log(`\nThis build is ahead of ${opts.tag} (${target}).`);
+      else console.log(`\n${target} is available. Install it with: venice-video update`);
+      return;
+    }
+
+    if (difference === 0 && !opts.force) {
+      console.log(`\nAlready on the latest ${opts.tag} release.`);
+      return;
+    }
+    if (difference > 0 && !opts.force) {
+      // An unpublished dev build, or a dist-tag that was rolled back. Installing
+      // would be a downgrade, so make that the operator's explicit choice.
+      console.log(`\nThis build is ahead of ${opts.tag}. Use --force to install ${target} anyway.`);
+      return;
+    }
+
+    // Deferred before anything else that writes: this process is running the
+    // very files an install would replace.
+    if (isSessionActive() && !opts.dryRun) {
+      console.log(
+        '\nThe interactive shell runs this package in-process, so installing over it now'
+        + '\nwould leave one session running two versions. Exit the shell (Ctrl-D), then:'
+        + '\n\n  venice-video update',
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    if (install.kind !== 'npm-global') {
+      console.log('');
+      for (const line of manualUpdateInstructions(install)) console.log(line);
+      process.exitCode = 1;
+      return;
+    }
+
+    const spec = `${PACKAGE_NAME}@${target}`;
+    const invocation = npmInvocation(install, spec);
+    if (opts.dryRun) {
+      console.log(`\nWould run:\n  ${[invocation.command, ...invocation.args].join(' ')}`);
+      return;
+    }
+
+    console.log(`\nInstalling ${spec} into ${install.prefix}\n`);
+    const status = runInstall(invocation);
+    if (status !== 0) {
+      console.error(`\nnpm exited ${status}. The previous version is still installed.`);
+      process.exitCode = status;
+      return;
+    }
+
+    const installed = readInstalledVersion(install.packageDir);
+    if (installed && compareVersions(installed, target) !== 0) {
+      console.error(
+        `\nnpm reported success but ${install.packageDir} still holds ${installed}. `
+        + 'Check whether another venice-video is earlier on your PATH: command -v venice-video',
+      );
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`\nUpdated to ${installed ?? target}. Restart venice-video to pick it up.`);
   });
 
 program
@@ -376,14 +546,16 @@ program
   .option('-g, --genre <genre>', 'Genre')
   .option('--setting <setting>', 'General setting description')
   .option('--audio-strategy <strategy>', 'native | lip-sync | narrator-vo')
-  .option('--video-family <family>', 'auto | seedance | happyhorse | minimax-h3 | grok-imagine | kling-o3')
+  .option('--video-family <family>', 'auto | seedance | wan-3-0 | happyhorse | minimax-h3 | grok-imagine | kling-o3')
+  .option('--intelligence <model>', `Reasoning model for workshop, script, and QA (default: ${DEFAULT_INTELLIGENCE_MODEL})`)
   .action(async (opts: {
     type?: string; name?: string; concept?: string; genre?: string; setting?: string;
-    audioStrategy?: string; videoFamily?: string;
+    audioStrategy?: string; videoFamily?: string; intelligence?: string;
   }) => {
     if (!stdin.isTTY && (!opts.type || !opts.name || !opts.concept)) {
       throw new Error('`venice-video new` needs an interactive terminal, or pass --type, --name, and --concept.');
     }
+    if (stdin.isTTY) printSkippableQuestionsNote('the harness');
     const types = ['film', 'series', 'product-video', 'music-video', 'screenplay'] as const;
     const type = (opts.type ?? await promptChoice('What are you making?', [
       { label: 'Film', value: 'film', description: 'A film of any length; multi-shot and continuity-first' },
@@ -409,18 +581,27 @@ program
     if (!VIDEO_FAMILIES.has(videoFamily)) {
       throw new Error(`--video-family must be one of: ${[...VIDEO_FAMILIES].join(', ')}`);
     }
+    const intelligenceModel = opts.intelligence ?? (stdin.isTTY
+      ? await promptChoice(
+        'Intelligence model — develops the story, writes the script, and reads the panels back during QA',
+        INTELLIGENCE_CHOICES,
+        INTELLIGENCE_CHOICES.findIndex(choice => choice.value === DEFAULT_INTELLIGENCE_MODEL),
+      )
+      : DEFAULT_INTELLIGENCE_MODEL);
 
     const workspace = await getWorkspaceDir(program.opts().workspace);
     await mkdir(workspace, { recursive: true });
     const series = createSeries(name, concept, genre, setting, {
       audioStrategy,
       videoFamilyPreference: videoFamily,
+      intelligenceModel,
       workspace,
       projectType: type,
     });
     await saveSeries(series);
     console.log(`\n${type === 'film' ? 'Film' : 'Project'} created: ${series.outputDir}`);
     console.log(`Reference-first defaults: ${series.videoDefaults.characterConsistencyModel}`);
+    console.log(`Intelligence: ${describeIntelligence(intelligenceModel)}`);
     const language = getProjectLanguage(series);
     console.log(`Next: venice-video workshop -p "${series.outputDir}"`);
   });
@@ -439,7 +620,7 @@ program
   .option('--references <path>', 'Reference file or directory path (you can drag it into the terminal)')
   .option('--delivery <target>', 'standard | 4k delivery master')
   .option('--feedback <text>', 'Revision feedback for the existing workshop')
-  .option('--model <model>', 'Venice chat model', 'llama-3.3-70b')
+  .option('--model <model>', "Override the project's intelligence model for this run")
   .option('--approve', 'Approve the current workshop and materialize its production state', false)
   .option('--status', 'Show current workshop status without generating', false)
   .action(async (opts: {
@@ -470,6 +651,7 @@ program
     if (opts.approve) {
       if (!existing) throw new Error('No workshop draft exists. Run `venice-video workshop` first.');
       await approveWorkshop(series, existing);
+      await refreshTreatment(series, { episode: existing.script.episode });
       console.log(`${language.projectNoun} workshop approved.`);
       console.log('  Aesthetic, characters, locations, and script are now production state.');
       const approvedHtmlPath = join(series.outputDir, 'WORKSHOP.html');
@@ -486,6 +668,7 @@ program
       throw new Error('--delivery must be standard or 4k');
     }
     const previousInputs = existing?.inputs;
+    if (stdin.isTTY) printSkippableQuestionsNote();
     const ask = async (label: string, value: string | undefined, fallback = '') =>
       value ?? (stdin.isTTY ? await promptText(label, { defaultValue: fallback, required: false }) : fallback);
     const inputs: WorkshopInputs = {
@@ -499,7 +682,7 @@ program
       mustInclude: await ask('What must be included?', opts.mustInclude, previousInputs?.mustInclude ?? ''),
       avoid: await ask('What should it avoid?', opts.avoid, previousInputs?.avoid ?? ''),
       references: await ask(
-        'Reference files (optional) — drag a file or directory here, then press Enter. Leave blank and the workshop will propose the creative direction',
+        'Reference files (drag a file or folder in from Finder)',
         opts.references,
         previousInputs?.references ?? '',
       ),
@@ -526,8 +709,10 @@ program
 
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
+    const intelligence = intelligenceFor(series, opts.model);
     console.log(`${existing ? 'Revising' : 'Developing'} the complete ${language.projectNounLower} workshop...`);
-    const draft = await generateWorkshop(client, series, inputs, opts.model, existing, opts.feedback);
+    console.log(`Intelligence: ${describeIntelligence(intelligence.model)}`);
+    const draft = await generateWorkshop(client, series, inputs, intelligence.model, existing, opts.feedback);
     await saveWorkshop(series, draft);
 
     console.log(`Workshop draft ready — revision ${draft.revision}.`);
@@ -542,6 +727,8 @@ program
     console.log(`  Review: ${htmlPath}`);
     if (openInDefaultBrowser(htmlPath)) console.log('  Opened workshop in your default browser.');
     else console.log('  Open the HTML file above in your browser.');
+    console.log('  Keep the tab open — every production step rewrites this page with');
+    console.log('  the new panels, clips and QA verdicts. Reload to see progress.');
     console.log(`  Revise: venice-video workshop -p "${series.outputDir}" --feedback "..."`);
     console.log(`  Approve: venice-video workshop -p "${series.outputDir}" --approve`);
   });
@@ -563,20 +750,25 @@ program
     '--audio-strategy <strategy>',
     'How dialogue reaches the final mix: ' +
     '"native" (selected model speaks in-frame; Seedance/HappyHorse use voice-donor references when available), ' +
-    '"lip-sync" (exact mode: Venice TTS drives Wan 2.7 mouth movement), ' +
+    '"lip-sync" (exact mode: Venice speech is passed to the model as an audio file and the mouth follows it — in-family on Seedance 2.x and MiniMax H3, via Wan 2.7 elsewhere), ' +
     '"narrator-vo" (NARRATOR voice-over only; auto-mutes the model audio so a competing AI narrator can\'t fight the TTS).',
   )
   .option(
     '--video-family <family>',
     'Preferred video model family: ' +
-    'auto (default Seedance 2.0), seedance, happyhorse, minimax-h3, grok-imagine, kling-o3. ' +
+    'auto (default Seedance 2.0), seedance, wan-3-0, happyhorse, minimax-h3, grok-imagine, kling-o3. ' +
     'Swaps actionModel/atmosphereModel/characterConsistencyModel to that family. ' +
     'lipSyncModel is only used for the explicit exact lip-sync strategy. ' +
     'Omit it on an interactive terminal and you will be asked.',
   )
+  .option(
+    '--intelligence <model>',
+    'Reasoning model that develops the story, writes the script, and reads panels back during QA. ' +
+    `Defaults to ${DEFAULT_INTELLIGENCE_MODEL}. A text-only choice pairs with a vision model from the same privacy tier.`,
+  )
   .action(async (opts: {
     name: string; concept: string; genre: string; setting: string;
-    audioStrategy?: string; videoFamily?: string;
+    audioStrategy?: string; videoFamily?: string; intelligence?: string;
   }) => {
     const allowedAudio = new Set(['native', 'lip-sync', 'narrator-vo']);
     if (opts.audioStrategy && !allowedAudio.has(opts.audioStrategy)) {
@@ -597,6 +789,7 @@ program
       workspace: await getWorkspaceDir(program.opts().workspace),
       audioStrategy: opts.audioStrategy as 'native' | 'lip-sync' | 'narrator-vo' | undefined,
       videoFamilyPreference: videoFamily as VideoFamilyPreference | undefined,
+      intelligenceModel: opts.intelligence,
     });
     await saveSeries(series);
 
@@ -1214,7 +1407,7 @@ program
   .option('-e, --episode <number>', 'Script part number (compatibility flag)', parseInt)
   .option('--part <number>', 'Script part number', parseInt)
   .requiredOption('--concept <text>', 'Film/part concept, including target duration when relevant')
-  .option('--model <model>', 'Venice chat model', 'llama-3.3-70b')
+  .option('--model <model>', "Override the project's intelligence model for this run")
   .action(async (opts: { project: string; episode: number; part?: number; concept: string; model: string }) => {
     opts.episode = opts.part ?? opts.episode ?? 1;
     const series = await loadSeries(resolve(opts.project));
@@ -1308,7 +1501,7 @@ Your task is to write a complete ${language.scriptNounLower} as a JSON object. F
 - Use the correct videoModel ("action" for movement/dialogue, "atmosphere" for establishing/static)
 
 SHOT DURATION — PREFER FEWER, LONGER SHOTS (CRITICAL):
-The video models (Seedance 2.0, HappyHorse 1.1, Wan 2.7) all support up to 15 seconds in a single generation, and 15s is the strong default. For a 60-second sequence, prefer 4 shots at ~15s each over 10 shots at ~6s. Reasons:
+The video models (Seedance 2.0, HappyHorse 1.1, Wan 2.7) all support up to 15 seconds in a single generation, and 15s is the strong default. Wan 3.0 goes to 30s. For a 60-second sequence, prefer 4 shots at ~15s each over 10 shots at ~6s. Reasons:
 1. Identity stays locked longer — every new shot is a fresh generation where character likeness can drift.
 2. Motion has room to breathe — short shots cut before gestures/expressions complete, which is one of the main "AI video looks twitchy" tells.
 3. Cost is lower — fewer generations for the sequence.
@@ -1318,7 +1511,7 @@ Only use shorts (3-8s) for *deliberate* short beats: hard cuts, sight gags, sing
 - Aim for this script part to contain roughly (target_seconds / 13) shots ± 1.
 
 VOICE DIRECTION — NATIVE MODEL DIALOGUE IS PREFERRED:
-The recommended native pipeline uses Seedance or HappyHorse with character voice-donor references for in-character speech. Venice TTS plus Wan 2.7 is reserved for the explicit Exact lip-sync strategy. Therefore every dialogue shot's "delivery" cue must be RICH — direct the voice like you're talking to a voice actor: timbre, accent, pacing, emotional register, breath placement, signature delivery quirks. Two-word "delivery": "angry" cues produce flat results; "delivery": "deliberate, half-volume drawl with a beat before the punchline; warm not bitter; breath audible before 'audacity'" produces in-character results.
+The recommended native pipeline uses Seedance or HappyHorse with character voice-donor references for in-character speech. Rendering Venice speech first and passing it to the model as an audio file is reserved for the explicit Exact lip-sync strategy. Therefore every dialogue shot's "delivery" cue must be RICH — direct the voice like you're talking to a voice actor: timbre, accent, pacing, emotional register, breath placement, signature delivery quirks. Two-word "delivery": "angry" cues produce flat results; "delivery": "deliberate, half-volume drawl with a beat before the punchline; warm not bitter; breath audible before 'audacity'" produces in-character results.
 
 NO MUSIC / NO SFX FROM THE VIDEO MODEL:
 Every shot "description" MUST end with the literal phrase: "No background music, no sound effects, no soundtrack, dry recording." The harness adds music and ambient/SFX in post via separate Venice audio calls; baked-in music or SFX from the video model fights the assembler's mix. The "sfx" field in the schema below describes what the harness should generate in post — it does NOT instruct the video model to produce sound effects.
@@ -1369,37 +1562,30 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
 
     console.log(`Workshop: Generating ${language.scriptNounLower} draft (${language.segmentNoun} ${opts.episode})...`);
     console.log(`  Concept: ${opts.concept}`);
-    console.log(`  Model: ${opts.model}`);
+    const intelligence = intelligenceFor(series, opts.model);
+    console.log(`  Model: ${describeIntelligence(intelligence.model)}`);
     console.log(`  Reference docs: ${mdFiles.length} (${mdFiles.join(', ') || 'none'})`);
     console.log(`  Prior ${language.segmentNounLower} parts: ${series.episodes.length}\n`);
 
     try {
-      const response = await client.post<{
-        choices: Array<{ message: { content: string } }>;
-      }>('/api/v1/chat/completions', {
-        model: opts.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: 8000,
-        temperature: 0.7,
-      });
-
-      const raw = response.choices?.[0]?.message?.content ?? '';
-      const jsonStr = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-
       let script: EpisodeScript;
       try {
-        script = JSON.parse(jsonStr) as EpisodeScript;
+        script = await client.chatJson<EpisodeScript>({
+          model: intelligence.model,
+          systemPrompt,
+          userPrompt,
+          maxTokens: 8000,
+          temperature: 0.7,
+          label: `${language.scriptNounLower} draft`,
+        });
       } catch (parseErr) {
-        console.error('Failed to parse LLM response as JSON.');
-        console.error('Raw response (first 2000 chars):');
-        console.error(jsonStr.slice(0, 2000));
+        const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
+        console.error(`Could not get a usable ${language.scriptNounLower} out of ${intelligence.model}.`);
+        console.error(message);
         const dumpPath = join(getEpisodeDir(series, opts.episode), 'workshop-raw-response.txt');
         await mkdir(getEpisodeDir(series, opts.episode), { recursive: true });
-        await writeFile(dumpPath, raw, 'utf-8');
-        console.error(`\nFull response saved to: ${dumpPath}`);
+        await writeFile(dumpPath, message, 'utf-8');
+        console.error(`\nDetail saved to: ${dumpPath}`);
         process.exit(1);
       }
 
@@ -1516,9 +1702,9 @@ program
     const episodeDir = getEpisodeDir(series, opts.episode);
     const scriptApprovedPath = join(episodeDir, 'script-approved.json');
     if (!opts.skipApproval && script.status !== 'approved' && !existsSync(scriptApprovedPath)) {
-      console.error('Script must be approved before storyboarding.');
-      console.error('Review the script, then run: approve-script -p <project> -e <episode>');
-      console.error('Or bypass with: storyboard-episode ... --skip-approval');
+      console.error('Blocked: the script has not been approved, and approval is a human decision.');
+      console.error(`  Clear it with:  approve-script -p ${series.outputDir} -e ${opts.episode}`);
+      console.error('  --skip-approval only bypasses this check; it does not approve the script and is not the fix.');
       process.exit(1);
     }
 
@@ -1952,9 +2138,11 @@ program
     await saveSeries(series);
 
     console.log(`\nStoryboard complete. ${script.shots.length} panels in: ${sceneDir}`);
-    console.log(`\n>> QA REVIEW NEEDED: Run /qa-storyboard to check character/setting consistency before proceeding.`);
-    console.log(`   The agent will compare each panel against character references and flag issues.`);
-    console.log(`\nAfter QA approval: generate-videos -p ${series.outputDir} -e ${opts.episode}`);
+    console.log(`\nQA review comes next. A vision model compares every panel against the character`);
+    console.log(`references and flags identity, wardrobe, setting and framing drift.`);
+    console.log(`\nNext: qa-storyboard -p ${series.outputDir} -e ${opts.episode}`);
+    console.log(`Then: qa-approve -p ${series.outputDir} -e ${opts.episode}`);
+    await updateTreatment(series, opts.episode);
   });
 
 // ── fix-panel ─────────────────────────────────────────────────────────
@@ -2016,6 +2204,7 @@ program
 
     console.log(`\nPanel fixed. Review: ${panelPath}`);
     console.log(`Original archived as: shot-${shotNum}-pre-fix.png`);
+    await updateTreatment(series, opts.episode);
   });
 
 // ── insert-shot ─────────────────────────────────────────────
@@ -2137,6 +2326,7 @@ program
     if (dialogue) {
       console.log(`  4. (Dialogue shot) generate the TTS line for shot ${newId} before re-assembling.`);
     }
+    await updateTreatment(series, opts.episode);
   });
 
 // ── approve-script ───────────────────────────────────────────────────
@@ -2176,6 +2366,7 @@ program
     console.log(`  Shots: ${script.shots.length} | Duration: ${script.totalDuration}`);
     console.log(`\nStoryboard generation is now unblocked.`);
     console.log(`  Run: storyboard-episode -p ${series.outputDir} -e ${opts.episode}`);
+    await updateTreatment(series, opts.episode);
   });
 
 // ── qa-storyboard ─────────────────────────────────────────────────────
@@ -2184,9 +2375,9 @@ program
   .description('Analyze storyboard panels for character/setting consistency using vision')
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
-  .option('--model <model>', 'Vision model for QA analysis', 'qwen-2.5-vl')
+  .option('--model <model>', "Override the project's vision model for this run")
   .option('--shots <range>', 'Specific shots to check (e.g. "3,5,7" or "3-7")')
-  .action(async (opts: { project: string; episode: number; model: string; shots?: string }) => {
+  .action(async (opts: { project: string; episode: number; model?: string; shots?: string }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
@@ -2212,7 +2403,11 @@ program
       shotsToCheck = script.shots.filter(s => nums.has(s.shotNumber));
     }
 
-    console.log(`QA Storyboard: Episode ${opts.episode} (${shotsToCheck.length} shots, model: ${opts.model})\n`);
+    // An explicit --model here names the panel reader directly, so it is used
+    // verbatim -- substituting a "safer" vision model would silently ignore
+    // the flag. Without one, fall back to the project's paired vision model.
+    const qaModel = opts.model ?? intelligenceFor(series).visionModel;
+    console.log(`QA Storyboard: Episode ${opts.episode} (${shotsToCheck.length} shots, model: ${qaModel})\n`);
 
     type QaVerdict = 'PASS' | 'FLAG-CRITICAL' | 'FLAG-MODERATE' | 'FLAG-LOW';
     interface ShotQaResult {
@@ -2222,6 +2417,8 @@ program
       verdict: QaVerdict;
       issues: string[];
       notes: string;
+      /** The vision call itself failed, so this shot was never actually read. */
+      errored?: boolean;
     }
 
     const results: ShotQaResult[] = [];
@@ -2283,9 +2480,15 @@ Verdict rules:
       ].join('\n');
 
       try {
-        const raw = await client.chatWithVision(opts.model, systemPrompt, images, userPrompt);
-        const jsonStr = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-        const parsed = JSON.parse(jsonStr) as { verdict: QaVerdict; issues: string[]; notes: string };
+        const parsed = await client.chatJson<{ verdict: QaVerdict; issues: string[]; notes: string }>({
+          model: qaModel,
+          systemPrompt,
+          userPrompt,
+          images,
+          maxTokens: 4000,
+          temperature: 0.3,
+          label: `shot ${shotNum} QA`,
+        });
 
         results.push({
           shotNumber: shot.shotNumber, type: shot.type, characters: shot.characters,
@@ -2295,18 +2498,25 @@ Verdict rules:
         const icon = parsed.verdict === 'PASS' ? '✓' : parsed.verdict === 'FLAG-CRITICAL' ? '✗' : '⚠';
         console.log(`  [${i + 1}/${shotsToCheck.length}] Shot ${shotNum}: ${icon} ${parsed.verdict}${parsed.issues.length > 0 ? ' -- ' + parsed.issues[0] : ''}`);
       } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
         results.push({
           shotNumber: shot.shotNumber, type: shot.type, characters: shot.characters,
-          verdict: 'FLAG-LOW', issues: [`QA analysis failed: ${err}`], notes: 'Vision API error',
+          verdict: 'FLAG-LOW', issues: [`QA analysis failed: ${reason}`], notes: 'Vision API error',
+          errored: true,
         });
-        console.warn(`  [${i + 1}/${shotsToCheck.length}] Shot ${shotNum}: QA failed - ${err}`);
+        console.warn(`  [${i + 1}/${shotsToCheck.length}] Shot ${shotNum}: QA failed - ${reason}`);
       }
     }
+
+    // A shot the model never managed to look at is not a low-severity finding,
+    // it is an unchecked shot. Counting it as FLAG-LOW alone once let a whole
+    // storyboard read as "no critical issues" when every call had failed.
+    const erroredCount = results.filter(r => r.errored).length;
 
     // Persist QA report
     const report = {
       episode: opts.episode,
-      model: opts.model,
+      model: qaModel,
       analyzedAt: new Date().toISOString(),
       summary: {
         total: results.length,
@@ -2314,6 +2524,7 @@ Verdict rules:
         flagCritical: results.filter(r => r.verdict === 'FLAG-CRITICAL').length,
         flagModerate: results.filter(r => r.verdict === 'FLAG-MODERATE').length,
         flagLow: results.filter(r => r.verdict === 'FLAG-LOW').length,
+        errored: erroredCount,
       },
       results,
     };
@@ -2325,15 +2536,25 @@ Verdict rules:
     console.log(`QA Report: ${report.summary.pass} PASS, ${report.summary.flagCritical} CRITICAL, ${report.summary.flagModerate} MODERATE, ${report.summary.flagLow} LOW`);
     console.log(`Report saved: ${reportPath}`);
 
+    if (erroredCount > 0) {
+      console.log(`\n${erroredCount} of ${results.length} shot(s) were never checked — ${qaModel} could not read them:`);
+      for (const r of results.filter(shot => shot.errored)) {
+        console.log(`  Shot ${String(r.shotNumber).padStart(3, '0')}: ${r.issues.join(', ')}`);
+      }
+      console.log(`\nThose shots are unverified, not approved. Fix the model and re-run:`);
+      console.log(`  qa-storyboard -p ${series.outputDir} -e ${opts.episode}`);
+    }
+
     if (report.summary.flagCritical > 0) {
       console.log(`\n${report.summary.flagCritical} critical issue(s) found. Fix panels before proceeding.`);
       const criticalShots = results.filter(r => r.verdict === 'FLAG-CRITICAL');
       for (const r of criticalShots) {
         console.log(`  Shot ${String(r.shotNumber).padStart(3, '0')}: ${r.issues.join(', ')}`);
       }
-    } else {
+    } else if (erroredCount === 0) {
       console.log(`\nNo critical issues. Run: qa-approve -p ${series.outputDir} -e ${opts.episode}`);
     }
+    await updateTreatment(series, opts.episode);
   });
 
 // ── qa-approve ────────────────────────────────────────────────────────
@@ -2360,6 +2581,7 @@ program
     console.log(`QA approved for Episode ${opts.episode}.`);
     console.log(`  Artifact: ${qaPath}`);
     console.log(`\nVideo generation is now unblocked. Run: generate-videos -p ${series.outputDir} -e ${opts.episode}`);
+    await updateTreatment(series, opts.episode);
   });
 
 // ── generate-videos ───────────────────────────────────────────────────
@@ -2369,7 +2591,7 @@ program
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--skip-qa', 'Skip QA approval check', false)
-  .option('--no-seedance-keyframe', 'Disable the automatic Seedance R2V → Wan 2.7 keyframe pipeline for this run (see AGENTS.md rule 32).')
+  .option('--no-seedance-keyframe', 'Disable the automatic Seedance R2V keyframe pipeline that anchors identity for keyframe-only lip-sync models (see AGENTS.md rule 32).')
   .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -2380,9 +2602,10 @@ program
     const episodeDir = getEpisodeDir(series, opts.episode);
     const qaPath = join(episodeDir, 'qa-approved.json');
     if (!opts.skipQa && !existsSync(qaPath)) {
-      console.error('QA approval required before video generation.');
-      console.error('Run qa-storyboard to review panels, then: qa-approve -p <project> -e <episode>');
-      console.error('Or bypass with: generate-videos ... --skip-qa');
+      console.error('Blocked: rendering is billed at queue time and the QA gate has not been cleared by a human.');
+      console.error(`  Review:  qa-storyboard -p ${series.outputDir} -e ${opts.episode}`);
+      console.error(`  Clear it with:  qa-approve -p ${series.outputDir} -e ${opts.episode}`);
+      console.error('  --skip-qa only bypasses this check; it does not clear QA and is not the fix.');
       process.exit(1);
     }
 
@@ -2391,7 +2614,7 @@ program
     // this run only (no persisted change to series.json).
     if (opts.seedanceKeyframe === false) {
       series.videoDefaults = { ...series.videoDefaults, seedanceKeyframeForWan: false };
-      console.log('Seedance R2V → Wan 2.7 keyframe pipeline DISABLED for this run.\n');
+      console.log('Seedance R2V keyframe pipeline DISABLED for this run.\n');
     }
 
     const apiKey = await getVeniceApiKey();
@@ -2409,7 +2632,8 @@ program
     }
     const seedanceKeyframeCount = generationPlan.units.filter(unit => unit.useSeedanceKeyframe).length;
     if (seedanceKeyframeCount > 0) {
-      console.log(`Seedance R2V → Wan 2.7 keyframe units: ${seedanceKeyframeCount} (~$0.85 each; AGENTS.md rule 32)`);
+      const lipSync = series.videoDefaults.lipSyncModel ?? DEFAULT_LIP_SYNC_MODEL;
+      console.log(`Seedance R2V keyframe → ${lipSync} units: ${seedanceKeyframeCount} (~$0.85 each; AGENTS.md rule 32)`);
     }
     console.log('');
 
@@ -2450,6 +2674,7 @@ program
     console.log(`\nGenerated ${videoPaths.length} video clips.`);
     console.log(`Generation plan saved to: ${join(episodeDir, 'generation-plan.json')}`);
     console.log(`Next: assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+    await updateTreatment(series, opts.episode);
   });
 
 // ── override-audio ────────────────────────────────────────────────────
@@ -2520,6 +2745,7 @@ program
     }
 
     console.log(`\nAudio overrides saved to: ${audioDir}`);
+    await updateTreatment(series, opts.episode);
   });
 
 // ── generate-music ────────────────────────────────────────────────────
@@ -2565,6 +2791,7 @@ program
     }, outputPath);
 
     console.log(`Music saved: ${outputPath}`);
+    await updateTreatment(series, opts.episode);
   });
 
 // ── generate-audio (Seed Audio 1.0 expressive speech / prompt-driven audio) ──
@@ -3080,6 +3307,7 @@ program
     await saveSeries(series);
 
     console.log(`\nFinal episode: ${outputPath}`);
+    await updateTreatment(series, opts.episode);
   });
 
 // ── export-timeline ─────────────────────────────────
@@ -3385,6 +3613,7 @@ program
       keepWorkDir: opts.keepWorkDir,
       yes: opts.yes,
     });
+    await updateTreatment(series, part);
   });
 
 // ── produce-episode ───────────────────────────────────────────────────
@@ -3502,21 +3731,27 @@ program
   .command('status')
   .description('Show pipeline state for a project and the next command to run')
   .option('-p, --project <dir>', 'Project directory (defaults to the selection)')
-  .action(async (opts: { project?: string }) => {
+  .option('--json', 'Emit the project status as JSON')
+  .action(async (opts: { project?: string; json?: boolean }) => {
+    const json = wantsJson(opts);
     const context = await readContext();
     const projectRef = opts.project ?? context.project;
     if (!projectRef) {
-      console.log('No project selected. Run `venice-video use <project>` or pass -p <dir>.');
+      // No selection is an error for an agent checking the exit code, not just
+      // an informational note — say what to do and exit non-zero.
+      failJson(json, 'No project selected. Pass -p <dir> or run `venice-video use <project>`.', {
+        hint: 'venice-video use <project>',
+      });
       return;
     }
     const projectDir = await resolveProjectRef(projectRef, program.opts().workspace);
     const status = await collectProjectStatus(projectDir);
     if (!status) {
-      console.error(`No series.json found at ${projectDir}.`);
-      process.exit(1);
+      failJson(json, `No series.json found at ${projectDir}.`, { projectDir });
       return;
     }
-    console.log(formatProjectStatus(status, context.episode));
+    if (json) emitJson({ ok: true, ...status, selectedEpisode: context.episode });
+    else console.log(formatProjectStatus(status, context.episode));
   });
 
 program
@@ -3524,7 +3759,18 @@ program
   .description('List Venice renders left in flight by an interrupted run')
   .argument('[action]', 'clear to drop a recorded job, prune to drop stale ones')
   .argument('[target]', 'Output path or queue id to clear')
-  .action(async (action: string | undefined, target: string | undefined) => {
+  .option('--json', 'Emit the in-flight jobs as JSON')
+  .action(async (action: string | undefined, target: string | undefined, opts: { json?: boolean }) => {
+    const json = wantsJson(opts);
+    if (!action && json) {
+      const pending = await listPendingJobs();
+      emitJson({
+        ok: true,
+        jobs: pending.map(job => ({ ...job, stale: isStale(job) })),
+        note: 'Re-run the command that produced a job to re-attach instead of re-billing.',
+      });
+      return;
+    }
     if (action === 'prune') {
       const removed = await prunePendingJobs();
       console.log(`Pruned ${removed} stale job record(s).`);
@@ -3599,7 +3845,17 @@ if (isMainModule(import.meta.url)) {
       console.error('Cancelled. Any in-flight Venice job is recorded — re-run to re-attach.');
       process.exit(130);
     }
-    throw error;
+    // Ordinary failures reach a non-TTY agent as an uncaught exception, which
+    // prints a full stack trace and a `Node.js v22.x` footer — it reads as a
+    // crash when the actionable part is one line. Report it as a clean error
+    // and exit non-zero. Set VENICE_VIDEO_DEBUG=1 to see the stack.
+    const message = error instanceof Error ? error.message : String(error);
+    if (wantsJson()) emitJson({ ok: false, error: message });
+    else console.error(`error: ${message}`);
+    if (process.env.VENICE_VIDEO_DEBUG === '1' && error instanceof Error && error.stack) {
+      console.error(error.stack);
+    }
+    process.exit(1);
   }
 }
 

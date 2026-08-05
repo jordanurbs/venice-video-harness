@@ -34,6 +34,7 @@ import { JobManager, formatDuration, type BackgroundJob } from './jobs.js';
 import { installOutputRouter, runWithSink, writeDirect } from './output-router.js';
 import { runInOperation, OperationAbortedError } from '../venice/operation-context.js';
 import { listPendingJobs, prunePendingJobs } from '../venice/job-store.js';
+import { markSessionActive } from '../update.js';
 
 // ---- Terminal styling -----------------------------------------------------
 
@@ -369,6 +370,9 @@ export async function startShell(program: Command, options: ShellOptions = {}): 
   }
   colorEnabled = options.color ?? (ownsTerminal && Boolean(stdout.isTTY) && !process.env.NO_COLOR);
 
+  // Commands run in this process, so `update` must not overwrite the files it
+  // is running from until the session ends.
+  markSessionActive();
   installOutputRouter();
 
   const write = (text: string): void => {

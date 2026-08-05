@@ -1,5 +1,244 @@
 # Changelog
 
+## 2.11.0 — 2026-08-05
+
+### Added
+
+- **The CLI now describes itself, so the operating knowledge travels inside the
+  binary instead of only in a checkout.** A knowledge pack that lives in a file
+  array can be left out of a tarball or unreachable to a runner that never
+  clones; a command cannot. Three new commands:
+  - `venice-video agent-guide [--json]` — the ~80/20 core rules (find the next
+    step, queue-time billing and re-attach, long renders needing background
+    invocation, the human gates, consistency-first generation). Sourced from
+    `AGENTS.md`, kept in `src/agent/guide.ts`.
+  - `venice-video pipeline [--json]` — the ordered stages, the artifact each
+    produces, the two human gates, and the literal command that advances each.
+    Mirrors the on-disk state machine in `src/session/status.ts`.
+  - The same core rules are also installable as a skill
+    (`.claude/skills/venice-agent-guide/`), so a runner that pulls skills from
+    GitHub (for example `hermes skills install
+    jordanurbs/venice-video-harness/venice-agent-guide`) gets them without a
+    clone or an npm publish.
+
+- **`--json` on the agent-facing read commands** — `status`, `doctor`, `queue`,
+  `pipeline`, and `agent-guide`, plus a global `--json`. Output is exactly one
+  JSON object on stdout; the human text rendering is unchanged. An agent no
+  longer has to scrape prose whose wording can shift.
+
+### Changed
+
+- **Honest exit codes.** `venice-video status` with no project selected now exits
+  non-zero instead of printing a note and exiting 0 — an agent checking `$?` was
+  seeing success on an error.
+
+- **Ordinary failures are a clean `error:` line, not a Node stack trace.** A usage
+  error in a non-TTY used to surface as an uncaught exception with a
+  `Node.js v22.x` footer that reads as a crash. The top-level handler now prints
+  the message and exits 1; set `VENICE_VIDEO_DEBUG=1` for the stack.
+
+- **Gate errors state the condition and the command that clears it, and no longer
+  present `--skip-approval` / `--skip-qa` as a "Bypass".** The skip flags bypass
+  the check without making the underlying approval true, so they are not the fix
+  for an agent — the error now says so.
+
+- **The MCP server's harness resolution order was reversed so intent wins.**
+  `venice-video-mcp` now resolves `HARNESS_BIN`, then `HARNESS_PATH/dist`, then a
+  `venice-video` on `PATH` (previously `PATH` outranked `HARNESS_PATH`). Setting
+  `HARNESS_PATH` is an explicit statement of intent and must beat an ambient,
+  often-stale global install. Resolution is also logged once to stderr
+  (`[venice-video-mcp] harness: …`) so it can never again pick the wrong binary
+  silently. See `venice-video-mcp` 0.4.0.
+
+- **`install-skills` grew `--target hermes` and `--dir <path>`** so the companion
+  skills can be installed into a runner's own skills directory
+  (`~/.hermes/skills/venice/`) rather than only a Claude-shaped `.claude/skills/`.
+  `--target openclaw` errors honestly — its skills path is not verified on any
+  machine yet — and points at `--dir`.
+
+## 2.10.0 — 2026-08-05
+
+### Added
+
+- **The agent operating contract now ships in the published package.** `AGENTS.md`
+  (47 agent rules, 20 production anti-patterns), `.claude/commands/`,
+  `.claude/agents/` and `.claude/skills/` are in the `files` array. Until now the
+  package published only `dist` and the README, so an agent driving a global
+  install — Hermes Agent and OpenClaw both do — had the compiled CLI and nothing
+  that explains it: no pipeline order, no gate map, no model-routing rules, no
+  anti-patterns. It saw `--help`, a flat list of 40-plus commands, and guessed.
+  That was the largest single cause of poor agent-driven output, and it was a
+  knowledge gap rather than a missing capability. Verify with
+  `ls "$(npm root -g)/venice-video-harness/AGENTS.md"`. `.cursor/rules/` stays
+  repo-only, being IDE configuration rather than operating knowledge.
+
+- **README > "Driving this from an agent"** — explicit instructions for a coding
+  agent operating the harness. Covers the three integration surfaces and what
+  each one gives the agent, MCP registration with the companion skills, the
+  version-drift preflight, the cwd/workspace trap, the two pipeline gates and why
+  not to route around them with `--skip-approval` / `--skip-qa`, queue-time
+  billing and re-attach instead of blind retry, the output-parsing sharp edges
+  (no `--json`, `status` exiting 0 on "No project selected", usage errors
+  arriving as Node stack traces), a complete non-interactive run, and the twelve
+  rules with the most effect on output quality.
+
+- **Two sections on where the harness actually runs**, replacing a single
+  too-narrow note about ACP. ACP (Agent Client Protocol) connects an *editor* to
+  an *agent* over stdio, with the editor supplying the working directory — it
+  neither runs the harness nor provisions a runtime, so the harness has no
+  position in an ACP conversation and MCP remains the tool-side protocol.
+  Provisioning a separate runtime for long renders is a genuinely good fit but is
+  a different mechanism (in Hermes, `terminal.backend`: local / docker / ssh /
+  modal / daytona / singularity), and it has four prerequisites the default
+  images do not meet: `venice-video`, `ffmpeg` and `ffprobe` in the image, the API
+  key passed through, a persistent workspace volume, and a retrieval step home.
+  **The trap worth knowing:** `pending-jobs.json` lives in the per-machine config
+  directory, so on an ephemeral container the record that makes an interrupted
+  render re-attachable dies with the container and an already-billed render
+  becomes unrecoverable — mount the config dir, or keep generation on a
+  persistent backend.
+
+- **Documented the harness-resolution order the MCP server uses, because it has a
+  silent failure mode.** The server tries `HARNESS_BIN`, then `venice-video` on
+  `PATH`, then `HARNESS_PATH/dist/mini-drama/cli.js` — so a global install
+  outranks `HARNESS_PATH`, and a config setting only `HARNESS_PATH` on a machine
+  with a global `venice-video` drives the **global** copy. Since npm `latest`
+  trails this repo, that silently runs an older binary: newer flags fail and fixed
+  bugs reappear while everything looks configured correctly. Verified by
+  handshaking the server both ways and reading back the `command` field in the
+  response, which names the binary that answered. The README now says to set
+  `HARNESS_BIN` and how to confirm which copy is live.
+
+- **Guidance on long-render invocation.** `generate-videos`, `assemble-episode`,
+  `produce-episode`, `finish` and `upscale` run 3–10 minutes, while a typical
+  agent terminal tool defaults to a 180-second timeout and caps a foreground
+  command at 600s (Hermes's numbers). A foreground render is killed partway
+  through, and because Venice bills at queue time it is already paid for. These
+  stages must be invoked as background commands with completion notification, and
+  a killed render is recovered by re-running the identical command rather than
+  starting over.
+
+## 2.9.0 — 2026-08-05
+
+### Added
+
+- **`venice-video update`** (alias `upgrade`) installs the latest published
+  release, so upgrading is no longer a remembered npm incantation. `--check`
+  reports what is available and installs nothing, `--dry-run` prints the exact
+  npm command first, `--tag` follows a dist-tag other than `latest`, and a build
+  ahead of the tag is reported rather than downgraded unless `--force` is given.
+  The install targets the prefix the running copy lives in rather than the `npm`
+  first on `PATH`: a version manager can leave those pointing at different
+  prefixes, and then `npm install -g` reports success while the executable that
+  actually runs stays on the old version. The new version is read back off disk
+  afterwards, and a mismatch says to check `command -v venice-video`. A copy
+  inside a project's `node_modules` or a git checkout is not installed over —
+  each prints the command that does own it.
+
+- **The intelligence model is now a project setting.** The workshop, the shot
+  script and storyboard QA are the three steps that reason rather than render,
+  and the model behind them is chosen when the project is created: **Kimi K3**
+  (default), GLM 5.2 or Grok 4.5 on the **private** tier, where the prompt stays
+  on Venice infrastructure; Fable 5, Opus 5, GPT 5.6 Sol or Qwen 3.8 Max on the
+  **anonymized** tier, where it is routed to an external provider with
+  identifying metadata stripped. The wizard asks, `--intelligence` states it
+  upfront, `series.new` takes `intelligenceModel`, and `--model` still overrides
+  a single run. Existing projects have no stored choice and fall back to the
+  default. Previously the pipeline was hardwired to `llama-3.3-70b`, which
+  neither reasons nor reads images.
+- A text-only choice is paired with a vision-capable companion **from the same
+  privacy tier** — GLM 5.2 borrows Grok 4.5 for QA, never an anonymized model.
+  Sending a private project's panels to a weaker tier to work around a missing
+  capability would break the promise the operator made when they picked private.
+  The pairing is shown in the wizard and as a pill on the treatment page.
+
+### Fixed
+
+- **`qa-storyboard` could not have worked for any user.** Its default model,
+  `qwen-2.5-vl`, was sunset from the Venice catalog and returns
+  `Specified model not found`. Every panel hit the error path, was recorded as
+  `FLAG-LOW` "Vision API error", and the run then reported "No critical issues"
+  and suggested `qa-approve` — green-lighting a storyboard where nothing had
+  been checked. The default now comes from the project's intelligence model, and
+  shots whose vision call failed are counted separately as unchecked and
+  suppress the approval suggestion.
+- Venice error messages are no longer discarded. The client read only
+  `error.message`, but the API also returns `{error: "..."}` for routing
+  failures and `{issues: [{message}]}` for validation, so the two most useful
+  messages — `Did you mean: …` on an unknown model, and `Image content is not
+  supported by this model` — were being replaced with a bare
+  `Venice API returned HTTP 400`.
+- Structured-output requests now retry once with the parse error quoted back to
+  the model. GLM 5.2 drops a closing brace roughly one attempt in three, which
+  previously failed the whole command; it now completes reliably. Fence
+  stripping also tolerates a model that narrates before its JSON.
+- Vision requests were capped at 2000 `max_tokens`, which a reasoning model can
+  spend entirely on thinking and return empty content. Raised to 4000, and an
+  empty reply now says which of the two causes it was.
+- An explicit `--model` on `qa-storyboard` is used verbatim rather than being
+  silently swapped for a known vision model.
+
+## 2.8.0 — 2026-08-05
+
+### Added
+
+- **The treatment page tracks the run.** `WORKSHOP.html` is re-rendered by every
+  command that produces an artifact, so the tab you already have open is one
+  reload away from current. It gains a Production progress card (stage, panel /
+  clip / dialogue counts, and the next command) and an Output column on the shot
+  script showing each shot's panel — replaced by the clip's poster frame once it
+  renders — with badges for panel, clip, voiceover and QA verdict. Hover a
+  flagged verdict to read the issue. `WORKSHOP.md` carries the same progress
+  summary.
+- Thumbnail encoding is cached against each file's mtime in
+  `.treatment-thumbs.json`, so a refresh re-encodes only what changed (~10ms for
+  an unchanged episode, versus ~280ms cold).
+
+### Fixed
+
+- **`storyboard-episode` suggested `/qa-storyboard`, which cannot be run.** A
+  leading `/` is reserved for the shell's meta-commands, and the suggestion also
+  omitted `-p` and `-e`. Every suggested next step is now a complete, runnable
+  command line. The same applied to the `generate-videos` QA-gate error and the
+  `storyboard-episode` approval error, which printed `<project>` placeholders.
+- **`status` told workshop-driven projects to re-approve a script they had
+  already shot.** `storyboard-episode` accepts either `script-approved.json` or
+  `script.status === 'approved'`, but the status reporter checked only the file
+  — and `workshop --approve` sets only the status. It now mirrors the real gate.
+- A shot whose dialogue object carries an empty line rendered as empty quotes in
+  the shot script; it now reads as no dialogue.
+
+## 2.7.0 — 2026-08-05
+
+### Added
+
+- **Wan 3.0** as a selectable video family. It is the only family that renders
+  past 15s — the ladder runs 5/10/15/20/25/30s at 480p, 720p, and 1080p, with
+  native audio always on and a 9-image reference stack on the R2V lane. It
+  accepts no audio input, so projects on Wan 3.0 fall back to Wan 2.7 for exact
+  lip-sync.
+- Creative references are now shown on the workshop page. Image and video
+  references render as an inline gallery in `WORKSHOP.html` (downscaled WebP
+  thumbnails embedded as data URIs, so the file stays self-contained; video
+  posters come from a frame at 0.5s), and image references become markdown
+  embeds in `WORKSHOP.md`. Anything that can't be decoded still lists as a path.
+- Setup and workshop questions announce that they are skippable, and each
+  optional prompt now shows `[Enter to skip]`.
+
+### Changed
+
+- **Exact lip-sync is family-aware instead of always Wan 2.7.** Seedance 2.x
+  and MiniMax H3 both accept a top-level `audio_url` on their R2V lanes, so a
+  project on either family now lip-syncs in-family, keeping its full reference
+  stack. Only families with no audio-driven lane route out to Wan 2.7.
+- The Seedance keyframe pre-pass (rule 32) now runs only for lip-sync models
+  that take no reference images. An in-family R2V lip-sync render is one
+  generation instead of two, roughly halving the per-shot cost.
+- `mustStayAsWanLipSync` is renamed `mustRenderAsExactLipSync`; the old name
+  remains as a deprecated alias.
+- Wizard, flag, and prompt copy no longer names a specific lip-sync model where
+  the model depends on the project's family.
+
 ## 2.6.0 — 2026-07-31
 
 ### Added

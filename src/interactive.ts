@@ -48,8 +48,21 @@ async function hiddenQuestion(label: string): Promise<string> {
   });
 }
 
+/**
+ * Banner for a run of setup questions where most answers are optional. Says
+ * once, up front, what the bracketed hints on each line mean.
+ */
+export function printSkippableQuestionsNote(what = 'the workshop'): void {
+  console.log(
+    `\nMost of these are optional — press Enter to skip one and ${what} will decide.`,
+  );
+  console.log('A value in [brackets] is what Enter accepts.');
+}
+
 export async function promptText(label: string, options: PromptOptions = {}): Promise<string> {
-  const suffix = options.defaultValue ? ` [${options.defaultValue}]` : '';
+  const suffix = options.defaultValue
+    ? ` [${options.defaultValue}]`
+    : options.required ? '' : ' [Enter to skip]';
   while (true) {
     let value: string;
     if (options.hidden) {

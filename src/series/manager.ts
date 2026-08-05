@@ -14,11 +14,12 @@ import {
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   DEFAULT_IMAGE_GENERATION_MODEL,
   DEFAULT_IMAGE_EDIT_MODEL,
-  DEFAULT_LIP_SYNC_MODEL,
+  resolveLipSyncModel,
   resolveVideoFamilyDefaults,
   type AudioStrategy,
   type VideoFamilyPreference,
 } from './types.js';
+import { resolveIntelligence } from '../venice/text-models.js';
 
 function slugify(name: string): string {
   return name
@@ -32,6 +33,8 @@ export interface CreateSeriesOptions {
   audioStrategy?: AudioStrategy;
   /** Upfront questionnaire: preferred video model family. */
   videoFamilyPreference?: VideoFamilyPreference;
+  /** Upfront questionnaire: the reasoning model behind the project. */
+  intelligenceModel?: string;
   /** Directory that contains every series project. */
   workspace?: string;
   /** Broad standalone-CLI creation type. */
@@ -71,10 +74,11 @@ export function createSeries(
         generationModel: DEFAULT_IMAGE_GENERATION_MODEL,
         editModel: DEFAULT_IMAGE_EDIT_MODEL,
       },
-      lipSyncModel: DEFAULT_LIP_SYNC_MODEL,
+      lipSyncModel: resolveLipSyncModel(family),
       ...(options?.audioStrategy ? { audioStrategy: options.audioStrategy } : {}),
       ...(options?.videoFamilyPreference ? { videoFamilyPreference: options.videoFamilyPreference } : {}),
     },
+    intelligence: resolveIntelligence(options?.intelligenceModel),
     outputDir,
     createdAt: now,
     updatedAt: now,

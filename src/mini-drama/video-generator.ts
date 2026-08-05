@@ -40,7 +40,7 @@ import {
   VOICE_REF_MIN_SEC,
   VOICE_REF_MAX_SEC,
 } from './voice-reference.js';
-import { parseShotDuration } from './generation-planner.js';
+import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
 import { getVideoModel, modelSupportsDuration } from '../venice/models.js';
 import { appendRecipePass } from '../venice/recipe.js';
@@ -150,7 +150,7 @@ function resolveDialogueShotId(shot: ShotScript): string | number {
  * Resolves the path to the dialogue MP3 for a shot, generating it inline
  * via Venice TTS if the shot has a locked voice and the file does not yet
  * exist. Returns undefined when the shot has no usable voice and no
- * pre-existing audio — the caller should fall back to letting Wan 2.7
+ * pre-existing audio — the caller should fall back to letting the video model
  * synthesize audio from the prompt's dialogue block.
  */
 async function ensureDialogueAudio(
@@ -169,7 +169,7 @@ async function ensureDialogueAudio(
   );
   if (!character?.voiceId) {
     console.warn(
-      `  No locked voice for ${shot.dialogue.character}; skipping inline TTS — Wan 2.7 will synthesize from the prompt.`,
+      `  No locked voice for ${shot.dialogue.character}; skipping inline TTS — the video model will synthesize from the prompt.`,
     );
     return undefined;
   }
@@ -1343,12 +1343,12 @@ async function renderSingleShotUnit(
   // expect (A3). Only used by reference-audio-capable models with ≥1 ref image.
   const voiceReferencePaths = resolveVoiceReferencePaths(series, videoPrompt);
 
-  // --- AGENTS.md rule 32: Seedance R2V → Wan 2.7 keyframe pipeline ---
-  // Wan 2.7 i2v has no `reference_image_urls`; its only identity anchor is
-  // the single `image_url` keyframe. We render a Seedance R2V identity-lock
-  // pass first, extract frame 1, and use that frame for the Wan 2.7 i2v
-  // render. The dialogue MP3 is wired into `audio_url` so Wan 2.7 lip-syncs
-  // against the real voice instead of synthesizing.
+  // --- AGENTS.md rule 32: Seedance R2V keyframe pipeline ---
+  // Only for lip-sync models with no `reference_image_urls` lane (Wan 2.7
+  // i2v), whose sole identity anchor is the single `image_url` keyframe. We
+  // render a Seedance R2V identity-lock pass first, extract frame 1, and use
+  // that frame as the keyframe. The planner skips this entirely when the
+  // lip-sync model is itself an R2V lane.
   let keyframeArtifacts: SeedanceKeyframeArtifacts | undefined;
   let dialogueAudioPath: string | undefined;
   let stageAFailed = false;
@@ -1364,10 +1364,6 @@ async function renderSingleShotUnit(
         previousShot,
       );
       anchorImagePath = keyframeArtifacts.keyframePngPath;
-
-      const audioDir = join(dirname(sceneDir), 'audio');
-      console.log('  Stage C/3: locating dialogue audio for Wan 2.7 lip-sync');
-      dialogueAudioPath = await ensureDialogueAudio(client, series, shot, audioDir);
     } catch (err) {
       stageAFailed = true;
       stageAFailureReason = err instanceof Error ? err.message : String(err);
@@ -1375,9 +1371,21 @@ async function renderSingleShotUnit(
         `  ⚠ Seedance R2V keyframe pipeline failed (${stageAFailureReason}); falling back to panel-anchored single-pass render.`,
       );
       keyframeArtifacts = undefined;
-      dialogueAudioPath = undefined;
       anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath, panelPath);
     }
+  }
+
+  // Exact lip-sync: wire the dialogue MP3 into `audio_url` so the model
+  // follows the real recording instead of synthesizing a voice. This is the
+  // step that actually produces the lip-sync, so it runs for every
+  // audio-input-capable route — the keyframed Wan 2.7 i2v path and the
+  // in-family R2V path (Seedance 2.x, MiniMax H3) alike.
+  if (!stageAFailed
+    && mustRenderAsExactLipSync(shot, series.videoDefaults)
+    && MODELS_SUPPORTING_AUDIO_INPUT.has(videoPrompt.model)) {
+    const audioDir = join(dirname(sceneDir), 'audio');
+    console.log(`  Locating dialogue audio for ${videoPrompt.model} lip-sync`);
+    dialogueAudioPath = await ensureDialogueAudio(client, series, shot, audioDir);
   }
 
   const savedPath = await renderVideoFile(client, {

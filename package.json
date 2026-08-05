@@ -1,6 +1,6 @@
 {
   "name": "venice-video-harness",
-  "version": "2.6.0",
+  "version": "2.11.0",
   "description": "Standalone consistency-first video production CLI powered by the Venice API",
   "homepage": "https://github.com/jordanurbs/venice-video-harness",
   "repository": {
@@ -70,6 +70,10 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
+    "AGENTS.md",
+    ".claude/commands",
+    ".claude/agents",
+    ".claude/skills",
     "scripts/postinstall.mjs"
   ],
   "engines": {
