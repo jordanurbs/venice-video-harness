@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.11.1 — 2026-08-05
+
+### Changed
+
+- **README agent instructions rewritten around the published packages.** With
+  both `venice-video-harness` and `venice-video-mcp` on npm, the Hermes/OpenClaw
+  path is now a plain global install rather than a two-repo clone with
+  hand-written absolute paths. Added a "Quick start for Hermes and OpenClaw"
+  block, rewrote "Registering the MCP server" to lead with the published
+  `venice-video-mcp` bin (and an `npx -y venice-video-mcp` variant) while keeping
+  the clone + `HARNESS_BIN`/`HARNESS_PATH` path as a documented dev alternative,
+  and switched the companion-skills step to the on-PATH
+  `venice-video-mcp-install-skills` bin. Clarified that with both packages
+  installed globally you set none of the harness path variables — the MCP finds
+  `venice-video` on `PATH`. Softened the stale "npm latest trails this repo"
+  version-drift note. Docs only; no code change.
+
 ## 2.11.0 — 2026-08-05
 
 ### Added

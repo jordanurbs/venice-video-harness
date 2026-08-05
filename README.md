@@ -41,8 +41,48 @@ knowledge reaches you, which is the single largest predictor of output quality.
 | Surface | How it runs | What you get | Use when |
 |---|---|---|---|
 | **Repo-resident agent** | Agent's cwd is a clone of this repo | Everything: `AGENTS.md` (47 rules, 20 anti-patterns), `.claude/commands/`, `.claude/agents/`, `.claude/skills/`, `.cursor/rules/` | Authoring and iteration — the best results by a wide margin |
-| **MCP** | `venice-video-mcp` shells out to this CLI | 7 action-discriminated tools, structured JSON responses, progress notifications, plus 4 companion skills carrying the pipeline order | Any agent that supports MCP but is not sitting in this repo |
-| **Bare global CLI** | `npm install -g`, shell tool, `--help` | The compiled CLI, this README, and the self-describing commands below (`agent-guide`, `pipeline`) | Last resort, but no longer knowledge-free — start with `venice-video agent-guide` |
+| **MCP** | `venice-video-mcp` (on npm) shells out to this CLI | 7 action-discriminated tools, structured JSON responses, progress notifications, plus 4 companion skills carrying the pipeline order | Any agent that supports MCP — Hermes, OpenClaw, Cursor, Claude — with no clone required |
+| **Bare global CLI** | `npm install -g`, shell tool, `--help` | The compiled CLI, this README, `AGENTS.md`, `.claude/skills/`, and the self-describing commands below (`agent-guide`, `pipeline`) | When your runner has a shell but no MCP — start with `venice-video agent-guide` |
+
+### Quick start for Hermes and OpenClaw (no clone, no absolute paths)
+
+Both packages are on npm, so an agent whose entire environment is a global
+install and a chat box has a complete, knowledge-bearing setup. Nothing here
+requires cloning a repo or hand-writing a path.
+
+```bash
+# 1. Install both globally. The harness ships AGENTS.md + .claude/skills/;
+#    the MCP ships its 7 tools and 4 companion skills.
+npm install -g venice-video-harness venice-video-mcp --foreground-scripts
+
+# 2. Point the harness at a workspace and confirm the environment.
+export VENICE_API_KEY=vn_...
+export VENICE_VIDEO_WORKSPACE=~/VeniceVideos
+venice-video doctor          # checks API key, ffmpeg, ffprobe
+venice-video agent-guide     # the core operating rules, inside the binary
+
+# 3a. Hermes — register the MCP by its published bin (it is on PATH now):
+hermes mcp add venice-video --command venice-video-mcp
+hermes mcp test venice-video # confirm the handshake
+venice-video-mcp-install-skills --target hermes   # skills → ~/.hermes/skills/venice/
+
+# 3b. OpenClaw / any MCP runner — same idea, using whatever the runner's
+#     "add MCP server" command is, with command `venice-video-mcp` and the
+#     env below. Install its skills into the runner's skills dir:
+venice-video-mcp-install-skills --dir <that runner's skills dir>
+```
+
+When both are installed globally, the MCP finds `venice-video` on your `PATH`
+automatically — you do **not** need `HARNESS_BIN` or `HARNESS_PATH`. The only
+required env for the MCP process is `VENICE_API_KEY`, plus `VENICE_VIDEO_WORKSPACE`
+(or `HARNESS_WORKSPACE`) if you want projects somewhere other than the cwd. See
+[Registering the MCP server](#registering-the-mcp-server) for the details and the
+one case where you *do* set a path (pointing at a local build).
+
+OpenClaw's exact MCP-registration and skills-directory conventions are not yet
+verified here; the shapes above are what to adapt. `venice-video-mcp-install-skills
+--target openclaw` currently errors on purpose rather than guessing a path — pass
+`--dir` once you know it.
 
 **The bare-CLI trap, and how to check whether you are in it.** Through version
 **2.9.0** the npm package published only `dist`, `README.md`, `CHANGELOG.md`,
@@ -170,35 +210,53 @@ Because Venice bills at queue time, a killed render is **already paid for**. So:
 
 ### Registering the MCP server
 
+**Published package (recommended — no clone, no absolute paths).** The
+`venice-video-mcp` bin is on your `PATH` after a global install, and it finds the
+`venice-video` harness the same way:
+
 ```bash
+npm install -g venice-video-harness venice-video-mcp
+
 # Hermes Agent
-hermes mcp add venice-video --command node \
-  --args /ABS/PATH/venice-video-mcp/bin/venice-video-mcp.js
+hermes mcp add venice-video --command venice-video-mcp
 hermes mcp test venice-video     # confirm the handshake before relying on it
 
-# Cursor / Claude Desktop: see venice-video-mcp/examples/
+# Cursor / Claude Desktop / any runner that reads a JSON config:
+#   "venice-video": { "command": "venice-video-mcp", "env": { "VENICE_API_KEY": "vn_..." } }
+# or, with no global install at all, run it on demand:
+#   "venice-video": { "command": "npx", "args": ["-y", "venice-video-mcp"], "env": { … } }
 ```
 
-This path does not depend on a published release: pointed at a built clone, it
-runs whatever you have checked out, so it works ahead of npm.
+**Local build (development / running ahead of npm).** Point the server at a built
+clone instead. This runs whatever you have checked out:
+
+```bash
+hermes mcp add venice-video --command node \
+  --args /ABS/PATH/venice-video-mcp/bin/venice-video-mcp.js
+# plus HARNESS_BIN or HARNESS_PATH in the env, see below
+```
 
 Environment for the server process:
 
 | Variable | Purpose |
 |---|---|
-| `VENICE_API_KEY` | Required. Forwarded to the harness |
-| `HARNESS_BIN` | Absolute path to `dist/mini-drama/cli.js` in a built clone. **Set this** |
-| `HARNESS_PATH` | Absolute path to a built clone. Fallback only — see below |
-| `HARNESS_WORKSPACE` | Absolute path where projects are created. Must already exist |
+| `VENICE_API_KEY` | **Required.** Forwarded to the harness |
+| `HARNESS_WORKSPACE` | Where projects are created. Must already exist. Falls back to the cwd, which is rarely right for a GUI-launched runner — set it |
+| `HARNESS_BIN` | Optional. Absolute path to `dist/mini-drama/cli.js` in a built clone. Set only to pin a specific local build |
+| `HARNESS_PATH` | Optional. Absolute path to a built clone. Fallback for a local build — see below |
 
-**Resolution order (fixed in `venice-video-mcp` 0.4.0).** The server now resolves
-the harness as `HARNESS_BIN`, then `HARNESS_PATH/dist/mini-drama/cli.js`, then a
-`venice-video` on `PATH`. An explicit `HARNESS_PATH` now outranks an ambient
-global install, because setting it is a statement of intent — the old order let a
-stale global (npm `latest` trails this repo) silently win over a clone you pointed
-at deliberately. The server also logs the resolved binary once to stderr
-(`[venice-video-mcp] harness: …`), so the choice is never silent. `HARNESS_BIN` is
-still the most explicit and is recommended when you have a specific build in mind.
+With both packages installed globally you set **none** of the three harness paths:
+the server finds `venice-video` on `PATH`. You only reach for `HARNESS_BIN` /
+`HARNESS_PATH` when you deliberately want a local checkout instead of the published
+CLI.
+
+**Resolution order (fixed in `venice-video-mcp` 0.4.0).** The server resolves the
+harness as `HARNESS_BIN`, then `HARNESS_PATH/dist/mini-drama/cli.js`, then a
+`venice-video` on `PATH`. An explicit `HARNESS_PATH` outranks an ambient global
+install, because setting it is a statement of intent — the old order let a stale
+global silently win over a clone you pointed at deliberately. The server also logs
+the resolved binary once to stderr (`[venice-video-mcp] harness: …`) on the first
+tool call, so the choice is never silent.
 
 Every MCP response includes the exact command it ran, so you can confirm which
 binary answered:
@@ -211,12 +269,13 @@ If that shows a path under a global npm prefix when you meant to use a clone,
 `HARNESS_BIN` is missing.
 
 Then install its companion skills, which carry the pipeline order the tool
-descriptions deliberately leave out:
+descriptions deliberately leave out. From a global install the command is on
+`PATH` (use `node /ABS/PATH/venice-video-mcp/bin/install-skills.js …` for a clone):
 
 ```bash
-node /ABS/PATH/venice-video-mcp/bin/install-skills.js --global      # Claude/Cursor: ~/.claude/skills/
-node /ABS/PATH/venice-video-mcp/bin/install-skills.js --target hermes # Hermes: ~/.hermes/skills/venice/
-node /ABS/PATH/venice-video-mcp/bin/install-skills.js --dir <path>    # any other runner's skills dir
+venice-video-mcp-install-skills --global        # Claude/Cursor: ~/.claude/skills/
+venice-video-mcp-install-skills --target hermes  # Hermes: ~/.hermes/skills/venice/
+venice-video-mcp-install-skills --dir <path>     # any other runner's skills dir
 ```
 
 The four skills are `venice-mcp-pipeline` (request-to-tool-call mapping and the
@@ -236,9 +295,9 @@ venice-video doctor             # API key, ffmpeg, ffprobe
 venice-video status -p <dir>    # pipeline stage + the next command to run
 ```
 
-**Version-drift check is not optional.** The published npm `latest` trails this
-repo. Documentation for an unreleased version describes flags the installed
-binary rejects:
+**Version-drift check is not optional.** Releases can lag commits, so the
+published npm `latest` may trail this repo. Documentation for a version newer
+than your installed binary describes flags it rejects:
 
 ```bash
 $ venice-video new --intelligence kimi-k3
