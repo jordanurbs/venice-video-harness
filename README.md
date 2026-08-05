@@ -50,6 +50,13 @@ Both packages are on npm, so an agent whose entire environment is a global
 install and a chat box has a complete, knowledge-bearing setup. Nothing here
 requires cloning a repo or hand-writing a path.
 
+> **Tried the harness or MCP before and got poor results?** Earlier global
+> installs shipped only the compiled CLI — no `AGENTS.md`, no skills, no MCP on
+> npm — so the agent was guessing from `--help`. That is fixed now.
+> [`HERMES-AGENT-SETUP.md`](HERMES-AGENT-SETUP.md) is a paste-ready prompt that
+> upgrades a stale global, registers the MCP, installs the Hermes skills, and
+> points the agent at the operating rules — run it once and re-set-up cleanly.
+
 ```bash
 # 1. Install both globally. The harness ships AGENTS.md + .claude/skills/;
 #    the MCP ships its 7 tools and 4 companion skills.
