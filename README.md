@@ -463,11 +463,11 @@ with TTS, burning in subtitles, upscaling to a 4K master, and any run whose
 quote you have not shown the operator. Post a short summary of what you are
 about to do and wait.
 
-## Supported Venice Models (April 2026)
+## Supported Venice Models
 
 ### Video Models
 
-Live catalog as of **2026-05-20** (synced against `GET /api/v1/models?type=video` — 103 entries). Families the harness routes to today; private / `-video-to-video` / `-extend-video` variants exist in the live catalog but aren't surfaced here.
+Live catalog (synced against `GET /api/v1/models?type=video` — 103 entries). Families the harness routes to today; private / `-video-to-video` / `-extend-video` variants exist in the live catalog but aren't surfaced here.
 
 | Family | Image-to-Video | Text-to-Video | Max Duration | Audio | Special Features |
 |--------|---------------|---------------|-------------|-------|-----------------|
@@ -501,7 +501,7 @@ Live catalog as of **2026-05-20** (synced against `GET /api/v1/models?type=video
 
 > **Seedance face rule (removed 2026-07):** Seedance 2.0 used to reject face-bearing input images that weren't produced by `seedream-v5-lite` / `seedream-v5-lite-edit`. Venice removed that restriction — any image family now works for face-bearing inputs, so the harness uses `nano-banana-2` for all panels. See [Image / Video Family Pairing](#image--video-family-pairing) below.
 
-### Image Models (28 entries, 2026-05-20 sync)
+### Image Models (28 entries)
 
 `nano-banana-pro`, `nano-banana-2`, `gpt-image-2` (high-quality alternative to `nano-banana-pro`), `gpt-image-1-5`, `flux-2-pro`, `flux-2-max`, `grok-imagine-image`, `grok-imagine-image-quality`, `hunyuan-image-v3`, `imagineart-1.5-pro`, `qwen-image-2`, `qwen-image-2-pro`, `recraft-v4`, `recraft-v4-pro`, `seedream-v4`, `seedream-v5-lite`, `chroma`, `hidream`, `venice-sd35`, `lustify-sdxl`, `lustify-v7`, `lustify-v8`, `wai-Illustrious`, `z-image-turbo`, `ernie-image`, `ernie-image-turbo`, `wan-2-7-text-to-image`, `wan-2-7-pro-text-to-image`, `bria-bg-remover`
 
@@ -519,7 +519,7 @@ New since the last sync: `grok-imagine-image`, `grok-imagine-image-quality`, `lu
 - **SFX**: `elevenlabs-sound-effects-v2`, `mmaudio-v2-text-to-audio`
 - **TTS (ElevenLabs)**: `elevenlabs-tts-v3`, `elevenlabs-tts-multilingual-v2`
 
-### The intelligence model (2026-08-05 sync)
+### The intelligence model
 
 Three steps in the pipeline reason rather than render: the **workshop** develops
 the project, **workshop-script** writes the shot script, and **qa-storyboard**
