@@ -1006,10 +1006,11 @@ export const MODELS_SUPPORTING_END_IMAGE = new Set([
   'kling-2.5-turbo-pro-image-to-video',
   'pixverse-v5.6-transition',
   'pixverse-c1-transition',
-  // Wan 2.7 i2v supports `end_image_url` for keyframe bookending — helps
-  // anchor identity drift across low-motion lip-sync clips.
-  'wan-2-7-image-to-video',
-  'wan-2-7-spicy-image-to-video',
+  // Wan 2.7 i2v was listed here for keyframe bookending, but the live queue
+  // REJECTS end_image_url on Wan 2.7 i2v (Uncensored/Spicy): "This model does
+  // not support end_image_url" — probed 2026-07-06 (Venice Video Creator app
+  // sync). The VideoModelSpec entries already said supportsEndImage: false;
+  // this set had drifted from them. Removed 2026-08-06.
 ]);
 
 export const MODELS_USING_IMAGE_TAGS = new Set([

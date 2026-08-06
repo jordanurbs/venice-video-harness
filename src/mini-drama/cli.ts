@@ -134,6 +134,7 @@ import {
 import { emitJson, failJson, jsonRequested } from '../agent/output.js';
 import { formatGuide, guideAsJson } from '../agent/guide.js';
 import { formatPipeline, pipelineAsJson } from '../agent/pipeline.js';
+import { renderCapabilitiesManifest } from '../venice/capabilities-manifest.js';
 
 // Read from package.json rather than a literal, which drifts on every release.
 const packageVersion: string = (() => {
@@ -454,6 +455,14 @@ program
   .action((opts: { json?: boolean }) => {
     if (wantsJson(opts)) emitJson(pipelineAsJson());
     else console.log(formatPipeline());
+  });
+
+program
+  .command('capabilities')
+  .description('Emit the probe-verified capability manifest (model specs, capability sets, budgets, routing defaults) as JSON — the machine-readable registry downstream clients sync against')
+  .action(() => {
+    // Always JSON — the manifest IS the output format.
+    process.stdout.write(renderCapabilitiesManifest());
   });
 
 program

@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.15.0 — 2026-08-06
+
+### Added
+
+- **Capability manifest: the probe-verified registry is now a machine-readable
+  export downstream clients can sync against.** New
+  `src/venice/capabilities-manifest.ts` builds a versioned JSON manifest
+  (`schemaVersion: 1`) carrying the full `VIDEO_MODELS` registry, the eight
+  exact-id capability sets (elements, referenceImages, sceneImages, endImage,
+  imageTags, audioInput, perReferenceAudio, referenceAudio), the budgets
+  (per-model reference-image caps, image-model prompt caps, the 2500-char
+  video prompt limit), and the routing defaults (action / atmosphere /
+  character-consistency / multi-shot / lip-sync / image models). Three ways
+  to consume it:
+  - `venice-video capabilities` — emits the manifest on stdout.
+  - `capabilities.json` at the repo root — a committed snapshot regenerated
+    by `npm run manifest` (wired into `prepack`, shipped in the npm tarball),
+    so clients can fetch the raw file from GitHub `main` or read it from an
+    npm install. `generatedAt` is pinned while data is unchanged, so the
+    snapshot only diffs when the registry actually moves.
+  - Library exports: `buildCapabilitiesManifest()`,
+    `renderCapabilitiesManifest()`, `CAPABILITIES_SCHEMA_VERSION`.
+
+  The manifest is data only — prompt builders and planners still ship with
+  each client. First consumer: the Venice Video Creator macOS app, which
+  fetches it at launch (behind a user toggle) to keep its
+  `VideoModelCapabilities` allowlists current between app releases.
+  `tests/capabilities-manifest.test.mjs` guards registry coverage, set
+  consistency, known-id routing defaults, deterministic rendering, and the
+  CLI command's JSON shape.
+
+### Fixed
+
+- **`MODELS_SUPPORTING_END_IMAGE` no longer lists the Wan 2.7 i2v family.**
+  The live queue rejects `end_image_url` on Wan 2.7 i2v (Uncensored/Spicy):
+  "This model does not support end_image_url" — probed 2026-07-06 during the
+  Venice Video Creator app sync. The `VideoModelSpec` entries already said
+  `supportsEndImage: false`; the set had silently drifted from the registry.
+  Caught by the app's bundled-manifest test the day the manifest went live.
+
 ## 2.14.1 — 2026-08-05
 
 ### Changed

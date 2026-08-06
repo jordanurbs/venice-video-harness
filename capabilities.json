@@ -1,0 +1,3709 @@
+{
+  "schemaVersion": 1,
+  "harnessVersion": "2.15.0",
+  "generatedAt": "2026-08-05T17:15:05-03:00",
+  "videoModels": [
+    {
+      "id": "wan-2.6-image-to-video",
+      "name": "Wan 2.6",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2.6-flash-image-to-video",
+      "name": "Wan 2.6 Flash",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2.6-text-to-video",
+      "name": "Wan 2.6",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2-7-image-to-video",
+      "name": "Wan 2.7",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "minAudioInputSec": 3,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2-7-text-to-video",
+      "name": "Wan 2.7",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "minAudioInputSec": 3,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2-7-reference-to-video",
+      "name": "Wan 2.7 R2V",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": true,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "perReferenceAudio": true,
+      "minAudioInputSec": 3,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2-7-video-to-video",
+      "name": "Wan 2.7 V2V",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": true,
+      "videoInput": true,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "minAudioInputSec": 3,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-3-0-text-to-video",
+      "name": "Wan 3.0",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s",
+        "20s",
+        "25s",
+        "30s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p",
+        "480p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 30,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-3-0-image-to-video",
+      "name": "Wan 3.0",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s",
+        "20s",
+        "25s",
+        "30s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p",
+        "480p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 30,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-3-0-reference-to-video",
+      "name": "Wan 3.0 R2V",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s",
+        "20s",
+        "25s",
+        "30s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p",
+        "480p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 30,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-3-0-enhanced-text-to-video",
+      "name": "Wan 3.0 Enhanced",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s",
+        "20s",
+        "25s",
+        "30s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p",
+        "480p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 30,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-3-0-enhanced-reference-to-video",
+      "name": "Wan 3.0 R2V Enhanced",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s",
+        "20s",
+        "25s",
+        "30s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p",
+        "480p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 30,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "topaz-video-upscale",
+      "name": "Topaz Video Upscale",
+      "type": "image-to-video",
+      "durations": [],
+      "resolutions": [],
+      "aspectRatios": [],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": true,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 300,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2.5-preview-image-to-video",
+      "name": "Wan 2.5 Preview",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p",
+        "480p"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2.5-preview-text-to-video",
+      "name": "Wan 2.5 Preview",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "10s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p",
+        "480p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2.2-a14b-text-to-video",
+      "name": "Wan 2.2 A14B",
+      "type": "text-to-video",
+      "durations": [
+        "5s"
+      ],
+      "resolutions": [
+        "720p",
+        "580p",
+        "480p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 5,
+      "privacy": "private",
+      "offline": false
+    },
+    {
+      "id": "wan-2.1-pro-image-to-video",
+      "name": "Wan 2.1 Pro",
+      "type": "image-to-video",
+      "durations": [
+        "6s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 6,
+      "privacy": "private",
+      "offline": false
+    },
+    {
+      "id": "grok-imagine-text-to-video",
+      "name": "Grok Imagine",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "4:3",
+        "3:2",
+        "1:1",
+        "2:3",
+        "3:4",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "grok-imagine-image-to-video",
+      "name": "Grok Imagine",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-fast-image-to-video",
+      "name": "LTX Video 2.0 Fast",
+      "type": "image-to-video",
+      "durations": [
+        "6s",
+        "8s",
+        "10s",
+        "12s",
+        "14s",
+        "16s",
+        "18s",
+        "20s"
+      ],
+      "resolutions": [
+        "1080p",
+        "1440p",
+        "2160p"
+      ],
+      "aspectRatios": [
+        "16:9"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 20,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-fast-text-to-video",
+      "name": "LTX Video 2.0 Fast",
+      "type": "text-to-video",
+      "durations": [
+        "6s",
+        "8s",
+        "10s",
+        "12s",
+        "14s",
+        "16s",
+        "18s",
+        "20s"
+      ],
+      "resolutions": [
+        "1080p",
+        "1440p",
+        "2160p"
+      ],
+      "aspectRatios": [
+        "16:9"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 20,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-full-image-to-video",
+      "name": "LTX Video 2.0 Full",
+      "type": "image-to-video",
+      "durations": [
+        "6s",
+        "8s",
+        "10s"
+      ],
+      "resolutions": [
+        "1080p",
+        "1440p",
+        "2160p"
+      ],
+      "aspectRatios": [
+        "16:9"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-full-text-to-video",
+      "name": "LTX Video 2.0 Full",
+      "type": "text-to-video",
+      "durations": [
+        "6s",
+        "8s",
+        "10s"
+      ],
+      "resolutions": [
+        "1080p",
+        "1440p",
+        "2160p"
+      ],
+      "aspectRatios": [
+        "16:9"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-v2-3-fast-image-to-video",
+      "name": "LTX Video 2.0 v2.3 Fast",
+      "type": "image-to-video",
+      "durations": [
+        "6s",
+        "8s",
+        "10s",
+        "12s",
+        "14s",
+        "16s",
+        "18s",
+        "20s"
+      ],
+      "resolutions": [
+        "1080p",
+        "1440p",
+        "2160p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 20,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-v2-3-fast-text-to-video",
+      "name": "LTX Video 2.0 v2.3 Fast",
+      "type": "text-to-video",
+      "durations": [
+        "6s",
+        "8s",
+        "10s",
+        "12s",
+        "14s",
+        "16s",
+        "18s",
+        "20s"
+      ],
+      "resolutions": [
+        "1080p",
+        "1440p",
+        "2160p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 20,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-v2-3-full-image-to-video",
+      "name": "LTX Video 2.0 v2.3 Full",
+      "type": "image-to-video",
+      "durations": [
+        "6s",
+        "8s",
+        "10s"
+      ],
+      "resolutions": [
+        "1080p",
+        "1440p",
+        "2160p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-v2-3-full-text-to-video",
+      "name": "LTX Video 2.0 v2.3 Full",
+      "type": "text-to-video",
+      "durations": [
+        "6s",
+        "8s",
+        "10s"
+      ],
+      "resolutions": [
+        "1080p",
+        "1440p",
+        "2160p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-19b-full-text-to-video",
+      "name": "LTX Video 2.0 19B Full",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "8s",
+        "10s",
+        "15s",
+        "18s"
+      ],
+      "resolutions": [
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "4:3",
+        "1:1",
+        "3:4",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 18,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-19b-full-image-to-video",
+      "name": "LTX Video 2.0 19B Full",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "8s",
+        "10s",
+        "15s",
+        "18s"
+      ],
+      "resolutions": [
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "4:3",
+        "1:1",
+        "3:4",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 18,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-19b-distilled-text-to-video",
+      "name": "LTX Video 2.0 19B Distilled",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "8s",
+        "10s",
+        "15s",
+        "18s"
+      ],
+      "resolutions": [
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "4:3",
+        "1:1",
+        "3:4",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 18,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ltx-2-19b-distilled-image-to-video",
+      "name": "LTX Video 2.0 19B Distilled",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "8s",
+        "10s",
+        "15s",
+        "18s"
+      ],
+      "resolutions": [
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "4:3",
+        "1:1",
+        "3:4",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 18,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "ovi-image-to-video",
+      "name": "OVI",
+      "type": "image-to-video",
+      "durations": [
+        "5s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 5,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-2.6-pro-text-to-video",
+      "name": "Kling 2.6 Pro",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "10s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-2.6-pro-image-to-video",
+      "name": "Kling 2.6 Pro",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": true,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-2.5-turbo-pro-text-to-video",
+      "name": "Kling 2.5 Turbo Pro",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "10s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-2.5-turbo-pro-image-to-video",
+      "name": "Kling 2.5 Turbo Pro",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": true,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-o3-pro-text-to-video",
+      "name": "Kling O3 Pro",
+      "type": "text-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-o3-pro-image-to-video",
+      "name": "Kling O3 Pro",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": true,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-o3-pro-reference-to-video",
+      "name": "Kling O3 Pro R2V",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": true,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": true,
+      "supportsEndImage": true,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-o3-standard-text-to-video",
+      "name": "Kling O3 Standard",
+      "type": "text-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-o3-standard-image-to-video",
+      "name": "Kling O3 Standard",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": true,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-o3-standard-reference-to-video",
+      "name": "Kling O3 Standard R2V",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": true,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": true,
+      "supportsEndImage": true,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-o3-4k-text-to-video",
+      "name": "Kling O3 4K",
+      "type": "text-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "4K",
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-o3-4k-image-to-video",
+      "name": "Kling O3 4K",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "4K",
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": true,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-o3-4k-reference-to-video",
+      "name": "Kling O3 4K R2V",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "4K",
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": true,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": true,
+      "supportsEndImage": true,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "happyhorse-1-0-text-to-video",
+      "name": "HappyHorse 1.0",
+      "type": "text-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "happyhorse-1-0-image-to-video",
+      "name": "HappyHorse 1.0",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "happyhorse-1-0-reference-to-video",
+      "name": "HappyHorse 1.0 R2V",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "happyhorse-1-1-text-to-video",
+      "name": "HappyHorse 1.1",
+      "type": "text-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4",
+        "21:9",
+        "9:21",
+        "5:4",
+        "4:5"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "happyhorse-1-1-image-to-video",
+      "name": "HappyHorse 1.1",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "happyhorse-1-1-reference-to-video",
+      "name": "HappyHorse 1.1 R2V",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4",
+        "21:9",
+        "9:21",
+        "5:4",
+        "4:5"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "perReferenceAudio": true,
+      "supportsReferenceAudio": true,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "minimax-h3-text-to-video",
+      "name": "MiniMax H3",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "2K"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4",
+        "21:9"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "minimax-h3-image-to-video",
+      "name": "MiniMax H3",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "2K"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "minimax-h3-reference-to-video",
+      "name": "MiniMax H3 R2V",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "2K"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4",
+        "21:9"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-v3-pro-text-to-video",
+      "name": "Kling V3 Pro",
+      "type": "text-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-v3-pro-image-to-video",
+      "name": "Kling V3 Pro",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": true,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-v3-standard-text-to-video",
+      "name": "Kling V3 Standard",
+      "type": "text-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-v3-standard-image-to-video",
+      "name": "Kling V3 Standard",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": true,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "longcat-distilled-image-to-video",
+      "name": "Longcat Distilled",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s",
+        "20s",
+        "30s"
+      ],
+      "resolutions": [
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 30,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "longcat-distilled-text-to-video",
+      "name": "Longcat Distilled",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s",
+        "20s",
+        "30s"
+      ],
+      "resolutions": [
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 30,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "longcat-image-to-video",
+      "name": "Longcat",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s",
+        "20s",
+        "30s"
+      ],
+      "resolutions": [
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 30,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "longcat-text-to-video",
+      "name": "Longcat",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s",
+        "20s",
+        "30s"
+      ],
+      "resolutions": [
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 30,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "veo3-fast-text-to-video",
+      "name": "Veo 3 Fast",
+      "type": "text-to-video",
+      "durations": [
+        "4s",
+        "6s",
+        "8s"
+      ],
+      "resolutions": [
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "veo3-fast-image-to-video",
+      "name": "Veo 3 Fast",
+      "type": "image-to-video",
+      "durations": [
+        "8s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "veo3-full-text-to-video",
+      "name": "Veo 3 Full",
+      "type": "text-to-video",
+      "durations": [
+        "4s",
+        "6s",
+        "8s"
+      ],
+      "resolutions": [
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "veo3-full-image-to-video",
+      "name": "Veo 3 Full",
+      "type": "image-to-video",
+      "durations": [
+        "8s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "veo3.1-fast-text-to-video",
+      "name": "Veo 3.1 Fast",
+      "type": "text-to-video",
+      "durations": [
+        "4s",
+        "6s",
+        "8s"
+      ],
+      "resolutions": [
+        "720p",
+        "1080p",
+        "4k"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "veo3.1-fast-image-to-video",
+      "name": "Veo 3.1 Fast",
+      "type": "image-to-video",
+      "durations": [
+        "4s",
+        "6s",
+        "8s"
+      ],
+      "resolutions": [
+        "720p",
+        "1080p",
+        "4k"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "veo3.1-full-text-to-video",
+      "name": "Veo 3.1 Full",
+      "type": "text-to-video",
+      "durations": [
+        "4s",
+        "6s",
+        "8s"
+      ],
+      "resolutions": [
+        "720p",
+        "1080p",
+        "4k"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "veo3.1-full-image-to-video",
+      "name": "Veo 3.1 Full",
+      "type": "image-to-video",
+      "durations": [
+        "4s",
+        "6s",
+        "8s"
+      ],
+      "resolutions": [
+        "720p",
+        "1080p",
+        "4k"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "seedance-2-0-image-to-video",
+      "name": "Seedance 2.0",
+      "type": "image-to-video",
+      "durations": [
+        "4s",
+        "5s",
+        "8s",
+        "10s",
+        "12s",
+        "15s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "seedance-2-0-text-to-video",
+      "name": "Seedance 2.0",
+      "type": "text-to-video",
+      "durations": [
+        "4s",
+        "5s",
+        "8s",
+        "10s",
+        "12s",
+        "15s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "seedance-2-0-reference-to-video",
+      "name": "Seedance 2.0 R2V",
+      "type": "image-to-video",
+      "durations": [
+        "4s",
+        "5s",
+        "8s",
+        "10s",
+        "12s",
+        "15s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "supportsReferenceAudio": true,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "seedance-2-0-enhanced-reference-to-video",
+      "name": "Seedance 2.0 R2V Enhanced",
+      "type": "image-to-video",
+      "durations": [
+        "4s",
+        "5s",
+        "8s",
+        "10s",
+        "12s",
+        "15s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "supportsReferenceAudio": true,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "sora-2-image-to-video",
+      "name": "Sora 2",
+      "type": "image-to-video",
+      "durations": [
+        "4s",
+        "8s",
+        "12s"
+      ],
+      "resolutions": [
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 12,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "sora-2-pro-image-to-video",
+      "name": "Sora 2 Pro",
+      "type": "image-to-video",
+      "durations": [
+        "4s",
+        "8s",
+        "12s",
+        "16s",
+        "20s"
+      ],
+      "resolutions": [
+        "720p",
+        "1080p",
+        "true_1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 20,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "sora-2-text-to-video",
+      "name": "Sora 2",
+      "type": "text-to-video",
+      "durations": [
+        "4s",
+        "8s",
+        "12s"
+      ],
+      "resolutions": [
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 12,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "sora-2-pro-text-to-video",
+      "name": "Sora 2 Pro",
+      "type": "text-to-video",
+      "durations": [
+        "4s",
+        "8s",
+        "12s",
+        "16s",
+        "20s"
+      ],
+      "resolutions": [
+        "720p",
+        "1080p",
+        "true_1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 20,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "pixverse-v5.6-text-to-video",
+      "name": "PixVerse v5.6",
+      "type": "text-to-video",
+      "durations": [
+        "5s",
+        "8s"
+      ],
+      "resolutions": [
+        "360p",
+        "540p",
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "pixverse-v5.6-image-to-video",
+      "name": "PixVerse v5.6",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "8s"
+      ],
+      "resolutions": [
+        "360p",
+        "540p",
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "pixverse-v5.6-transition",
+      "name": "PixVerse v5.6 Transition",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "8s"
+      ],
+      "resolutions": [
+        "360p",
+        "540p",
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": true,
+      "maxDurationSec": 8,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "vidu-q3-text-to-video",
+      "name": "Vidu Q3",
+      "type": "text-to-video",
+      "durations": [
+        "3s",
+        "5s",
+        "8s",
+        "10s",
+        "12s",
+        "14s",
+        "16s"
+      ],
+      "resolutions": [
+        "360p",
+        "540p",
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 16,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "vidu-q3-image-to-video",
+      "name": "Vidu Q3",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "5s",
+        "8s",
+        "10s",
+        "12s",
+        "14s",
+        "16s"
+      ],
+      "resolutions": [
+        "360p",
+        "540p",
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 16,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "runway-gen4-5",
+      "name": "Runway Gen-4.5",
+      "type": "image-to-video",
+      "durations": [
+        "2s",
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4",
+        "21:9"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "runway-gen4-5-text",
+      "name": "Runway Gen-4.5",
+      "type": "text-to-video",
+      "durations": [
+        "2s",
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4",
+        "21:9"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "runway-gen4-turbo",
+      "name": "Runway Gen-4 Turbo",
+      "type": "image-to-video",
+      "durations": [
+        "2s",
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4",
+        "21:9"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "runway-gen4-aleph",
+      "name": "Runway Gen-4 Aleph",
+      "type": "image-to-video",
+      "durations": [
+        "2s",
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s"
+      ],
+      "resolutions": [],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4",
+        "21:9"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "seedance-2-0-fast-image-to-video",
+      "name": "Seedance 2.0 Fast",
+      "type": "image-to-video",
+      "durations": [
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "seedance-2-0-fast-text-to-video",
+      "name": "Seedance 2.0 Fast",
+      "type": "text-to-video",
+      "durations": [
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "seedance-2-0-fast-reference-to-video",
+      "name": "Seedance 2.0 Fast R2V",
+      "type": "image-to-video",
+      "durations": [
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "supportsReferenceAudio": true,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "pixverse-c1-text-to-video",
+      "name": "PixVerse C1",
+      "type": "text-to-video",
+      "durations": [
+        "3s",
+        "5s",
+        "8s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "360p",
+        "540p",
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "pixverse-c1-image-to-video",
+      "name": "PixVerse C1",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "5s",
+        "8s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "360p",
+        "540p",
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "pixverse-c1-reference-to-video",
+      "name": "PixVerse C1 R2V",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "5s",
+        "8s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "360p",
+        "540p",
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "pixverse-c1-transition",
+      "name": "PixVerse C1 Transition",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "5s",
+        "8s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "360p",
+        "540p",
+        "720p",
+        "1080p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "4:3",
+        "3:4"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": true,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2-7-spicy-image-to-video",
+      "name": "Wan 2.7 Spicy",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "minAudioInputSec": 3,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "wan-2.6-reference-to-video",
+      "name": "Wan 2.6 R2V",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s"
+      ],
+      "resolutions": [
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": true,
+      "audioInput": true,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-v3-4k-text-to-video",
+      "name": "Kling V3 4K",
+      "type": "text-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "4K",
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "kling-v3-4k-reference-to-video",
+      "name": "Kling V3 4K R2V",
+      "type": "image-to-video",
+      "durations": [
+        "3s",
+        "4s",
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "4K",
+        "1080p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "9:16",
+        "1:1"
+      ],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": true,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": true,
+      "supportsEndImage": true,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "grok-imagine-reference-to-video",
+      "name": "Grok Imagine R2V",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "8s",
+        "10s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "4:3",
+        "3:2",
+        "1:1",
+        "2:3",
+        "3:4",
+        "9:16"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": true,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 10,
+      "privacy": "anonymized",
+      "offline": false
+    },
+    {
+      "id": "grok-imagine-video-to-video",
+      "name": "Grok Imagine V2V",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "10s",
+        "15s"
+      ],
+      "resolutions": [
+        "480p",
+        "720p"
+      ],
+      "aspectRatios": [
+        "16:9",
+        "4:3",
+        "3:2",
+        "1:1",
+        "2:3",
+        "3:4",
+        "9:16"
+      ],
+      "audio": false,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": true,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "privacy": "anonymized",
+      "offline": false
+    }
+  ],
+  "capabilitySets": {
+    "elements": [
+      "kling-o3-4k-reference-to-video",
+      "kling-o3-pro-reference-to-video",
+      "kling-o3-standard-reference-to-video"
+    ],
+    "referenceImages": [
+      "grok-imagine-reference-to-video",
+      "happyhorse-1-0-reference-to-video",
+      "happyhorse-1-1-reference-to-video",
+      "kling-o3-4k-reference-to-video",
+      "kling-o3-pro-reference-to-video",
+      "kling-o3-standard-reference-to-video",
+      "kling-v3-4k-reference-to-video",
+      "minimax-h3-reference-to-video",
+      "pixverse-c1-reference-to-video",
+      "seedance-2-0-enhanced-reference-to-video",
+      "seedance-2-0-fast-reference-to-video",
+      "seedance-2-0-reference-to-video",
+      "vidu-q3-image-to-video",
+      "vidu-q3-text-to-video",
+      "wan-2-7-reference-to-video",
+      "wan-2.6-reference-to-video",
+      "wan-3-0-enhanced-reference-to-video",
+      "wan-3-0-reference-to-video"
+    ],
+    "sceneImages": [
+      "kling-o3-4k-reference-to-video",
+      "kling-o3-pro-reference-to-video",
+      "kling-o3-standard-reference-to-video",
+      "kling-v3-4k-reference-to-video"
+    ],
+    "endImage": [
+      "kling-2.5-turbo-pro-image-to-video",
+      "kling-2.6-pro-image-to-video",
+      "kling-o3-4k-image-to-video",
+      "kling-o3-4k-reference-to-video",
+      "kling-o3-pro-image-to-video",
+      "kling-o3-pro-reference-to-video",
+      "kling-o3-standard-image-to-video",
+      "kling-o3-standard-reference-to-video",
+      "kling-v3-4k-reference-to-video",
+      "kling-v3-pro-image-to-video",
+      "kling-v3-standard-image-to-video",
+      "pixverse-c1-transition",
+      "pixverse-v5.6-transition"
+    ],
+    "imageTags": [
+      "grok-imagine-reference-to-video",
+      "happyhorse-1-1-reference-to-video",
+      "minimax-h3-reference-to-video",
+      "seedance-2-0-enhanced-reference-to-video",
+      "seedance-2-0-fast-reference-to-video",
+      "seedance-2-0-reference-to-video"
+    ],
+    "audioInput": [
+      "minimax-h3-reference-to-video",
+      "seedance-2-0-enhanced-reference-to-video",
+      "seedance-2-0-fast-reference-to-video",
+      "seedance-2-0-reference-to-video",
+      "wan-2-7-image-to-video",
+      "wan-2-7-spicy-image-to-video",
+      "wan-2-7-text-to-video",
+      "wan-2-7-video-to-video",
+      "wan-2.5-preview-image-to-video",
+      "wan-2.5-preview-text-to-video",
+      "wan-2.6-flash-image-to-video",
+      "wan-2.6-image-to-video",
+      "wan-2.6-reference-to-video",
+      "wan-2.6-text-to-video"
+    ],
+    "perReferenceAudio": [
+      "wan-2-7-reference-to-video"
+    ],
+    "referenceAudio": [
+      "happyhorse-1-1-reference-to-video",
+      "seedance-2-0-enhanced-reference-to-video",
+      "seedance-2-0-fast-reference-to-video",
+      "seedance-2-0-reference-to-video"
+    ]
+  },
+  "budgets": {
+    "maxReferenceImagesByModel": {
+      "seedance-2-0-reference-to-video": 9,
+      "seedance-2-0-enhanced-reference-to-video": 9,
+      "seedance-2-0-fast-reference-to-video": 9,
+      "happyhorse-1-1-reference-to-video": 9,
+      "minimax-h3-reference-to-video": 9,
+      "wan-3-0-reference-to-video": 9,
+      "wan-3-0-enhanced-reference-to-video": 9
+    },
+    "defaultMaxReferenceImages": 4,
+    "maxPositivePromptCharsByImageModel": {
+      "seedream-v5-lite": 300,
+      "seedream-v5-lite-edit": 300,
+      "nano-banana-pro": 500,
+      "nano-banana-pro-edit": 500,
+      "gpt-image-2": 600,
+      "gpt-image-2-edit": 600
+    },
+    "defaultMaxPositivePromptChars": 300,
+    "videoPromptCharLimit": 2500
+  },
+  "defaults": {
+    "actionModel": "seedance-2-0-enhanced-reference-to-video",
+    "atmosphereModel": "seedance-2-0-enhanced-reference-to-video",
+    "characterConsistencyModel": "seedance-2-0-enhanced-reference-to-video",
+    "multiShotModel": "seedance-2-0-enhanced-reference-to-video",
+    "lipSyncModel": "wan-2-7-image-to-video",
+    "imageGenerationModel": "nano-banana-2",
+    "imageEditModel": "nano-banana-2-edit"
+  },
+  "imageGenerationModels": [
+    {
+      "id": "venice-sd35",
+      "name": "Venice SD 3.5",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "hidream",
+      "name": "HiDream",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "flux-2-pro",
+      "name": "Flux 2 Pro",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "flux-2-max",
+      "name": "Flux 2 Max",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "gpt-image-1-5",
+      "name": "GPT Image 1.5",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "gpt-image-2",
+      "name": "GPT Image 2",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "grok-imagine-image",
+      "name": "Grok Imagine",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "grok-imagine-image-quality",
+      "name": "Grok Imagine Quality",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "hunyuan-image-v3",
+      "name": "Hunyuan Image V3",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "imagineart-1.5-pro",
+      "name": "ImagineArt 1.5 Pro",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "nano-banana-2",
+      "name": "Nano Banana 2",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "nano-banana-pro",
+      "name": "Nano Banana Pro",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "recraft-v4",
+      "name": "Recraft V4",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "recraft-v4-pro",
+      "name": "Recraft V4 Pro",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "seedream-v4",
+      "name": "SeedReam V4",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "seedream-v5-lite",
+      "name": "SeedReam V5 Lite",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "qwen-image-2",
+      "name": "Qwen Image 2",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "qwen-image-2-pro",
+      "name": "Qwen Image 2 Pro",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "lustify-sdxl",
+      "name": "Lustify SDXL",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "lustify-v7",
+      "name": "Lustify V7",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "lustify-v8",
+      "name": "Lustify V8",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "wai-Illustrious",
+      "name": "WAI Illustrious",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "z-image-turbo",
+      "name": "Z Image Turbo",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "chroma",
+      "name": "Chroma",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "ernie-image",
+      "name": "Ernie Image",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "ernie-image-turbo",
+      "name": "Ernie Image Turbo",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "wan-2-7-text-to-image",
+      "name": "Wan 2.7 Text-to-Image",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "wan-2-7-pro-text-to-image",
+      "name": "Wan 2.7 Pro Text-to-Image",
+      "type": "generation",
+      "offline": false
+    },
+    {
+      "id": "bria-bg-remover",
+      "name": "Bria Background Remover",
+      "type": "background-remove",
+      "offline": false
+    }
+  ],
+  "multiEditModels": [
+    "qwen-edit",
+    "qwen-image-2-edit",
+    "qwen-image-2-pro-edit",
+    "flux-2-max-edit",
+    "gpt-image-1-5-edit",
+    "gpt-image-2-edit",
+    "grok-imagine-edit",
+    "nano-banana-2-edit",
+    "nano-banana-pro-edit",
+    "seedream-v4-edit",
+    "seedream-v5-lite-edit"
+  ],
+  "musicModels": [
+    {
+      "id": "ace-step-15",
+      "name": "ACE Step 1.5",
+      "type": "music",
+      "offline": false
+    },
+    {
+      "id": "elevenlabs-music",
+      "name": "ElevenLabs Music",
+      "type": "music",
+      "offline": false
+    },
+    {
+      "id": "minimax-music-v2",
+      "name": "MiniMax Music V2",
+      "type": "music",
+      "offline": false
+    },
+    {
+      "id": "minimax-music-v25",
+      "name": "MiniMax Music V2.5",
+      "type": "music",
+      "offline": false
+    },
+    {
+      "id": "minimax-music-v26",
+      "name": "MiniMax Music V2.6",
+      "type": "music",
+      "offline": false
+    },
+    {
+      "id": "lyria-3-pro",
+      "name": "Lyria 3 Pro",
+      "type": "music",
+      "offline": false
+    },
+    {
+      "id": "stable-audio-25",
+      "name": "Stable Audio 2.5",
+      "type": "music",
+      "offline": false
+    },
+    {
+      "id": "seed-audio-1-0",
+      "name": "Seed Audio 1.0",
+      "type": "music",
+      "offline": false,
+      "voices": [
+        "Describe in prompt",
+        "Tim",
+        "Stokie",
+        "Dacey",
+        "Vivi",
+        "Mindy",
+        "Kian",
+        "Jess",
+        "Vienna",
+        "Cedric",
+        "Magnus",
+        "Quentin",
+        "Wukong",
+        "Gigi",
+        "Celeste",
+        "Esther",
+        "Tracy",
+        "Sven",
+        "Felipe",
+        "Usseau",
+        "Enzo",
+        "Minimi",
+        "Jihoon",
+        "Martins",
+        "Han"
+      ],
+      "defaultVoice": "Describe in prompt",
+      "supportsSpeed": true,
+      "minSpeed": 0.5,
+      "maxSpeed": 2,
+      "defaultSpeed": 1,
+      "supportsLyrics": false,
+      "lyricsRequired": false,
+      "supportsForceInstrumental": false,
+      "supportsLanguageCode": false,
+      "supportedFormats": [
+        "mp3",
+        "wav"
+      ],
+      "defaultFormat": "mp3",
+      "promptCharacterLimit": 2048,
+      "minPromptLength": 1,
+      "defaultDurationSec": 120,
+      "pricingPerSecondUsd": 0.0028750000000000004,
+      "description": "Generate expressive speech and audio from a text prompt with BytePlus Seed Audio 1.0."
+    },
+    {
+      "id": "elevenlabs-sound-effects-v2",
+      "name": "ElevenLabs Sound Effects V2",
+      "type": "sound-effects",
+      "offline": false
+    },
+    {
+      "id": "mmaudio-v2-text-to-audio",
+      "name": "MMAudio V2",
+      "type": "sound-effects",
+      "offline": false
+    },
+    {
+      "id": "elevenlabs-tts-v3",
+      "name": "ElevenLabs TTS V3",
+      "type": "tts",
+      "offline": false
+    },
+    {
+      "id": "elevenlabs-tts-multilingual-v2",
+      "name": "ElevenLabs TTS Multilingual V2",
+      "type": "tts",
+      "offline": false
+    }
+  ],
+  "ttsModels": [
+    "tts-kokoro",
+    "tts-qwen3-0-6b",
+    "tts-qwen3-1-7b"
+  ]
+}

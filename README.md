@@ -186,6 +186,19 @@ same core rules are installable as a skill for runners that pull skills from
 GitHub: `hermes skills install jordanurbs/venice-video-harness/venice-agent-guide`
 (and any of the other `.agents/skills/` by name).
 
+From **2.15.0** the probe-verified model registry is also machine-readable:
+
+```bash
+venice-video capabilities   # full capability manifest as JSON: model specs, capability sets, budgets, routing defaults
+```
+
+The same manifest is committed as `capabilities.json` at the repo root
+(regenerated on every release), so downstream clients — the Venice Video
+Creator macOS app is the first — can fetch
+`https://raw.githubusercontent.com/jordanurbs/venice-video-harness/main/capabilities.json`
+and stay capability-synced between their own releases without shelling out to
+the CLI.
+
 ### Running the harness in a separate runtime (containers, remote backends)
 
 Running long renders off the main machine is a real and useful capability. In
