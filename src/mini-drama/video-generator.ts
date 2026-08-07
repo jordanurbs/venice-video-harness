@@ -29,11 +29,13 @@ import { padAudioForModel, probeAudioDurationSec } from '../venice/audio-preflig
 import { generateSpeech } from '../venice/audio.js';
 import { getCharacterDir, getLocationDir, getLocation } from '../series/manager.js';
 import {
+  buildMontagePrompt,
   buildMultiShotPrompt,
   buildVideoPrompt,
   resolveVideoModel,
   type MiniDramaVideoPrompt,
 } from './prompt-builder.js';
+import { cutMontageIntoShots } from './montage.js';
 import {
   generateVoiceReference,
   resolveVoiceReferenceAbsPath,
@@ -1605,6 +1607,124 @@ async function renderMultiShotUnit(
   return shotPaths;
 }
 
+/**
+ * Render a montage unit: ONE single-pass generation (Seedance 2.5, up to 30s)
+ * prompted with the timestamped SEQUENCE beat list, then cut at the same
+ * timestamps into per-shot clips — canonical `shot-NNN.mp4` files for the
+ * assembler AND organized copies in `media-library/scene-NN/` (with the
+ * uncut master and a manifest) for hand editing / the Venice Video Creator.
+ */
+async function renderMontageUnit(
+  client: VeniceClient,
+  series: SeriesState,
+  shots: ShotScript[],
+  unit: GenerationUnit,
+  sceneDir: string,
+): Promise<string[]> {
+  const shotOutputPaths = shots.map(shot => getShotVideoPath(sceneDir, shot.shotNumber));
+  const episodeDir = dirname(sceneDir);
+  const unitOutputPath = join(sceneDir, unit.outputFile);
+
+  if (existsSync(unitOutputPath) && shotOutputPaths.every(path => existsSync(path))) {
+    console.log(`  ${unit.unitId}: montage master and shot cuts exist, skipping`);
+    let offset = 0;
+    unit.segments = shotOutputPaths.map((path, index) => {
+      const durationSec = getVideoDuration(path);
+      const segment: GenerationUnitSegment = {
+        shotNumber: shots[index].shotNumber,
+        startOffsetSec: Number(offset.toFixed(3)),
+        durationSec: Number(durationSec.toFixed(3)),
+        outputFile: `shot-${shotKey(shots[index].shotNumber)}.mp4`,
+      };
+      offset += durationSec;
+      return segment;
+    });
+    unit.renderedDurationSec = Number(getVideoDuration(unitOutputPath).toFixed(3));
+    return shotOutputPaths;
+  }
+
+  const prompt = buildMontagePrompt(shots, unit, series);
+  unit.model = prompt.model;
+
+  if (prompt.modelResolution) {
+    console.log(`  Model: ${prompt.model} (${prompt.modelResolution.reason})`);
+  }
+
+  // Pure reference mode — same invariant as the multi-shot lane: push
+  // reference_image_urls in EXACTLY the slot-plan order so @ImageN bindings
+  // match the request array.
+  let referenceImagePaths: string[] | undefined;
+  if ((prompt.referenceSlots?.length ?? 0) > 0) {
+    const paths = prompt.referenceSlots!
+      .map(slot => slot.path)
+      .filter(p => existsSync(p));
+    if (paths.length !== prompt.referenceSlots!.length) {
+      console.warn('  ⚠ Montage reference slot images missing on disk — @ImageN bindings may misalign; regenerate refs.');
+    }
+    referenceImagePaths = paths.length > 0 ? paths : undefined;
+    if (referenceImagePaths) {
+      console.log(`  Montage slot plan: ${referenceImagePaths.length} reference(s) (pure reference mode, ${getMaxReferenceImages(prompt.model)}-image budget)`);
+    }
+  }
+
+  const voiceReferencePaths = resolveVoiceReferencePaths(series, prompt);
+
+  const savedUnitPath = await renderVideoFile(client, {
+    prompt,
+    anchorImagePath: undefined,
+    outputPath: unitOutputPath,
+    referenceImagePaths,
+    voiceReferencePaths: voiceReferencePaths.length > 0 ? voiceReferencePaths : undefined,
+    aspectRatio: series.storyboardAspectRatio ?? '16:9',
+    seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
+    project: series.outputDir,
+  });
+
+  // Cut at the planned beat boundaries — the same timestamps the prompt's
+  // SEQUENCE block declared.
+  const { shotPaths, libraryPaths, segments } = cutMontageIntoShots({
+    montagePath: savedUnitPath,
+    unit,
+    shotsByNumber: new Map(shots.map(shot => [shot.shotNumber, shot])),
+    sceneDir,
+    episodeDir,
+    archiveExisting,
+  });
+  console.log(`  Media library: ${libraryPaths.length} cut(s) + master → ${join(episodeDir, 'media-library', `scene-${String(unit.sceneNumber ?? 1).padStart(2, '0')}`)}`);
+
+  for (const segment of segments) {
+    const shot = shots.find(item => item.shotNumber === segment.shotNumber);
+    if (!shot) continue;
+    await saveSingleShotMetadata(series, shot, join(sceneDir, segment.outputFile), {
+      ...prompt,
+      duration: shot.duration,
+    }, {
+      generationUnit: unit.unitId,
+      generatedFromUnit: unit.outputFile,
+      unitStartOffsetSec: segment.startOffsetSec,
+      unitDurationSec: segment.durationSec,
+      montageScene: unit.sceneNumber,
+    });
+  }
+
+  unit.renderedDurationSec = Number(getVideoDuration(savedUnitPath).toFixed(3));
+  unit.segments = segments;
+  await saveJson(savedUnitPath.replace(/\.mp4$/, '.video.json'), {
+    unitId: unit.unitId,
+    shotNumbers: unit.shotNumbers,
+    video: prompt,
+    metadata: {
+      unitType: unit.unitType,
+      sceneNumber: unit.sceneNumber,
+      montageBeats: unit.montageBeats,
+      segments,
+      decisionReasons: unit.decisionReasons,
+    },
+  });
+
+  return shotPaths;
+}
+
 async function renderMultiShotUnitUntilSuccess(
   client: VeniceClient,
   series: SeriesState,
@@ -1684,6 +1804,23 @@ export function assertShotDurationsValid(
     if (!modelSpec) {
       // Unknown model — registry may be stale. Don't block; the API will
       // surface the real error if the model is actually missing.
+      continue;
+    }
+    // Montage units render as ONE generation: per-shot durations are beat
+    // windows inside it, not renderable clips, so only the unit's total
+    // duration is validated against the model ladder.
+    if (unit.unitType === 'montage') {
+      const unitSec = parseShotDuration(unit.duration);
+      if (unitSec > modelSpec.maxDurationSec || !modelSpec.durations.includes(unit.duration)) {
+        violations.push({
+          shotNumber: unit.shotNumbers[0],
+          duration: unit.duration,
+          durationSec: unitSec,
+          model,
+          maxSec: modelSpec.maxDurationSec,
+          allowed: modelSpec.durations,
+        });
+      }
       continue;
     }
     for (const shotNum of unit.shotNumbers) {
@@ -1795,15 +1932,23 @@ export async function generateEpisodeVideos(
           previousShot,
           episodeAudioMix,
         )
-        : await renderMultiShotUnitUntilSuccess(
-          client,
-          series,
-          unitShots,
-          unit,
-          sceneDir,
-          previousRenderedShotPath,
-          nextShotNumber,
-        );
+        : unit.unitType === 'montage'
+          ? await renderMontageUnit(
+            client,
+            series,
+            unitShots,
+            unit,
+            sceneDir,
+          )
+          : await renderMultiShotUnitUntilSuccess(
+            client,
+            series,
+            unitShots,
+            unit,
+            sceneDir,
+            previousRenderedShotPath,
+            nextShotNumber,
+          );
 
       if (savedPaths.length > 0) {
         videoPaths.push(...savedPaths);

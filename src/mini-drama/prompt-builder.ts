@@ -743,6 +743,241 @@ export function buildMultiShotPrompt(
 }
 
 /**
+ * Montage prompt (Seedance 2.5 branch): ONE single-pass generation covering a
+ * whole scene of beats, prompted with the timestamped SEQUENCE grammar from
+ * the vault's "Make a full trailer with Seedance 2.5" pack:
+ *
+ *   SHOT: "<scene intent>" — an <N>-second fast-cut montage, cut it yourself
+ *   in the edit.
+ *   REFERENCES: identity declarations + role clauses (@Image discipline)
+ *   CAMERA: union of the beats' camera language
+ *   SEQUENCE:
+ *   [0:00-0:03] <beat 1 — action, camera, diegetic sound>
+ *   [0:03-0:05] <beat 2 ...>
+ *   STYLE: <compact aesthetic> + "Face stable throughout, no deformation.
+ *   Diegetic sound only, no music, no on-screen text."
+ *   Negative: <short>
+ *
+ * The four vault rules are hard-coded here: no music (diegetic sound only),
+ * face-stability line in every prompt, @Image discipline via the same
+ * reference slot plan as every other lane, and a short negative. The beat
+ * timestamps come from `unit.montageBeats` — the SAME list the cutter slices
+ * on afterwards, so prompt and edit can never disagree.
+ */
+export function buildMontagePrompt(
+  shots: ShotScript[],
+  unit: GenerationUnit,
+  series: SeriesState,
+): MiniDramaVideoPrompt {
+  if (!series.aesthetic) {
+    throw new Error('Series aesthetic must be set before generating videos.');
+  }
+  const modelId = unit.model;
+  const beats = unit.montageBeats ?? [];
+  if (beats.length !== shots.length) {
+    throw new Error(`Montage unit ${unit.unitId}: beat map (${beats.length}) does not match shots (${shots.length}).`);
+  }
+
+  const uniqueCharNames = Array.from(new Set(shots.flatMap(shot => shot.characters)));
+  const planShot: ShotScript = { ...shots[0], characters: uniqueCharNames };
+  const plan = buildReferenceSlotPlan(series, planShot, modelId, {
+    characterNames: uniqueCharNames,
+  });
+  for (const note of plan.dropped) {
+    console.warn(`  ⚠ Reference budget (montage): dropped ${note}`);
+  }
+
+  const characterElements: CharacterElementSlot[] = uniqueCharNames
+    .filter(name => plan.characterSlotByName.has(name.toUpperCase()))
+    .map(name => ({
+      characterName: name,
+      elementIndex: plan.characterSlotByName.get(name.toUpperCase())!,
+    }));
+
+  const substituteTags = (text: string): string => {
+    let out = text;
+    for (const slot of characterElements) {
+      const re = new RegExp(`\\b${slot.characterName}\\b`, 'gi');
+      out = out.replace(re, `@Image${slot.elementIndex}`);
+    }
+    return out;
+  };
+
+  const totalSec = parseShotDuration(unit.duration);
+  const parts: string[] = [];
+
+  // SHOT header — scene intent from the first beat's location/description,
+  // declaring the montage contract ("cut it yourself in the edit").
+  const sceneLabel = shots[0].location ?? 'the scene';
+  parts.push(
+    `SHOT: a ${totalSec}-second fast-cut montage covering one continuous ` +
+    `sequence in ${sceneLabel} — cut it yourself in the edit; load the ` +
+    'transitions with usable frames on both sides of every beat boundary.',
+  );
+
+  // REFERENCES — identity declarations (wardrobe locked) then role clauses,
+  // same slot plan and clause text as the other lanes (@Image discipline:
+  // never cite an image that is not attached).
+  const wardrobeByChar = new Map<string, string>();
+  for (const shot of shots) {
+    if (!shot.episodeWardrobe) continue;
+    for (const [charName, wardrobe] of Object.entries(shot.episodeWardrobe)) {
+      if (!wardrobeByChar.has(charName.toUpperCase())) {
+        wardrobeByChar.set(charName.toUpperCase(), wardrobe);
+      }
+    }
+  }
+  for (const slot of characterElements) {
+    const char = series.characters.find(
+      c => c.name.toUpperCase() === slot.characterName.toUpperCase(),
+    );
+    if (!char) continue;
+    const wardrobe = wardrobeByChar.get(char.name.toUpperCase()) ?? char.wardrobe;
+    parts.push(`@Image${slot.elementIndex} is ${char.name} — wearing ${wardrobe}. Wardrobe locked, identical in every beat.`);
+  }
+  for (const slot of plan.slots) {
+    if (slot.kind === 'character-primary') continue;
+    parts.push(`@Image${slot.imageIndex} ${slot.roleClause}.`);
+  }
+
+  // Voice-donor slots (@AudioN), same contract as the other lanes.
+  const voiceRefEnabled = series.videoDefaults.voiceReferenceForDialogue !== false
+    && MODELS_SUPPORTING_REFERENCE_AUDIO.has(modelId);
+  let voiceReferenceSlots: VoiceReferenceSlot[] | undefined;
+  if (voiceRefEnabled) {
+    const slots: VoiceReferenceSlot[] = [];
+    const seen = new Set<string>();
+    for (const shot of shots) {
+      if (!shot.dialogue) continue;
+      const speakerUpper = shot.dialogue.character.toUpperCase();
+      if (speakerUpper === 'NARRATOR' || speakerUpper === 'V.O.' || speakerUpper === 'VO') continue;
+      if (seen.has(speakerUpper) || slots.length >= 3) continue;
+      const speakingChar = series.characters.find(c => c.name.toUpperCase() === speakerUpper);
+      if (speakingChar?.voiceReferencePath) {
+        seen.add(speakerUpper);
+        slots.push({ characterName: speakingChar.name, audioIndex: slots.length + 1 });
+      }
+    }
+    if (slots.length > 0) {
+      voiceReferenceSlots = slots;
+      for (const slot of slots) {
+        const charSlot = characterElements.find(
+          s => s.characterName.toUpperCase() === slot.characterName.toUpperCase(),
+        );
+        const ref = charSlot ? `@Image${charSlot.elementIndex}` : slot.characterName;
+        parts.push(
+          `Use @Audio${slot.audioIndex} only for ${ref}'s voice identity — timbre, accent, pacing; ` +
+          'regenerate clean studio dialogue, do not copy any noise from the reference.',
+        );
+      }
+    }
+  }
+
+  // CAMERA — union of the beats' camera language, one line.
+  const cameraTermsUsed = Array.from(new Set(
+    shots.map(s => CAMERA_TERMS[s.cameraMovement.toLowerCase()] ?? s.cameraMovement),
+  ));
+  parts.push(`CAMERA: ${cameraTermsUsed.join('; ')}. Hard cuts between beats — never dissolves, never cross-fades, never superimpositions.`);
+
+  // SEQUENCE — the timestamped beat list. Timestamps come from
+  // unit.montageBeats, the same list the cutter slices on.
+  parts.push('SEQUENCE:');
+  for (let i = 0; i < shots.length; i++) {
+    const shot = shots[i];
+    const beat = beats[i];
+    const beatParts: string[] = [substituteTags(shot.description)];
+    if (shot.blocking) beatParts.push(`Blocking: ${substituteTags(shot.blocking)}`);
+    if (shot.dialogue) {
+      const speakingChar = series.characters.find(
+        c => c.name.toUpperCase() === shot.dialogue!.character.toUpperCase(),
+      );
+      const voiceParts = [speakingChar?.voiceDescription ?? '', shot.dialogue.delivery || '']
+        .filter(Boolean).join(', ');
+      const slot = characterElements.find(
+        s => s.characterName.toUpperCase() === shot.dialogue!.character.toUpperCase(),
+      );
+      const charRef = slot ? `@Image${slot.elementIndex}` : shot.dialogue.character;
+      beatParts.push(`[${charRef}${voiceParts ? `, ${voiceParts}` : ''}]: "${shot.dialogue.line}"`);
+    }
+    // Vault rule 1: diegetic sound only, described per beat.
+    if (shot.sfx) beatParts.push(`Sound: ${shot.sfx}.`);
+    parts.push(`[${formatBeatTimestamp(beat.startSec)}-${formatBeatTimestamp(beat.endSec)}] ${beatParts.join(' ')}`);
+  }
+
+  // Geography hold, pinned to the plate / first location angle (rule 49).
+  const sbSlot = plan.slots.find(s => s.kind === 'storyboard');
+  const locSlot = plan.slots.find(s => s.kind === 'location');
+  if (sbSlot) {
+    parts.push(
+      `The blocking follows @Image${sbSlot.imageIndex} in every beat: each character stays ` +
+      'on the same side of the scene and keeps the same position relative to its landmarks; ' +
+      'do not mirror, swap, or rearrange who stands where.',
+    );
+  } else if (locSlot) {
+    parts.push(
+      `Keep the geography of @Image${locSlot.imageIndex} fixed across every beat: landmarks ` +
+      'stay where they are, and each subject holds their stated position and screen side.',
+    );
+  }
+
+  // STYLE token — one look string (compact aesthetic), plus the vault pack's
+  // non-negotiables: face stability, diegetic-only sound, no on-screen text.
+  const anyDaytime = shots.some(s => isDaytimeShot(s));
+  let compactAesthetic = buildCompactAestheticString(series.aesthetic);
+  if (anyDaytime) {
+    compactAesthetic = stripDarkAesthetic(compactAesthetic);
+    parts.push('Bright daytime scene, natural light, no rain.');
+  }
+  parts.push(
+    `STYLE: ${compactAesthetic}. ${totalSec} seconds. ` +
+    'Face stable throughout, no deformation. ' +
+    'Diegetic sound only, no music, no on-screen text.',
+  );
+
+  // Vault rule 4: negative stays short.
+  const shotNegatives = Array.from(new Set(
+    shots.map(s => s.negativePrompt).filter((n): n is string => Boolean(n)),
+  ));
+  const negative = ['warped face, melting fingers, on-screen text', ...shotNegatives].join(', ');
+  parts.push(`Negative: ${negative}.`);
+
+  // Seedance 2.5 accepts long prompts (12k chars quoted OK), but keep beats
+  // directed rather than decorated — guard at 5000.
+  let prompt = parts.join('\n').trim();
+  const MONTAGE_PROMPT_LIMIT = 5000;
+  if (prompt.length > MONTAGE_PROMPT_LIMIT) {
+    console.warn(`  Montage prompt is ${prompt.length} chars (limit: ${MONTAGE_PROMPT_LIMIT}). Hard-cutting.`);
+    prompt = prompt.slice(0, MONTAGE_PROMPT_LIMIT);
+  }
+
+  return {
+    prompt,
+    model: modelId,
+    duration: unit.duration,
+    audio: true,
+    characterElements: characterElements.length > 0 ? characterElements : undefined,
+    voiceReferenceSlots,
+    referenceSlots: plan.slots.length > 0 ? plan.slots : undefined,
+    referenceImageUrls: plan.slots.length > 0 ? [] : undefined,
+    modelResolution: {
+      modelId,
+      upgraded: false,
+      reason: 'montage unit — single-pass Seedance 2.5 with timestamped SEQUENCE beats (vault trailer grammar)',
+      autoUseElements: false,
+      autoUseReferenceImages: true,
+      useImageTags: true,
+    },
+  };
+}
+
+/** Format seconds as the vault pack's M:SS beat timestamp. */
+function formatBeatTimestamp(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/**
  * Seedance native multi-shot: one R2V generation covering 2+ beats, with
  * literal `Lens switch.` lines between the per-beat blocks (rule 21). The
  * reference stack is the union slot plan for the unit's shots — character

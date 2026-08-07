@@ -15,8 +15,10 @@ import {
   MODELS_SUPPORTING_END_IMAGE,
   MODELS_USING_IMAGE_TAGS,
   lipSyncModelNeedsKeyframe,
+  resolveMontageMode,
   resolveMultiShotModel,
 } from '../series/types.js';
+import { planMontageUnits } from './montage.js';
 
 const CHAIN_TRANSITIONS = new Set([
   'DISSOLVE', 'MATCH CUT', 'MORPH', 'WIPE', 'CROSSFADE', 'FADE',
@@ -353,9 +355,21 @@ export function buildGenerationPlan(
   script: EpisodeScript,
   series?: Pick<SeriesState, 'videoDefaults'>,
 ): GenerationPlan {
+  const videoDefaults = series?.videoDefaults;
+
+  // Montage-first (Seedance 2.5 branch default): each scene's consecutive
+  // beats become ONE single-pass montage generation (up to 30s) prompted with
+  // a timestamped SEQUENCE list; the cutter slices the render at the same
+  // timestamps afterwards. Inserts/title cards/forced singles fall through to
+  // the classic single-unit builder. Disable with
+  // `videoDefaults.montageMode: false` to restore 2.0-era planning.
+  if (series && resolveMontageMode(videoDefaults)) {
+    return planMontageUnits(script, series, (shot, prev, next) =>
+      buildSingleUnit(shot, prev, next, videoDefaults));
+  }
+
   const units: GenerationUnit[] = [];
   let index = 0;
-  const videoDefaults = series?.videoDefaults;
 
   while (index < script.shots.length) {
     const previousShot = index > 0 ? script.shots[index - 1] : undefined;

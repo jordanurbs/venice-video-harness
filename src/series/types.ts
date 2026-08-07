@@ -119,6 +119,41 @@ export interface VideoModelDefaults {
    * AGENTS.md rule 40.
    */
   voiceReferenceForDialogue?: boolean;
+  /**
+   * Montage-first generation (Seedance 2.5 branch default: `true`). When on,
+   * the planner groups each scene's consecutive beats into ONE long
+   * single-pass generation (up to 30s on Seedance 2.5) prompted with a
+   * timestamped SEQUENCE beat list (the "Make a full trailer with
+   * Seedance 2.5" grammar), then the montage cutter slices the render at
+   * every beat boundary into per-shot clips organized in the episode's
+   * `media-library/scene-NN/` directory. Set `false` to fall back to the
+   * 2.0-era per-shot / 15s multi-shot planning.
+   */
+  montageMode?: boolean;
+  /**
+   * Model for montage units. Defaults to `DEFAULT_MONTAGE_MODEL`
+   * (`seedance-2-5-reference-to-video`, 4-30s, up to 30 image refs).
+   */
+  montageModel?: string;
+  /**
+   * Ceiling for a single montage generation in seconds. Defaults to 30
+   * (Seedance 2.5's single-pass max). Scenes whose beats exceed this split
+   * into multiple montage units.
+   */
+  montageMaxDurationSec?: number;
+  /**
+   * What happens to a montage render after the cutter has sliced it:
+   *   - `true`  — auto-edit: the harness also assembles the cut shots into
+   *               the scene/episode edit automatically (the "fable with
+   *               harness" lane; assemble-episode picks the per-shot clips
+   *               up like any other shots).
+   *   - `false` — (default) library-only: the per-shot clips are provided in
+   *               `media-library/scene-NN/`, organized by scene and shot,
+   *               for a human (or the Venice Video Creator) to cut. Nothing
+   *               is assembled without an explicit assemble-episode run.
+   * CLI: `generate-videos --auto-edit` / `--no-auto-edit` override per run.
+   */
+  autoEdit?: boolean;
 }
 
 export interface ImageModelDefaults {
@@ -760,7 +795,7 @@ export interface ShotScript {
  * is the legacy name, still accepted when reading old generation-plan.json
  * files.
  */
-export type GenerationUnitType = 'single' | 'multishot' | 'kling-multishot';
+export type GenerationUnitType = 'single' | 'multishot' | 'kling-multishot' | 'montage';
 export type StartFrameStrategy = 'panel' | 'previous-last-frame';
 export type EndFrameStrategy = 'natural' | 'next-panel-target';
 
@@ -769,6 +804,19 @@ export interface GenerationUnitSegment {
   startOffsetSec: number;
   durationSec: number;
   outputFile: string;
+}
+
+/**
+ * A montage unit's planned beat: one shot's window inside the single
+ * 30-second Seedance 2.5 generation. `startSec`/`endSec` are the timestamps
+ * written into the prompt's SEQUENCE block (`[0:03-0:05] ...`) and are ALSO
+ * the cut points the montage cutter uses afterwards — the prompt and the
+ * edit can never disagree because they come from the same list.
+ */
+export interface MontageBeat {
+  shotNumber: number;
+  startSec: number;
+  endSec: number;
 }
 
 export interface GenerationUnit {
@@ -793,6 +841,17 @@ export interface GenerationUnit {
   useSeedanceKeyframe?: boolean;
   /** Model used for the Seedance keyframe stage when `useSeedanceKeyframe`. */
   keyframeModel?: string;
+  /**
+   * Montage units only: the timestamped beat map for the single-pass
+   * generation. Written into the prompt's SEQUENCE block and consumed by the
+   * montage cutter to slice the rendered clip at the exact beat boundaries.
+   */
+  montageBeats?: MontageBeat[];
+  /**
+   * Montage units only: 1-based scene index within the episode. Cut clips
+   * land in the media library under `media-library/scene-NN/`.
+   */
+  sceneNumber?: number;
 }
 
 export interface GenerationPlan {
@@ -843,6 +902,55 @@ export const KLING_MULTISHOT_MODEL = 'kling-o3-pro-image-to-video';
 /** Resolve the model multi-shot units render on. */
 export function resolveMultiShotModel(videoDefaults?: Pick<VideoModelDefaults, 'multiShotModel'>): string {
   return videoDefaults?.multiShotModel ?? DEFAULT_MULTISHOT_MODEL;
+}
+
+// ---------------------------------------------------------------------------
+// Montage-first defaults (Seedance 2.5 branch, 2026-08-07)
+//
+// Seedance 2.5 R2V renders up to 30s in a single pass with up to 30 image
+// references, so a whole scene of beats renders as ONE generation prompted
+// with a timestamped SEQUENCE list ("[0:03-0:05] macro on the ignition ...")
+// — the "Make a full trailer with Seedance 2.5" grammar. The montage cutter
+// then slices the render at the same timestamps into per-shot clips.
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_MONTAGE_MODEL = 'seedance-2-5-reference-to-video';
+
+/** Seedance 2.5 single-pass ceiling (every integer 4-30s at quote). */
+export const DEFAULT_MONTAGE_MAX_DURATION_SEC = 30;
+
+/** Minimum montage generation length; below this a plain single is cheaper. */
+export const MONTAGE_MIN_DURATION_SEC = 4;
+
+/** Montage-first is the default on this branch. */
+export function resolveMontageMode(
+  videoDefaults?: Pick<VideoModelDefaults, 'montageMode'>,
+): boolean {
+  return videoDefaults?.montageMode !== false;
+}
+
+export function resolveMontageModel(
+  videoDefaults?: Pick<VideoModelDefaults, 'montageModel'>,
+): string {
+  return videoDefaults?.montageModel ?? DEFAULT_MONTAGE_MODEL;
+}
+
+export function resolveMontageMaxDurationSec(
+  videoDefaults?: Pick<VideoModelDefaults, 'montageMaxDurationSec' | 'montageModel'>,
+): number {
+  if (videoDefaults?.montageMaxDurationSec) return videoDefaults.montageMaxDurationSec;
+  return DEFAULT_MONTAGE_MAX_DURATION_SEC;
+}
+
+/**
+ * Auto-edit toggle: `true` → the harness assembles the cut automatically;
+ * `false` (default) → cut clips are provided in the media library only,
+ * organized by scene and shot (the Venice Video Creator lane).
+ */
+export function resolveAutoEdit(
+  videoDefaults?: Pick<VideoModelDefaults, 'autoEdit'>,
+): boolean {
+  return videoDefaults?.autoEdit === true;
 }
 
 /**
@@ -959,6 +1067,7 @@ export const MODELS_SUPPORTING_ELEMENTS = new Set([
 ]);
 
 export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
+  'seedance-2-5-reference-to-video',
   'kling-o3-standard-reference-to-video',
   'kling-o3-pro-reference-to-video',
   'kling-o3-4k-reference-to-video',
@@ -1014,6 +1123,9 @@ export const MODELS_SUPPORTING_END_IMAGE = new Set([
 ]);
 
 export const MODELS_USING_IMAGE_TAGS = new Set([
+  // Seedance 2.5 R2V is pure-reference like 2.0 R2V and honors @ImageN tags
+  // (same prompt grammar per the 2.5 release notes; quote probed 2026-08-07).
+  'seedance-2-5-reference-to-video',
   'seedance-2-0-reference-to-video',
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
@@ -1082,6 +1194,7 @@ export const MODELS_SUPPORTING_PER_REFERENCE_AUDIO = new Set([
  * lip-sync `audio_url` lane.
  */
 export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
+  'seedance-2-5-reference-to-video',
   'seedance-2-0-reference-to-video',
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
@@ -1098,6 +1211,10 @@ export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
  * blocking plates) possible.
  */
 export const MAX_REFERENCE_IMAGES_BY_MODEL: Record<string, number> = {
+  // Seedance 2.5 raises the image-reference ceiling to 30 (release notes:
+  // up to 30 image / 10 video / 10 audio, 50 total). The quote endpoint does
+  // not police the count, so this budget is the harness-side enforcement.
+  'seedance-2-5-reference-to-video': 30,
   'seedance-2-0-reference-to-video': 9,
   'seedance-2-0-enhanced-reference-to-video': 9,
   'seedance-2-0-fast-reference-to-video': 9,

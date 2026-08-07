@@ -87,13 +87,25 @@ test('high-motion dialogue stays on R2V even under exact lip-sync', () => {
 
 test('native dialogue may remain grouped while exact lip-sync stays single', () => {
   const shots = [dialogueShot(1), dialogueShot(2)];
+
+  // Montage-first (this branch's default): consecutive native-dialogue beats
+  // group into ONE single-pass Seedance 2.5 montage unit.
   const nativePlan = buildGenerationPlan(script(shots), seriesWith('native'));
   assert.equal(nativePlan.units.length, 1);
-  assert.equal(nativePlan.units[0].unitType, 'multishot');
-  // Multi-shot units render on the reference-first Seedance lane by default
-  // (2026-08-05) — never the referenceless Kling i2v model.
-  assert.equal(nativePlan.units[0].model, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(nativePlan.units[0].unitType, 'montage');
+  assert.equal(nativePlan.units[0].model, 'seedance-2-5-reference-to-video');
+  assert.ok(Array.isArray(nativePlan.units[0].montageBeats));
 
+  // Legacy lane (montageMode: false) still groups as a 15s multi-shot on the
+  // reference-first Seedance 2.0 lane — never the referenceless Kling i2v.
+  const legacySeries = seriesWith('native');
+  legacySeries.videoDefaults.montageMode = false;
+  const legacyPlan = buildGenerationPlan(script(shots), legacySeries);
+  assert.equal(legacyPlan.units.length, 1);
+  assert.equal(legacyPlan.units[0].unitType, 'multishot');
+  assert.equal(legacyPlan.units[0].model, 'seedance-2-0-enhanced-reference-to-video');
+
+  // Exact lip-sync stays single on BOTH lanes — bundling drops the lip-sync.
   const exactPlan = buildGenerationPlan(script(shots), seriesWith('lip-sync'));
   assert.equal(exactPlan.units.length, 2);
   assert.ok(exactPlan.units.every(unit => unit.unitType === 'single'));

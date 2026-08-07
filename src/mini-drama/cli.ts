@@ -43,6 +43,7 @@ import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   DEFAULT_IMAGE_EDIT_MODEL,
   DEFAULT_LIP_SYNC_MODEL,
+  resolveAutoEdit,
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
@@ -2708,7 +2709,10 @@ program
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--skip-qa', 'Skip QA approval check', false)
   .option('--no-seedance-keyframe', 'Disable the automatic Seedance R2V keyframe pipeline that anchors identity for keyframe-only lip-sync models (see AGENTS.md rule 32).')
-  .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean }) => {
+  .option('--no-montage', 'Disable montage-first planning for this run (fall back to 2.0-era per-shot / 15s multi-shot units).')
+  .option('--auto-edit', 'After cutting montage renders, let the harness assemble the edit automatically (overrides videoDefaults.autoEdit for this run).')
+  .option('--no-auto-edit', 'Provide the montage cuts in the media library only; do not auto-assemble.')
+  .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean; montage: boolean; autoEdit?: boolean }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
@@ -2732,6 +2736,14 @@ program
       series.videoDefaults = { ...series.videoDefaults, seedanceKeyframeForWan: false };
       console.log('Seedance R2V keyframe pipeline DISABLED for this run.\n');
     }
+    if (opts.montage === false) {
+      series.videoDefaults = { ...series.videoDefaults, montageMode: false };
+      console.log('Montage-first planning DISABLED for this run (2.0-era per-shot units).\n');
+    }
+    // --auto-edit / --no-auto-edit override videoDefaults.autoEdit per run.
+    if (opts.autoEdit !== undefined) {
+      series.videoDefaults = { ...series.videoDefaults, autoEdit: opts.autoEdit };
+    }
 
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
@@ -2742,6 +2754,13 @@ program
     const ccModel = series.videoDefaults.characterConsistencyModel ?? DEFAULT_CHARACTER_CONSISTENCY_MODEL;
     console.log(`Models: action=${series.videoDefaults.actionModel}, atmosphere=${series.videoDefaults.atmosphereModel}, character-consistency=${ccModel}\n`);
     console.log(`Generation units: ${generationPlan.units.length}`);
+    const montageUnits = generationPlan.units.filter(unit => unit.unitType === 'montage');
+    if (montageUnits.length > 0) {
+      const models = Array.from(new Set(montageUnits.map(u => u.model))).join(', ');
+      const beatCount = montageUnits.reduce((sum, u) => sum + u.shotNumbers.length, 0);
+      console.log(`Montage units: ${montageUnits.length} (${models}) — ${beatCount} beats in single-pass generations, cut per-beat after render`);
+      console.log(`Auto-edit: ${resolveAutoEdit(series.videoDefaults) ? 'ON — assembling automatically after the cut' : 'OFF — cuts land in media-library/scene-NN/ for hand editing'}`);
+    }
     const multiUnits = generationPlan.units.filter(
       unit => unit.unitType === 'multishot' || unit.unitType === 'kling-multishot',
     );
@@ -2792,7 +2811,29 @@ program
 
     console.log(`\nGenerated ${videoPaths.length} video clips.`);
     console.log(`Generation plan saved to: ${join(episodeDir, 'generation-plan.json')}`);
-    console.log(`Next: assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+
+    const hadMontage = plan.units.some(unit => unit.unitType === 'montage');
+    const mediaLibraryDir = join(episodeDir, 'media-library');
+    if (hadMontage && existsSync(mediaLibraryDir)) {
+      console.log(`Media library: ${mediaLibraryDir} (per-scene cuts + uncut masters + manifest.json)`);
+    }
+
+    if (hadMontage && resolveAutoEdit(series.videoDefaults)) {
+      // Auto-edit lane: the cut per-shot clips are already at their
+      // canonical paths, so the standard assembler produces the edit.
+      console.log('\nAuto-edit is ON — assembling the episode from the montage cuts...\n');
+      await updateTreatment(series, opts.episode);
+      await program.parseAsync(['', '', 'assemble-episode', '-p', opts.project, '-e', String(opts.episode)]);
+      return;
+    }
+
+    if (hadMontage) {
+      console.log('\nAuto-edit is OFF — the montage cuts are in the media library, organized by scene and shot.');
+      console.log('Cut them by hand (or in the Venice Video Creator), or run:');
+      console.log(`  assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+    } else {
+      console.log(`Next: assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+    }
     await updateTreatment(series, opts.episode);
   });
 
