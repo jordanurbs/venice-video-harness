@@ -57,7 +57,7 @@ test('noninteractive Film creation uses the configured workspace', async () => {
 
   const series = JSON.parse(await readFile(join(workspace, 'long-horizon', 'series.json'), 'utf-8'));
   assert.equal(series.projectType, 'film');
-  assert.equal(series.videoDefaults.characterConsistencyModel, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(series.videoDefaults.characterConsistencyModel, 'seedance-2-5-reference-to-video');
   assert.equal(series.outputDir, join(workspace, 'long-horizon'));
 });
 

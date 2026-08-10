@@ -35,7 +35,7 @@ function script(shots) {
 test('native dialogue remains on Seedance R2V with voice-reference capability', () => {
   const series = seriesWith('native');
   const resolution = resolveVideoModel(dialogueShot(), series);
-  assert.equal(resolution.modelId, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(resolution.modelId, 'seedance-2-5-reference-to-video');
   assert.equal(resolution.autoUseReferenceImages, true);
   assert.equal(mustRenderAsExactLipSync(dialogueShot(), series.videoDefaults), false);
 });
@@ -44,9 +44,9 @@ test('native dialogue remains on Seedance R2V with voice-reference capability', 
 // leave the family: the reference stack keeps anchoring identity.
 test('exact lip-sync stays in-family when the family has an audio-driven lane', () => {
   const series = seriesWith('lip-sync');
-  assert.equal(series.videoDefaults.lipSyncModel, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(series.videoDefaults.lipSyncModel, 'seedance-2-5-reference-to-video');
   const resolution = resolveVideoModel(dialogueShot(), series);
-  assert.equal(resolution.modelId, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(resolution.modelId, 'seedance-2-5-reference-to-video');
   assert.equal(resolution.autoUseReferenceImages, true);
   assert.equal(mustRenderAsExactLipSync(dialogueShot(), series.videoDefaults), true);
 });
@@ -63,7 +63,7 @@ test('exact lip-sync falls back to Wan 2.7 when the family has no audio-driven l
 test('narrator-vo never routes a dialogue shot away from the family R2V', () => {
   const series = seriesWith('narrator-vo');
   const resolution = resolveVideoModel(dialogueShot(), series);
-  assert.equal(resolution.modelId, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(resolution.modelId, 'seedance-2-5-reference-to-video');
   assert.equal(mustRenderAsExactLipSync(dialogueShot(), series.videoDefaults), false);
 });
 
@@ -73,15 +73,15 @@ test('narrator-vo never routes a dialogue shot away from the family R2V', () => 
 test('an unset audio strategy behaves as native despite the default lipSyncModel', () => {
   const series = createSeries('Routing', 'test', 'drama', 'studio');
   assert.equal(series.videoDefaults.audioStrategy, undefined);
-  assert.equal(series.videoDefaults.lipSyncModel, 'seedance-2-0-enhanced-reference-to-video');
-  assert.equal(resolveVideoModel(dialogueShot(), series).modelId, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(series.videoDefaults.lipSyncModel, 'seedance-2-5-reference-to-video');
+  assert.equal(resolveVideoModel(dialogueShot(), series).modelId, 'seedance-2-5-reference-to-video');
   assert.equal(mustRenderAsExactLipSync(dialogueShot(), series.videoDefaults), false);
 });
 
 test('high-motion dialogue stays on R2V even under exact lip-sync', () => {
   const series = seriesWith('lip-sync');
   const shot = { ...dialogueShot(), motion: 'high' };
-  assert.equal(resolveVideoModel(shot, series).modelId, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(resolveVideoModel(shot, series).modelId, 'seedance-2-5-reference-to-video');
   assert.equal(mustRenderAsExactLipSync(shot, series.videoDefaults), false);
 });
 
@@ -97,13 +97,13 @@ test('native dialogue may remain grouped while exact lip-sync stays single', () 
   assert.ok(Array.isArray(nativePlan.units[0].montageBeats));
 
   // Legacy lane (montageMode: false) still groups as a 15s multi-shot on the
-  // reference-first Seedance 2.0 lane — never the referenceless Kling i2v.
+  // reference-first Seedance 2.5 lane — never the referenceless Kling i2v.
   const legacySeries = seriesWith('native');
   legacySeries.videoDefaults.montageMode = false;
   const legacyPlan = buildGenerationPlan(script(shots), legacySeries);
   assert.equal(legacyPlan.units.length, 1);
   assert.equal(legacyPlan.units[0].unitType, 'multishot');
-  assert.equal(legacyPlan.units[0].model, 'seedance-2-0-enhanced-reference-to-video');
+  assert.equal(legacyPlan.units[0].model, 'seedance-2-5-reference-to-video');
 
   // Exact lip-sync stays single on BOTH lanes — bundling drops the lip-sync.
   const exactPlan = buildGenerationPlan(script(shots), seriesWith('lip-sync'));

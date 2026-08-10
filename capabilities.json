@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "harnessVersion": "2.15.0",
-  "generatedAt": "2026-08-06T10:31:37-03:00",
+  "harnessVersion": "2.16.0-montage.0",
+  "generatedAt": "2026-08-07T15:51:03-03:00",
   "videoModels": [
     {
       "id": "wan-2.6-image-to-video",
@@ -3514,6 +3514,7 @@
       "seedance-2-0-enhanced-reference-to-video",
       "seedance-2-0-fast-reference-to-video",
       "seedance-2-0-reference-to-video",
+      "seedance-2-5-reference-to-video",
       "wan-2-7-image-to-video",
       "wan-2-7-spicy-image-to-video",
       "wan-2-7-text-to-video",
@@ -3560,10 +3561,10 @@
     "videoPromptCharLimit": 2500
   },
   "defaults": {
-    "actionModel": "seedance-2-0-enhanced-reference-to-video",
-    "atmosphereModel": "seedance-2-0-enhanced-reference-to-video",
-    "characterConsistencyModel": "seedance-2-0-enhanced-reference-to-video",
-    "multiShotModel": "seedance-2-0-enhanced-reference-to-video",
+    "actionModel": "seedance-2-5-reference-to-video",
+    "atmosphereModel": "seedance-2-5-reference-to-video",
+    "characterConsistencyModel": "seedance-2-5-reference-to-video",
+    "multiShotModel": "seedance-2-5-reference-to-video",
     "lipSyncModel": "wan-2-7-image-to-video",
     "imageGenerationModel": "nano-banana-2",
     "imageEditModel": "nano-banana-2-edit"

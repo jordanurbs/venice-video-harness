@@ -2,6 +2,27 @@
 
 ## 2.16.0-montage (branch: seedance-2-5-montage) — 2026-08-07
 
+### Changed
+
+- **Seedance 2.5 is now the default video model across every lane** (was
+  Seedance 2.0 R2V Enhanced). `DEFAULT_ACTION_MODEL`, `DEFAULT_ATMOSPHERE_MODEL`,
+  `DEFAULT_CHARACTER_CONSISTENCY_MODEL`, `DEFAULT_MULTISHOT_MODEL`,
+  `resolveVideoFamilyDefaults('seedance'|'auto')`, and the in-family
+  `resolveLipSyncModel('seedance'|'auto')` all resolve to
+  `seedance-2-5-reference-to-video`, matching the montage lane. This unifies the
+  whole harness on 2.5: single-pass up to 30s, up to 30 reference images,
+  `audio_url` + reference audio in-family. Trade-off: 2.5 caps at 720p (the
+  mini-drama generator already pins 720p for Seedance, so no request regresses);
+  2.0 R2V Enhanced (1080p) stays registry-known and selectable via
+  `videoDefaults`. Added `seedance-2-5-reference-to-video` to
+  `MODELS_SUPPORTING_AUDIO_INPUT` (its spec is `audio_input: true`; the
+  registry-coverage test enforces the set). Regenerated `capabilities.json`.
+  See AGENTS.md rule 51.
+- **`sd25-pe` skill installed** at `.agents/skills/sd25-pe/` — the Seedance 2.5
+  Prompt Optimizer plus a harness-bridge section mapping its compiled Prompts
+  onto the harness fields (montage SEQUENCE grammar, @Image discipline, no-music
+  suffix; the harness stays authoritative on identity/refs/duration/resolution).
+
 ### Added
 
 - **Seedance 2.5 in the registry.** `seedance-2-5-text-to-video` /

@@ -133,7 +133,7 @@ console.log('buildVideoPrompt (no plate, location refs only):');
 // ── Multi-shot: Seedance R2V is the default lane ───────────────────────
 console.log('buildMultiShotPrompt (Seedance R2V default):');
 {
-  ok('DEFAULT_MULTISHOT_MODEL is Seedance R2V Enhanced', DEFAULT_MULTISHOT_MODEL === 'seedance-2-0-enhanced-reference-to-video');
+  ok('DEFAULT_MULTISHOT_MODEL is Seedance 2.5 R2V', DEFAULT_MULTISHOT_MODEL === 'seedance-2-5-reference-to-video');
   ok('resolveMultiShotModel defaults to Seedance', resolveMultiShotModel(series.videoDefaults) === DEFAULT_MULTISHOT_MODEL);
   ok('explicit override wins', resolveMultiShotModel({ multiShotModel: 'kling-o3-pro-image-to-video' }) === 'kling-o3-pro-image-to-video');
 

@@ -49,7 +49,7 @@ test('capability sets match the exported constants and reference known ids', () 
   }
 });
 
-test('routing defaults are registry-known and multi-shot default is Seedance R2V Enhanced', () => {
+test('routing defaults are registry-known and multi-shot default is Seedance 2.5 R2V', () => {
   const m = buildCapabilitiesManifest();
   const known = new Set(VIDEO_MODELS.map(s => s.id));
   assert.equal(m.defaults.multiShotModel, DEFAULT_MULTISHOT_MODEL);
