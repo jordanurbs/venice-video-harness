@@ -92,7 +92,7 @@ import { getMusicModel } from '../venice/models.js';
 
 import { buildImagePrompt, buildCharacterReferencePromptParts } from './prompt-builder.js';
 import { generateEpisodeVideos } from './video-generator.js';
-import { generateVoiceReference } from './voice-reference.js';
+import { generateVoiceReference, harvestVoiceReferenceFromClip } from './voice-reference.js';
 import { generateLocationReferences } from './location-generator.js';
 import {
   ensureEpisodeStoryboardReferences,
@@ -1273,6 +1273,16 @@ program
     }
   });
 
+/**
+ * Resolve a rendered shot number to its canonical clip path
+ * (`episodes/episode-NNN/scene-001/shot-NNN.mp4`). Used by the
+ * voice-harvest options on lock-character / generate-voice-reference.
+ */
+function resolveShotClipPath(series: SeriesState, episode: number, shotNumber: string): string {
+  const padded = shotNumber.replace(/^shot-/i, '').padStart(3, '0');
+  return join(getEpisodeDir(series, episode), 'scene-001', `shot-${padded}.mp4`);
+}
+
 // ── lock-character ────────────────────────────────────────────────────
 program
   .command('lock-character')
@@ -1282,7 +1292,15 @@ program
   .requiredOption('--voice-id <id>', 'Venice voice ID')
   .option('--voice-name <name>', 'Display name for the voice')
   .option('--voice-reference <file>', 'Path to an operator-supplied voice-donor clip (wav/mp3, normalized to 2-15s) used as reference_audio_urls on Seedance/HappyHorse R2V shots')
-  .action(async (opts: { project: string; character: string; voiceId: string; voiceName?: string; voiceReference?: string }) => {
+  .option('--voice-from-shot <n>', 'Harvest the voice reference from an already-rendered shot where the character speaks (episodes/episode-E/scene-001/shot-NNN.mp4) — locks later shots to the voice the audience actually heard')
+  .option('-e, --episode <number>', 'Episode the --voice-from-shot shot belongs to', '1')
+  .option('--from-start <sec>', 'With --voice-from-shot: harvest audio starting at this offset (seconds)', parseFloat)
+  .option('--from-end <sec>', 'With --voice-from-shot: harvest audio up to this offset (seconds)', parseFloat)
+  .action(async (opts: {
+    project: string; character: string; voiceId: string; voiceName?: string;
+    voiceReference?: string; voiceFromShot?: string; episode: string;
+    fromStart?: number; fromEnd?: number;
+  }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
@@ -1293,6 +1311,10 @@ program
     char.voiceName = opts.voiceName || opts.voiceId;
     char.locked = true;
 
+    if (opts.voiceReference && opts.voiceFromShot) {
+      console.error('Pass either --voice-reference or --voice-from-shot, not both.');
+      process.exit(1);
+    }
     if (opts.voiceReference) {
       const apiKey = await getVeniceApiKey();
       const client = new VeniceClient(apiKey);
@@ -1300,6 +1322,15 @@ program
       char.voiceReferencePath = relPath;
       char.voiceReferenceModel = model;
       console.log(`  Voice reference imported: ${relPath} (${model})`);
+    } else if (opts.voiceFromShot) {
+      const clipPath = resolveShotClipPath(series, parseInt(opts.episode, 10), opts.voiceFromShot);
+      const { relPath, model } = await harvestVoiceReferenceFromClip(series, char, clipPath, {
+        startSec: opts.fromStart,
+        endSec: opts.fromEnd,
+      });
+      char.voiceReferencePath = relPath;
+      char.voiceReferenceModel = model;
+      console.log(`  Voice reference harvested: ${relPath} (${model})`);
     }
 
     const charDir = getCharacterDir(series, char.name);
@@ -1319,31 +1350,52 @@ program
 // ── generate-voice-reference ──────────────────────────────────────────
 program
   .command('generate-voice-reference')
-  .description('Generate (or import) a voice-donor reference clip for a character, used as reference_audio_urls (@AudioN) on Seedance/HappyHorse R2V shots')
+  .description('Generate, import, or harvest a voice-donor reference clip for a character, used as reference_audio_urls (@AudioN) on Seedance/HappyHorse R2V shots')
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-c, --character <name>', 'Character name')
   .option('--text <text>', 'Spoken text to render (defaults to a neutral sample steered by voiceDescription)')
   .option('--voice <voice>', 'Named seed-audio voice (defaults to describe-in-prompt steering via voiceDescription)')
   .option('--speed <speed>', 'Playback speed 0.5-2', parseFloat)
   .option('--file <file>', 'Import an operator-supplied clip verbatim instead of generating')
+  .option('--from-shot <n>', 'Harvest from an already-rendered shot where the character speaks (episodes/episode-E/scene-001/shot-NNN.mp4) — locks later shots to the voice the audience actually heard. No Venice call.')
+  .option('-e, --episode <number>', 'Episode the --from-shot shot belongs to', '1')
+  .option('--from-start <sec>', 'With --from-shot: harvest audio starting at this offset (seconds)', parseFloat)
+  .option('--from-end <sec>', 'With --from-shot: harvest audio up to this offset (seconds)', parseFloat)
   .option('--model <model>', 'Override the seed-audio model id')
-  .action(async (opts: { project: string; character: string; text?: string; voice?: string; speed?: number; file?: string; model?: string }) => {
+  .action(async (opts: {
+    project: string; character: string; text?: string; voice?: string; speed?: number;
+    file?: string; model?: string; fromShot?: string; episode: string;
+    fromStart?: number; fromEnd?: number;
+  }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
     const char = getCharacter(series, opts.character);
     if (!char) { console.error(`Character "${opts.character}" not found.`); process.exit(1); }
 
-    const apiKey = await getVeniceApiKey();
-    const client = new VeniceClient(apiKey);
+    if (opts.file && opts.fromShot) {
+      console.error('Pass either --file or --from-shot, not both.');
+      process.exit(1);
+    }
 
-    const { relPath, model } = await generateVoiceReference(client, series, char, {
-      text: opts.text,
-      voice: opts.voice,
-      speed: opts.speed,
-      file: opts.file,
-      model: opts.model,
-    });
+    let relPath: string; let model: string;
+    if (opts.fromShot) {
+      const clipPath = resolveShotClipPath(series, parseInt(opts.episode, 10), opts.fromShot);
+      ({ relPath, model } = await harvestVoiceReferenceFromClip(series, char, clipPath, {
+        startSec: opts.fromStart,
+        endSec: opts.fromEnd,
+      }));
+    } else {
+      const apiKey = await getVeniceApiKey();
+      const client = new VeniceClient(apiKey);
+      ({ relPath, model } = await generateVoiceReference(client, series, char, {
+        text: opts.text,
+        voice: opts.voice,
+        speed: opts.speed,
+        file: opts.file,
+        model: opts.model,
+      }));
+    }
     char.voiceReferencePath = relPath;
     char.voiceReferenceModel = model;
 

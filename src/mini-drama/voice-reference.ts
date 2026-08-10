@@ -205,3 +205,81 @@ export async function generateVoiceReference(
   console.log(`  Voice reference saved: ${absPath} (${finalDur.toFixed(2)}s)`);
   return { absPath, relPath, model };
 }
+
+export interface HarvestVoiceReferenceOptions {
+  /** Trim: only use audio from this offset (seconds into the clip). */
+  startSec?: number;
+  /** Trim: only use audio up to this offset (seconds into the clip). */
+  endSec?: number;
+}
+
+/**
+ * Harvest a voice-donor clip from an already-rendered video shot — typically
+ * the first clip where the character speaks. This locks every later shot to
+ * the voice the audience actually heard, instead of a seed-audio synthesis of
+ * `voiceDescription` that the video model's first performance may disagree
+ * with.
+ *
+ * Extracts the audio track (optionally windowed by start/end), strips leading
+ * and trailing silence, normalizes into the Venice 2-15s window, and writes
+ * `characters/<slug>/voice-reference.mp3` (archiving any prior version).
+ * Purely local — no Venice call. Does NOT mutate `character` or persist
+ * `character.json`; the caller owns that, same contract as
+ * `generateVoiceReference`.
+ */
+export async function harvestVoiceReferenceFromClip(
+  series: SeriesState,
+  character: Character,
+  clipPath: string,
+  options: HarvestVoiceReferenceOptions = {},
+): Promise<{ absPath: string; relPath: string; model: string }> {
+  const src = resolve(clipPath);
+  if (!existsSync(src)) throw new Error(`Clip not found: ${src}`);
+
+  const { absPath, relPath } = voiceReferencePathsFor(series, character.name);
+  await mkdir(join(absPath, '..'), { recursive: true });
+  archiveExisting(absPath);
+
+  const args = ['-y'];
+  if (options.startSec !== undefined) args.push('-ss', String(options.startSec));
+  if (options.endSec !== undefined) args.push('-to', String(options.endSec));
+  args.push(
+    '-i', src,
+    '-vn',
+    // Strip leading silence, then (via double reverse) trailing silence, so
+    // the donor clip is dense speech rather than room tone + a line.
+    '-af',
+    'silenceremove=start_periods=1:start_threshold=-35dB:start_silence=0.15,' +
+    'areverse,silenceremove=start_periods=1:start_threshold=-35dB:start_silence=0.25,areverse',
+    '-c:a', 'libmp3lame', '-q:a', '2',
+    absPath,
+  );
+  runCommand('ffmpeg', args);
+
+  if (!existsSync(absPath)) throw new Error(`ffmpeg produced no output for ${src}`);
+  const rawDur = probeDurationSec(absPath);
+  if (rawDur < 1) {
+    console.warn(
+      `  ⚠ Harvested audio is only ${rawDur.toFixed(2)}s after silence trimming — ` +
+      'the clip may not contain clear speech. Consider --from-start/--from-end to window the spoken line.',
+    );
+  }
+  const finalDur = normalizeToWindow(absPath);
+
+  await appendRecipePass(absPath, {
+    kind: 'mechanical',
+    role: 'identity',
+    model: 'harvested-from-clip',
+    label: `voice reference (${character.name}) harvested from rendered clip`,
+    extra: {
+      sourceClip: src,
+      startSec: options.startSec ?? null,
+      endSec: options.endSec ?? null,
+      source: 'harvest',
+    },
+  });
+
+  console.log(`  Voice reference harvested from ${src}`);
+  console.log(`  Voice reference saved: ${absPath} (${finalDur.toFixed(2)}s)`);
+  return { absPath, relPath, model: 'harvested-from-clip' };
+}

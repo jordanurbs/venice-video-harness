@@ -46,8 +46,8 @@ export const RENDER_ROUTE_CHOICES: ReadonlyArray<{
 ];
 
 export const AUDIO_STRATEGY_CHOICES = [
-  { label: 'Native dialogue', value: 'native', description: 'The selected video model speaks in-frame; Seedance and HappyHorse take a voice-donor clip so timbre and accent hold across shots' },
-  { label: 'Exact lip-sync', value: 'lip-sync', description: 'Venice speech is rendered first and passed to the model as an audio file, and the mouth follows that recording. Seedance 2.x and MiniMax H3 do it in-family; other families route to Wan 2.7' },
+  { label: 'Native dialogue (default — right for almost every project)', value: 'native', description: 'The selected video model speaks in-frame; Seedance and HappyHorse take a voice-donor clip (reference_audio_urls) so timbre and accent hold across shots. Voice consistency is already covered here — you do NOT need lip-sync for that.' },
+  { label: 'Exact lip-sync (special-purpose — only when the mouth must follow a specific recording)', value: 'lip-sync', description: 'For music videos, pre-recorded VO, language swaps, or precise wording/timing: Venice speech is rendered first and passed as an audio file, and the mouth follows that exact recording. Seedance 2.x and MiniMax H3 do it in-family; other families route to Wan 2.7.' },
   { label: 'Narrator voice-over', value: 'narrator-vo', description: 'Mute model narration and own the VO lane' },
 ] as const;
 
