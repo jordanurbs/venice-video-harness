@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.16.0 — 2026-08-10
+
+Released: the `seedance-2-5-montage` branch merged to main (PR #24) after a
+full paid montage E2E (60s two-scene trailer → per-beat cuts → media library →
+valid FCPXML 1.10 → assembled 1440p master). Everything under the
+`2.16.0-montage` heading below ships in this release, plus:
+
+### Added
+
+- **Voice harvest from rendered clips.** `generate-voice-reference
+  --from-shot <n>` (and `lock-character --voice-from-shot <n>`) extract a
+  character's voice-donor clip from an already-rendered shot — silence-trimmed
+  at both ends, normalized to the Venice 2-15s window, recipe pass logged, no
+  Venice call — so later shots lock to the voice the audience actually heard.
+  Optional `--from-start` / `--from-end` window the spoken line.
+
+### Changed
+
+- **Route + audio-strategy copy reframed.** Montage is "default — recommended";
+  standard is the special-purpose per-shot escape hatch (non-groupable scripts,
+  per-shot control, non-Seedance families). Exact lip-sync is named
+  special-purpose (music videos, pre-recorded VO, language swaps) — native
+  dialogue already covers voice consistency via `reference_audio_urls`.
+
+### Fixed
+
+- **webp/png reference mismatch:** when Venice returns webp bytes for a
+  requested `.png`, the harness keeps the `.webp` sibling AND transcodes to the
+  requested name, so fixed-name resolvers (reference-slots, panel-fixer,
+  storyboard refine) still find the asset.
+- **Intermittent empty vision responses** (kimi-k3) consume `chatJson`'s retry
+  attempt instead of failing the panel immediately.
+- **Silently dropped SFX:** `export-timeline` now warns when a file in
+  `audio/sfx/` has no `shot-NNN` filename anchor (or references a missing
+  shot) instead of dropping it from the timeline without a word.
+
 ## 2.16.0-montage (branch: seedance-2-5-montage) — 2026-08-07
 
 ### Changed
