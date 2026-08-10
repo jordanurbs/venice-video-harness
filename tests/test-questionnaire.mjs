@@ -101,6 +101,16 @@ for (const strategy of ['native', 'lip-sync', 'narrator-vo']) {
   ok('combo characterConsistencyModel is HappyHorse R2V', s.videoDefaults.characterConsistencyModel === 'happyhorse-1-1-reference-to-video');
 }
 
+// Render route → montageMode toggle (upfront questionnaire).
+{
+  const montage = createSeries('Montage Route', 'concept', 'drama', 'somewhere', { montageMode: true });
+  ok('montage route persists montageMode:true', montage.videoDefaults.montageMode === true);
+  const standard = createSeries('Standard Route', 'concept', 'drama', 'somewhere', { montageMode: false });
+  ok('standard route persists montageMode:false', standard.videoDefaults.montageMode === false);
+  const unset = createSeries('Unset Route', 'concept', 'drama', 'somewhere');
+  ok('no route leaves montageMode unset (harness montage-first default)', unset.videoDefaults.montageMode === undefined);
+}
+
 // resolveVideoFamilyDefaults: each family returns a complete triplet.
 for (const family of ['auto', 'seedance', 'wan-3-0', 'happyhorse', 'minimax-h3', 'grok-imagine', 'kling-o3']) {
   const d = resolveVideoFamilyDefaults(family);

@@ -104,7 +104,13 @@ import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
 import type { MultiEditModel } from '../venice/types.js';
 import { assembleEpisode, collectShotVideos } from './assembler.js';
 import { buildGenerationPlan, saveGenerationPlan } from './generation-planner.js';
-import { AUDIO_STRATEGY_CHOICES, INTELLIGENCE_CHOICES, VIDEO_FAMILY_CHOICES } from './choices.js';
+import {
+  AUDIO_STRATEGY_CHOICES,
+  INTELLIGENCE_CHOICES,
+  RENDER_ROUTE_CHOICES,
+  VIDEO_FAMILY_CHOICES,
+  type RenderRoute,
+} from './choices.js';
 import {
   DEFAULT_INTELLIGENCE_MODEL,
   describeIntelligence,
@@ -161,6 +167,13 @@ function wantsJson(localOpts?: { json?: unknown }): boolean {
 }
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
+const RENDER_ROUTES: ReadonlySet<string> = new Set(RENDER_ROUTE_CHOICES.map(c => c.value));
+
+/** Map the upfront render-route choice onto the `montageMode` toggle. */
+function montageModeForRoute(route: RenderRoute | undefined): boolean | undefined {
+  if (route === undefined) return undefined;
+  return route !== 'standard';
+}
 
 /**
  * Which reasoning model this invocation should use.
@@ -561,6 +574,7 @@ program
   .command('new')
   .description('Create a project with an interactive wizard; Film is the general-purpose option')
   .option('--type <type>', 'film | series | product-video | music-video | screenplay')
+  .option('--route <route>', 'Render route: montage (advanced, for editors) | standard (beginner, more automated)')
   .option('-n, --name <name>', 'Project name')
   .option('--concept <concept>', 'Project concept or premise')
   .option('-g, --genre <genre>', 'Genre')
@@ -569,7 +583,7 @@ program
   .option('--video-family <family>', 'auto | seedance | wan-3-0 | happyhorse | minimax-h3 | grok-imagine | kling-o3')
   .option('--intelligence <model>', `Reasoning model for workshop, script, and QA (default: ${DEFAULT_INTELLIGENCE_MODEL})`)
   .action(async (opts: {
-    type?: string; name?: string; concept?: string; genre?: string; setting?: string;
+    type?: string; route?: string; name?: string; concept?: string; genre?: string; setting?: string;
     audioStrategy?: string; videoFamily?: string; intelligence?: string;
   }) => {
     if (!stdin.isTTY && (!opts.type || !opts.name || !opts.concept)) {
@@ -585,6 +599,19 @@ program
       { label: 'Screenplay', value: 'screenplay', description: 'Start from a Fountain or PDF screenplay' },
     ])) as typeof types[number];
     if (!types.includes(type)) throw new Error(`--type must be one of: ${types.join(', ')}`);
+
+    // Render route, asked up front: montage (advanced, cuts every clip inside
+    // the generation for later editing) vs standard (beginner, more automated
+    // per-shot planning but more prone to consistency drift). Maps to
+    // videoDefaults.montageMode. Non-TTY without --route keeps the harness
+    // default (montage-first).
+    const renderRoute = (opts.route ?? (stdin.isTTY
+      ? await promptChoice('Render route — how do you want to produce and edit this?', RENDER_ROUTE_CHOICES)
+      : undefined)) as RenderRoute | undefined;
+    if (renderRoute && !RENDER_ROUTES.has(renderRoute)) {
+      throw new Error(`--route must be one of: ${[...RENDER_ROUTES].join(', ')}`);
+    }
+    const montageMode = montageModeForRoute(renderRoute);
 
     const name = opts.name ?? await promptText('Project name', { required: true });
     const concept = opts.concept ?? await promptText('Concept or premise', { required: true });
@@ -614,12 +641,14 @@ program
     const series = createSeries(name, concept, genre, setting, {
       audioStrategy,
       videoFamilyPreference: videoFamily,
+      montageMode,
       intelligenceModel,
       workspace,
       projectType: type,
     });
     await saveSeries(series);
     console.log(`\n${type === 'film' ? 'Film' : 'Project'} created: ${series.outputDir}`);
+    console.log(`Render route: ${series.videoDefaults.montageMode === false ? 'standard (per-shot, more automated)' : 'montage (single-pass per scene, cut for editing)'}`);
     console.log(`Reference-first defaults: ${series.videoDefaults.characterConsistencyModel}`);
     console.log(`Intelligence: ${describeIntelligence(intelligenceModel)}`);
     const language = getProjectLanguage(series);
@@ -782,13 +811,19 @@ program
     'Omit it on an interactive terminal and you will be asked.',
   )
   .option(
+    '--route <route>',
+    'Render route: "montage" (advanced/editor — one single-pass Seedance 2.5 generation per scene, auto-cut into a media library for later editing; strongest continuity) or ' +
+    '"standard" (beginner — 2.0-era per-shot / short multi-shot planning, more automated but more prone to consistency drift). ' +
+    'Omit it on an interactive terminal and you will be asked; omit it without a TTY to keep the montage-first default.',
+  )
+  .option(
     '--intelligence <model>',
     'Reasoning model that develops the story, writes the script, and reads panels back during QA. ' +
     `Defaults to ${DEFAULT_INTELLIGENCE_MODEL}. A text-only choice pairs with a vision model from the same privacy tier.`,
   )
   .action(async (opts: {
     name: string; concept: string; genre: string; setting: string;
-    audioStrategy?: string; videoFamily?: string; intelligence?: string;
+    audioStrategy?: string; videoFamily?: string; route?: string; intelligence?: string;
   }) => {
     const allowedAudio = new Set(['native', 'lip-sync', 'narrator-vo']);
     if (opts.audioStrategy && !allowedAudio.has(opts.audioStrategy)) {
@@ -799,16 +834,23 @@ program
       console.error(`--video-family must be one of: ${[...VIDEO_FAMILIES].join(', ')}`);
       process.exit(2);
     }
+    if (opts.route && !RENDER_ROUTES.has(opts.route)) {
+      console.error(`--route must be one of: ${[...RENDER_ROUTES].join(', ')}`);
+      process.exit(2);
+    }
     // Ask on a real terminal; stay silent for the MCP and CI, which spawn this
     // command without a TTY and rely on the harness defaults when the flag is
     // absent.
     const videoFamily = opts.videoFamily
       ?? (stdin.isTTY ? await promptChoice('Video model family', VIDEO_FAMILY_CHOICES) : undefined);
+    const renderRoute = (opts.route
+      ?? (stdin.isTTY ? await promptChoice('Render route', RENDER_ROUTE_CHOICES) : undefined)) as RenderRoute | undefined;
 
     const series = createSeries(opts.name, opts.concept, opts.genre, opts.setting, {
       workspace: await getWorkspaceDir(program.opts().workspace),
       audioStrategy: opts.audioStrategy as 'native' | 'lip-sync' | 'narrator-vo' | undefined,
       videoFamilyPreference: videoFamily as VideoFamilyPreference | undefined,
+      montageMode: montageModeForRoute(renderRoute),
       intelligenceModel: opts.intelligence,
     });
     await saveSeries(series);
@@ -818,6 +860,7 @@ program
     console.log(`  Genre: ${series.genre}`);
     console.log(`  Concept: ${series.concept}`);
     console.log(`  Output: ${series.outputDir}`);
+    console.log(`  Render route: ${series.videoDefaults.montageMode === false ? 'standard (per-shot, more automated)' : 'montage (single-pass per scene, cut for editing)'}`);
     if (series.videoDefaults.audioStrategy) {
       console.log(`  Audio strategy: ${series.videoDefaults.audioStrategy}`);
     }

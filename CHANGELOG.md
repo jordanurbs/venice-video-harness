@@ -4,6 +4,16 @@
 
 ### Changed
 
+- **Render route is now an upfront question at project creation.** `venice-video
+  new` (interactive) and `new-series` (flags) ask "montage vs standard", or take
+  `--route montage|standard`: montage (advanced/editor) = one single-pass
+  generation per scene, auto-cut into a media library for later editing;
+  standard (beginner) = 2.0-era per-shot / short multi-shot planning, more
+  automated but more prone to consistency drift. The answer sets
+  `videoDefaults.montageMode` (montage→true, standard→false); omitting it keeps
+  the montage-first default. New `RENDER_ROUTE_CHOICES` in
+  `src/mini-drama/choices.ts`; `CreateSeriesOptions.montageMode` in
+  `src/series/manager.ts`.
 - **Seedance 2.5 is now the default video model across every lane** (was
   Seedance 2.0 R2V Enhanced). `DEFAULT_ACTION_MODEL`, `DEFAULT_ATMOSPHERE_MODEL`,
   `DEFAULT_CHARACTER_CONSISTENCY_MODEL`, `DEFAULT_MULTISHOT_MODEL`,
