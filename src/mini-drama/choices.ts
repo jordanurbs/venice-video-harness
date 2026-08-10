@@ -34,14 +34,14 @@ export const RENDER_ROUTE_CHOICES: ReadonlyArray<{
   label: string; value: RenderRoute; description?: string;
 }> = [
   {
-    label: 'Montage (advanced — for editors)',
+    label: 'Montage (default — recommended)',
     value: 'montage',
-    description: 'Each scene renders as ONE single-pass Seedance 2.5 generation (up to 30s), then auto-cuts into per-shot clips in a media library for you to edit. Strongest continuity — identity, lighting, and geography hold across every cut inside one render.',
+    description: 'Each scene renders as ONE single-pass Seedance 2.5 generation (up to 30s), then auto-cuts into per-shot clips in a media library for you to edit. Strongest continuity — identity, lighting, and geography hold across every cut inside one render. Add --auto-edit (or videoDefaults.autoEdit) to chain straight into assembly.',
   },
   {
-    label: 'Standard (beginner — more automated)',
+    label: 'Standard (special-purpose — per-shot)',
     value: 'standard',
-    description: 'Per-shot and short multi-shot planning that runs end to end with less hands-on editing. Simpler to operate, but stitching separately-rendered shots is more prone to consistency drift across cuts.',
+    description: 'The per-shot / short multi-shot planner. Reach for it when the script cannot group into scenes (location-hopping, one-shot scenes, non-overlapping characters), when you need per-shot control over individual renders, or to render on a non-Seedance family. Stitching separately-rendered shots is more prone to consistency drift across cuts.',
   },
 ];
 
