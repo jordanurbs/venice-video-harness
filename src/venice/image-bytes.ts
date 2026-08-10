@@ -17,6 +17,8 @@
 // ---------------------------------------------------------------------------
 
 import { writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { extname, join, dirname, basename } from 'node:path';
 
 export type ImageFormat = 'png' | 'jpeg' | 'webp' | 'gif' | 'avif' | 'unknown';
@@ -89,10 +91,16 @@ export function sniffImageFormat(buf: Uint8Array | Buffer): SniffResult {
  * caller-supplied extension when they disagree.
  *
  * Returns the final on-disk path. When `requestedPath` says `.png` but the
- * buffer is actually WebP, the file is written as `<base>.webp` and a
- * `console.warn` records the mismatch. Pass `forceExt: true` to keep the
- * caller's extension (useful when downstream tooling really does need a
- * fixed name, even if the format is a lie — but transcode first when you can).
+ * buffer is actually WebP, the true-format bytes are written as
+ * `<base>.webp` AND the file is transcoded to the requested `.png` via
+ * ffmpeg — because the reference-path resolvers (`reference-slots.ts`,
+ * `panel-fixer.ts`, the storyboard refiner) all resolve fixed `.png` names
+ * and silently lose the asset otherwise (the 2026-08-10 montage E2E failure:
+ * every character-refine pass errored with "Reference image not found:
+ * …/front.png" while `front.webp` sat next to it). If ffmpeg is missing or
+ * the transcode fails, we fall back to the old behavior (sniffed-ext file
+ * only, with a louder warning). Pass `forceExt: true` to keep the caller's
+ * extension without any transcode (the format on disk will be a lie).
  */
 export async function writeImageBytesSmart(
   buf: Buffer,
@@ -110,8 +118,17 @@ export async function writeImageBytesSmart(
   const base = basename(requestedPath, requestedExt);
   const correctedPath = join(dir, `${base}${sniff.ext}`);
   await writeFile(correctedPath, buf);
+
+  // Transcode to the requested extension so fixed-name resolvers still work.
+  const r = spawnSync('ffmpeg', ['-y', '-i', correctedPath, requestedPath], { encoding: 'utf-8' });
+  if (r.status === 0 && existsSync(requestedPath)) {
+    console.warn(
+      `  image-bytes: requested ${requestedPath} (${requestedExt || '<no ext>'}) but bytes are ${sniff.format}; kept ${basename(correctedPath)} and transcoded to ${basename(requestedPath)}.`,
+    );
+    return requestedPath;
+  }
   console.warn(
-    `  image-bytes: requested ${requestedPath} (${requestedExt || '<no ext>'}) but bytes are ${sniff.format}; wrote ${correctedPath} instead.`,
+    `  image-bytes: requested ${requestedPath} (${requestedExt || '<no ext>'}) but bytes are ${sniff.format}; wrote ${correctedPath} instead — ffmpeg transcode to ${requestedExt} FAILED; downstream resolvers expecting ${basename(requestedPath)} will not find it.`,
   );
   return correctedPath;
 }

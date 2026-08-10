@@ -3616,10 +3616,18 @@ async function runTimelineExport(opts: {
       const sfxFiles = readdirSync(sfxDir).filter((f: string) => f.endsWith('.mp3'));
       for (const f of sfxFiles) {
         const m = f.match(/shot-(\d+)([a-zA-Z]*)/);
-        if (!m) continue;
+        if (!m) {
+          // Silent drops cost operators real time hunting missing SFX in FCP —
+          // name the requirement out loud instead (2026-08-10 montage E2E).
+          console.warn(`  ⚠ SFX skipped: audio/sfx/${f} has no shot anchor in its filename. Rename it shot-NNN-<name>.mp3 (e.g. shot-007-${f}) to place it at that shot's timeline position.`);
+          continue;
+        }
         const key = String(m[1]).padStart(3, '0') + m[2];
         const place = placementMap[key];
-        if (!place) continue;
+        if (!place) {
+          console.warn(`  ⚠ SFX skipped: audio/sfx/${f} references shot ${key}, but no shot-${key}.mp4 exists in scene-001/.`);
+          continue;
+        }
         const fullPath = join(sfxDir, f);
         audio.push({
           path: fullPath,
