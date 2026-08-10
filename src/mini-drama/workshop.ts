@@ -7,7 +7,7 @@ import type { ShotArtifacts, TreatmentProgress } from './treatment.js';
 import type { VeniceClient } from '../venice/client.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import type { Character, EpisodeScript, Location, SeriesState } from '../series/types.js';
-import { addEpisode, saveEpisodeScript, saveSeries } from '../series/manager.js';
+import { addEpisode, getCharacterDir, getLocationDir, saveEpisodeScript, saveSeries } from '../series/manager.js';
 import { getProjectLanguage } from '../series/project-language.js';
 import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence } from '../venice/text-models.js';
 
@@ -125,6 +125,57 @@ export async function buildReferenceThumbnails(
   }
   if (!cache) await store.save();
   return thumbnails;
+}
+
+/**
+ * Inline art for the entities the page describes: each character's portrait
+ * and each location's key angles, pulled from the reference images the
+ * pipeline has already generated on disk. Keys are `character:<name>` and
+ * `location:<slug>`; values are ordered data-URI thumbnails.
+ *
+ * Best-effort like everything else on this page — an entity whose references
+ * have not been generated yet (or failed to decode) simply renders as the
+ * text-only card it always was.
+ */
+export type EntityArt = Map<string, string[]>;
+
+/** Reference angles to show per entity, in display order. */
+const CHARACTER_ART_ANGLES = ['front.png', 'full-body.png'];
+const LOCATION_ART_ANGLES = ['wide.png', 'medium.png', 'detail.png'];
+
+export async function buildEntityArt(
+  series: SeriesState,
+  draft: Pick<WorkshopDraft, 'characters' | 'locations'>,
+  cache?: ThumbnailCache,
+): Promise<EntityArt> {
+  const art: EntityArt = new Map();
+  const store = cache ?? ThumbnailCache.ephemeral();
+
+  for (const character of draft.characters) {
+    if (!character.name) continue;
+    const dir = getCharacterDir(series, character.name);
+    const uris: string[] = [];
+    for (const angle of CHARACTER_ART_ANGLES) {
+      const uri = await store.get(join(dir, angle), REFERENCE_THUMBNAIL_PX);
+      if (uri) uris.push(uri);
+    }
+    if (uris.length) art.set(`character:${character.name}`, uris);
+  }
+
+  for (const location of draft.locations) {
+    const slugOrName = location.slug || location.name;
+    if (!slugOrName) continue;
+    const dir = getLocationDir(series, slugOrName);
+    const uris: string[] = [];
+    for (const angle of LOCATION_ART_ANGLES) {
+      const uri = await store.get(join(dir, angle), REFERENCE_THUMBNAIL_PX);
+      if (uri) uris.push(uri);
+    }
+    if (uris.length) art.set(`location:${slugOrName}`, uris);
+  }
+
+  if (!cache) await store.save();
+  return art;
 }
 
 export interface WorkshopDraft {
@@ -499,12 +550,22 @@ function renderShotProgressCell(artifacts: ShotArtifacts | undefined): string {
   return `<td class="shot-art">${preview}<div class="badges">${badges.join('')}</div></td>`;
 }
 
+/** An image strip for an entity card. Empty string when no art exists. */
+function renderEntityArt(uris: string[] | undefined, alt: string): string {
+  if (!uris?.length) return '';
+  return `<div class="entity-art">${uris
+    .map(uri => `<img src="${uri}" alt="${escapeHtml(alt)}" loading="lazy">`)
+    .join('')}</div>`;
+}
+
 export function renderWorkshopHtml(
   draft: WorkshopDraft,
   thumbnails: ReferenceThumbnails = new Map(),
   progress?: TreatmentProgress,
   /** Which reasoning model produced this, shown alongside the other settings. */
   intelligence?: string,
+  /** Character portraits + location stills from generated references. */
+  entityArt: EntityArt = new Map(),
 ): string {
   const structure = draft.structure.map((section, index) => `
     <article class="card structure-card">
@@ -515,6 +576,7 @@ export function renderWorkshopHtml(
     </article>`).join('');
   const characters = draft.characters.map(character => `
     <article class="card">
+      ${renderEntityArt(entityArt.get(`character:${character.name}`), character.name)}
       <p class="eyebrow">Character</p>
       <h3>${escapeHtml(character.name)}</h3>
       <p>${escapeHtml(character.fullDescription)}</p>
@@ -522,6 +584,7 @@ export function renderWorkshopHtml(
     </article>`).join('');
   const locations = draft.locations.map(location => `
     <article class="card">
+      ${renderEntityArt(entityArt.get(`location:${location.slug || location.name}`), location.name)}
       <p class="eyebrow">Location</p>
       <h3>${escapeHtml(location.name)}</h3>
       <p>${escapeHtml(location.description)}</p>
@@ -552,6 +615,7 @@ main{width:min(1180px,calc(100% - 40px));margin:auto;padding:64px 0 100px}.hero{
 .counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:14px;margin:0 0 22px;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.counts>div{display:block}.counts dt{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}.counts dd{margin:4px 0 0;font:19px/1.2 ui-monospace,monospace;color:var(--text)}
 .next-label{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:0 0 8px}pre.next{margin:0;padding:14px 16px;background:#0a0c10;border:1px solid var(--line);border-radius:12px;overflow-x:auto}pre.next code{font-size:13px;color:var(--accent);word-break:normal;white-space:pre}
 .final-cut{margin:18px 0 0}.final-cut a{color:var(--accent)}.others{margin:14px 0 0;font-size:13px}
+.entity-art{display:flex;gap:8px;margin:-8px -8px 16px}.entity-art img{min-width:0;flex:1 1 0;aspect-ratio:1/1;object-fit:cover;border-radius:12px;border:1px solid var(--line);display:block}.entity-art img:first-child:not(:only-child){flex:1.6 1 0;aspect-ratio:auto}
 .shot-art{width:220px}.shot-art img{width:200px;aspect-ratio:16/9;object-fit:cover;border-radius:10px;display:block;border:1px solid var(--line)}.shot-art .pending{width:200px;aspect-ratio:16/9;border:1px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px}.badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.badges .pill{font-size:10px;padding:2px 8px}.pill.live{border-color:#3f7f5c;color:#8ee6b2}.pill.qa-pass{border-color:#3f7f5c;color:#8ee6b2}.pill.qa-low{border-color:#5d6a80;color:#b9c4d6}.pill.qa-moderate{border-color:#8a7233;color:#ffd48a}.pill.qa-critical{border-color:#8f4747;color:#ff9d9d}
 @media(max-width:760px){main{width:min(100% - 24px,1180px);padding-top:20px}.hero{padding:28px}.split{grid-template-columns:1fr}table{display:block;overflow:auto}.refreshed{text-align:left}}
 </style></head><body><main>
@@ -577,11 +641,12 @@ export async function saveWorkshop(series: SeriesState, draft: WorkshopDraft): P
   await writeFile(jsonPath, `${JSON.stringify(draft, null, 2)}\n`, 'utf-8');
   const cache = await ThumbnailCache.open(series.outputDir);
   const thumbnails = await buildReferenceThumbnails(draft.inputs.referenceSources ?? [], cache);
+  const entityArt = await buildEntityArt(series, draft, cache);
   await cache.save();
   await writeFile(join(series.outputDir, 'WORKSHOP.md'), renderWorkshopMarkdown(draft), 'utf-8');
   await writeFile(
     join(series.outputDir, 'WORKSHOP.html'),
-    renderWorkshopHtml(draft, thumbnails, undefined, describeIntelligence(series.intelligence?.model ?? DEFAULT_INTELLIGENCE_MODEL)),
+    renderWorkshopHtml(draft, thumbnails, undefined, describeIntelligence(series.intelligence?.model ?? DEFAULT_INTELLIGENCE_MODEL), entityArt),
     'utf-8',
   );
 }

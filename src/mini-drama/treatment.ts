@@ -24,6 +24,7 @@ import { collectProjectStatus, qualifyCommand, type EpisodeStatus } from '../ses
 import { PANEL_THUMBNAIL_PX, ThumbnailCache } from './thumbnails.js';
 import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence } from '../venice/text-models.js';
 import {
+  buildEntityArt,
   buildReferenceThumbnails,
   getWorkshopPath,
   loadWorkshop,
@@ -194,6 +195,12 @@ export async function refreshTreatment(
     const cache = await ThumbnailCache.open(series.outputDir);
     const progress = await collectTreatmentProgress(series, script, episode, cache);
     const references = await buildReferenceThumbnails(draft.inputs.referenceSources ?? [], cache);
+    // Prefer the live series entities over the draft's: add-character /
+    // add-location after the workshop still get their art on the page.
+    const entityArt = await buildEntityArt(series, {
+      characters: series.characters?.length ? series.characters : draft.characters,
+      locations: series.locations?.length ? series.locations : draft.locations,
+    }, cache);
     await cache.save();
 
     const rendered: WorkshopDraft = { ...draft, script };
@@ -205,6 +212,7 @@ export async function refreshTreatment(
         references,
         progress,
         describeIntelligence(series.intelligence?.model ?? DEFAULT_INTELLIGENCE_MODEL),
+        entityArt,
       ),
       'utf-8',
     );
