@@ -13,9 +13,41 @@ export const VIDEO_FAMILY_CHOICES: ReadonlyArray<{
   { label: 'Kling O3', value: 'kling-o3', description: 'Stylized and illustrated aesthetics; structured character elements' },
 ];
 
+/**
+ * The production/render route, asked up front at project creation.
+ *
+ *   - montage  → videoDefaults.montageMode: true  (this branch's default).
+ *                Each scene renders as ONE single-pass Seedance 2.5 generation
+ *                and is auto-cut into per-shot clips in a media library for a
+ *                human/editor to assemble. Strongest continuity (identity,
+ *                lighting, geography hold across every cut inside one render).
+ *   - standard → videoDefaults.montageMode: false (2.0-era planner).
+ *                Per-shot + short multi-shot units that run end-to-end with
+ *                less hands-on editing, but stitching separate renders is more
+ *                prone to consistency drift across cuts.
+ *
+ * Montage is listed first so it stays the default (Enter / non-TTY).
+ */
+export type RenderRoute = 'montage' | 'standard';
+
+export const RENDER_ROUTE_CHOICES: ReadonlyArray<{
+  label: string; value: RenderRoute; description?: string;
+}> = [
+  {
+    label: 'Montage (default — recommended)',
+    value: 'montage',
+    description: 'Each scene renders as ONE single-pass Seedance 2.5 generation (up to 30s), then auto-cuts into per-shot clips in a media library for you to edit. Strongest continuity — identity, lighting, and geography hold across every cut inside one render. Add --auto-edit (or videoDefaults.autoEdit) to chain straight into assembly.',
+  },
+  {
+    label: 'Standard (special-purpose — per-shot)',
+    value: 'standard',
+    description: 'The per-shot / short multi-shot planner. Reach for it when the script cannot group into scenes (location-hopping, one-shot scenes, non-overlapping characters), when you need per-shot control over individual renders, or to render on a non-Seedance family. Stitching separately-rendered shots is more prone to consistency drift across cuts.',
+  },
+];
+
 export const AUDIO_STRATEGY_CHOICES = [
-  { label: 'Native dialogue', value: 'native', description: 'The selected video model speaks in-frame; Seedance and HappyHorse take a voice-donor clip so timbre and accent hold across shots' },
-  { label: 'Exact lip-sync', value: 'lip-sync', description: 'Venice speech is rendered first and passed to the model as an audio file, and the mouth follows that recording. Seedance 2.x and MiniMax H3 do it in-family; other families route to Wan 2.7' },
+  { label: 'Native dialogue (default — right for almost every project)', value: 'native', description: 'The selected video model speaks in-frame; Seedance and HappyHorse take a voice-donor clip (reference_audio_urls) so timbre and accent hold across shots. Voice consistency is already covered here — you do NOT need lip-sync for that.' },
+  { label: 'Exact lip-sync (special-purpose — only when the mouth must follow a specific recording)', value: 'lip-sync', description: 'For music videos, pre-recorded VO, language swaps, or precise wording/timing: Venice speech is rendered first and passed as an audio file, and the mouth follows that exact recording. Seedance 2.x and MiniMax H3 do it in-family; other families route to Wan 2.7.' },
   { label: 'Narrator voice-over', value: 'narrator-vo', description: 'Mute model narration and own the VO lane' },
 ] as const;
 

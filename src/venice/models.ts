@@ -736,6 +736,45 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
   },
+  // -- Seedance 2.5 --
+  // Not listed on GET /models but live on quote/queue — probed 2026-08-07.
+  //   - Duration ladder: EVERY integer 4s-30s (quote enum). 30s single pass
+  //     is the montage lane: one generation covering a whole scene of beats.
+  //   - Resolutions: 480p / 720p only (1080p/2K/4K rejected at quote).
+  //   - Aspect ratios: 21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16 (native scope!).
+  //   - Quote accepted audio_url + reference_audio_urls + reference_video_urls
+  //     together on the R2V variant. Reference ceilings per the Seedance 2.5
+  //     release notes: up to 30 image / 10 video / 10 audio refs (50 total);
+  //     the quote endpoint does not police the count (31 imgs quoted OK), so
+  //     the documented budget is enforced harness-side.
+  //   - Price scales linearly: ~$0.29/s at 720p ($8.67 for 30s), 480p ~$3.86
+  //     for 30s. No 30s premium — same per-second rate as short clips.
+  //   - Prompt cap: quote accepted 12k chars; montage builder still guards at
+  //     5000 to keep beats directed rather than decorated.
+  {
+    id: 'seedance-2-5-text-to-video', name: 'Seedance 2.5', type: 'text-to-video',
+    durations: Array.from({ length: 27 }, (_, i) => `${i + 4}s`),
+    resolutions: ['480p', '720p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'seedance-2-5-image-to-video', name: 'Seedance 2.5', type: 'image-to-video',
+    durations: Array.from({ length: 27 }, (_, i) => `${i + 4}s`),
+    resolutions: ['480p', '720p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'seedance-2-5-reference-to-video', name: 'Seedance 2.5 R2V', type: 'image-to-video',
+    durations: Array.from({ length: 27 }, (_, i) => `${i + 4}s`),
+    resolutions: ['480p', '720p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: true, videoInput: true,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
+  },
   // -- Sora 2 --
   {
     id: 'sora-2-image-to-video', name: 'Sora 2', type: 'image-to-video',

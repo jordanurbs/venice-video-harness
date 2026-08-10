@@ -1,5 +1,81 @@
 # Changelog
 
+## 2.16.0-montage (branch: seedance-2-5-montage) — 2026-08-07
+
+### Changed
+
+- **Render route is now an upfront question at project creation.** `venice-video
+  new` (interactive) and `new-series` (flags) ask "montage vs standard", or take
+  `--route montage|standard`: montage (advanced/editor) = one single-pass
+  generation per scene, auto-cut into a media library for later editing;
+  standard (beginner) = 2.0-era per-shot / short multi-shot planning, more
+  automated but more prone to consistency drift. The answer sets
+  `videoDefaults.montageMode` (montage→true, standard→false); omitting it keeps
+  the montage-first default. New `RENDER_ROUTE_CHOICES` in
+  `src/mini-drama/choices.ts`; `CreateSeriesOptions.montageMode` in
+  `src/series/manager.ts`.
+- **Seedance 2.5 is now the default video model across every lane** (was
+  Seedance 2.0 R2V Enhanced). `DEFAULT_ACTION_MODEL`, `DEFAULT_ATMOSPHERE_MODEL`,
+  `DEFAULT_CHARACTER_CONSISTENCY_MODEL`, `DEFAULT_MULTISHOT_MODEL`,
+  `resolveVideoFamilyDefaults('seedance'|'auto')`, and the in-family
+  `resolveLipSyncModel('seedance'|'auto')` all resolve to
+  `seedance-2-5-reference-to-video`, matching the montage lane. This unifies the
+  whole harness on 2.5: single-pass up to 30s, up to 30 reference images,
+  `audio_url` + reference audio in-family. Trade-off: 2.5 caps at 720p (the
+  mini-drama generator already pins 720p for Seedance, so no request regresses);
+  2.0 R2V Enhanced (1080p) stays registry-known and selectable via
+  `videoDefaults`. Added `seedance-2-5-reference-to-video` to
+  `MODELS_SUPPORTING_AUDIO_INPUT` (its spec is `audio_input: true`; the
+  registry-coverage test enforces the set). Regenerated `capabilities.json`.
+  See AGENTS.md rule 51.
+- **`sd25-pe` skill installed** at `.agents/skills/sd25-pe/` — the Seedance 2.5
+  Prompt Optimizer plus a harness-bridge section mapping its compiled Prompts
+  onto the harness fields (montage SEQUENCE grammar, @Image discipline, no-music
+  suffix; the harness stays authoritative on identity/refs/duration/resolution).
+
+### Added
+
+- **Seedance 2.5 in the registry.** `seedance-2-5-text-to-video` /
+  `seedance-2-5-image-to-video` / `seedance-2-5-reference-to-video` — live on
+  quote/queue only (not on GET /models), probed 2026-08-07. Every integer
+  duration 4s-30s, 480p/720p, aspect 21:9/16:9/4:3/1:1/3:4/9:16,
+  ~$0.29/s at 720p (30s ≈ $8.67). R2V accepts `audio_url`,
+  `reference_audio_urls`, and `reference_video_urls`; image-reference budget
+  raised to **30** on the 2.5 R2V lane (release-note ceiling 30/10/10, 50
+  total — enforced harness-side). Added to `MODELS_USING_IMAGE_TAGS`,
+  `MODELS_SUPPORTING_REFERENCE_IMAGES`, `MODELS_SUPPORTING_REFERENCE_AUDIO`,
+  and `MAX_REFERENCE_IMAGES_BY_MODEL`.
+- **Montage-first generation (this branch's default).** The planner groups
+  each scene (consecutive shots sharing a `location`) into ONE single-pass
+  `montage` unit up to 30s on `seedance-2-5-reference-to-video`, prompted
+  with the timestamped SEQUENCE grammar from the vault's "Make a full trailer
+  with Seedance 2.5" pack (`buildMontagePrompt`): SHOT header ("cut it
+  yourself in the edit"), @Image identity declarations from the standard
+  reference slot plan, per-beat `[0:03-0:05] …` blocks with diegetic sound,
+  geography hold, one style token ending in "Face stable throughout, no
+  deformation. Diegetic sound only, no music, no on-screen text.", short
+  negative. New module `src/mini-drama/montage.ts` (scene grouping, beat
+  layout, montage planning, post-render cutting).
+- **Beat-accurate cutting into a media library.** After the render,
+  `cutMontageIntoShots` slices the clip at the SAME `montageBeats`
+  timestamps the prompt declared (scaled to the actual rendered duration):
+  canonical `scene-001/shot-NNN.mp4` files for the assembler AND organized
+  copies in `episode-N/media-library/scene-NN/` with the uncut master and a
+  `manifest.json` per scene.
+- **`autoEdit` toggle.** `videoDefaults.autoEdit: true` (or
+  `generate-videos --auto-edit`) chains straight into `assemble-episode`
+  after the cut; the default `false` (or `--no-auto-edit`) stops at the
+  media library for hand editing / the Venice Video Creator.
+- **Opt-outs.** `videoDefaults.montageMode: false` or
+  `generate-videos --no-montage` restores the 2.0-era per-shot / 15s
+  multi-shot planner (unchanged). Inserts, title cards, `mustStaySingle`,
+  and exact-lip-sync shots fall through as singles automatically.
+  `videoDefaults.montageModel` / `montageMaxDurationSec` override the lane.
+- **Smoke tests:** `scripts/smoke-montage-plan.ts` (grouping, plan, prompt),
+  `scripts/smoke-montage-cut.ts` (cutting + library layout + manifest).
+- **Duration preflight** understands montage units: validates the unit total
+  against the 2.5 ladder instead of per-beat windows.
+
 ## 2.15.0 — 2026-08-06
 
 ### Added

@@ -43,6 +43,7 @@ import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   DEFAULT_IMAGE_EDIT_MODEL,
   DEFAULT_LIP_SYNC_MODEL,
+  resolveAutoEdit,
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
@@ -91,7 +92,7 @@ import { getMusicModel } from '../venice/models.js';
 
 import { buildImagePrompt, buildCharacterReferencePromptParts } from './prompt-builder.js';
 import { generateEpisodeVideos } from './video-generator.js';
-import { generateVoiceReference } from './voice-reference.js';
+import { generateVoiceReference, harvestVoiceReferenceFromClip } from './voice-reference.js';
 import { generateLocationReferences } from './location-generator.js';
 import {
   ensureEpisodeStoryboardReferences,
@@ -103,7 +104,13 @@ import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
 import type { MultiEditModel } from '../venice/types.js';
 import { assembleEpisode, collectShotVideos } from './assembler.js';
 import { buildGenerationPlan, saveGenerationPlan } from './generation-planner.js';
-import { AUDIO_STRATEGY_CHOICES, INTELLIGENCE_CHOICES, VIDEO_FAMILY_CHOICES } from './choices.js';
+import {
+  AUDIO_STRATEGY_CHOICES,
+  INTELLIGENCE_CHOICES,
+  RENDER_ROUTE_CHOICES,
+  VIDEO_FAMILY_CHOICES,
+  type RenderRoute,
+} from './choices.js';
 import {
   DEFAULT_INTELLIGENCE_MODEL,
   describeIntelligence,
@@ -160,6 +167,13 @@ function wantsJson(localOpts?: { json?: unknown }): boolean {
 }
 
 const VIDEO_FAMILIES: ReadonlySet<string> = new Set(VIDEO_FAMILY_CHOICES.map(c => c.value));
+const RENDER_ROUTES: ReadonlySet<string> = new Set(RENDER_ROUTE_CHOICES.map(c => c.value));
+
+/** Map the upfront render-route choice onto the `montageMode` toggle. */
+function montageModeForRoute(route: RenderRoute | undefined): boolean | undefined {
+  if (route === undefined) return undefined;
+  return route !== 'standard';
+}
 
 /**
  * Which reasoning model this invocation should use.
@@ -560,6 +574,7 @@ program
   .command('new')
   .description('Create a project with an interactive wizard; Film is the general-purpose option')
   .option('--type <type>', 'film | series | product-video | music-video | screenplay')
+  .option('--route <route>', 'Render route: montage (advanced, for editors) | standard (beginner, more automated)')
   .option('-n, --name <name>', 'Project name')
   .option('--concept <concept>', 'Project concept or premise')
   .option('-g, --genre <genre>', 'Genre')
@@ -568,7 +583,7 @@ program
   .option('--video-family <family>', 'auto | seedance | wan-3-0 | happyhorse | minimax-h3 | grok-imagine | kling-o3')
   .option('--intelligence <model>', `Reasoning model for workshop, script, and QA (default: ${DEFAULT_INTELLIGENCE_MODEL})`)
   .action(async (opts: {
-    type?: string; name?: string; concept?: string; genre?: string; setting?: string;
+    type?: string; route?: string; name?: string; concept?: string; genre?: string; setting?: string;
     audioStrategy?: string; videoFamily?: string; intelligence?: string;
   }) => {
     if (!stdin.isTTY && (!opts.type || !opts.name || !opts.concept)) {
@@ -584,6 +599,19 @@ program
       { label: 'Screenplay', value: 'screenplay', description: 'Start from a Fountain or PDF screenplay' },
     ])) as typeof types[number];
     if (!types.includes(type)) throw new Error(`--type must be one of: ${types.join(', ')}`);
+
+    // Render route, asked up front: montage (advanced, cuts every clip inside
+    // the generation for later editing) vs standard (beginner, more automated
+    // per-shot planning but more prone to consistency drift). Maps to
+    // videoDefaults.montageMode. Non-TTY without --route keeps the harness
+    // default (montage-first).
+    const renderRoute = (opts.route ?? (stdin.isTTY
+      ? await promptChoice('Render route — how do you want to produce and edit this?', RENDER_ROUTE_CHOICES)
+      : undefined)) as RenderRoute | undefined;
+    if (renderRoute && !RENDER_ROUTES.has(renderRoute)) {
+      throw new Error(`--route must be one of: ${[...RENDER_ROUTES].join(', ')}`);
+    }
+    const montageMode = montageModeForRoute(renderRoute);
 
     const name = opts.name ?? await promptText('Project name', { required: true });
     const concept = opts.concept ?? await promptText('Concept or premise', { required: true });
@@ -613,12 +641,14 @@ program
     const series = createSeries(name, concept, genre, setting, {
       audioStrategy,
       videoFamilyPreference: videoFamily,
+      montageMode,
       intelligenceModel,
       workspace,
       projectType: type,
     });
     await saveSeries(series);
     console.log(`\n${type === 'film' ? 'Film' : 'Project'} created: ${series.outputDir}`);
+    console.log(`Render route: ${series.videoDefaults.montageMode === false ? 'standard (per-shot, more automated)' : 'montage (single-pass per scene, cut for editing)'}`);
     console.log(`Reference-first defaults: ${series.videoDefaults.characterConsistencyModel}`);
     console.log(`Intelligence: ${describeIntelligence(intelligenceModel)}`);
     const language = getProjectLanguage(series);
@@ -781,13 +811,19 @@ program
     'Omit it on an interactive terminal and you will be asked.',
   )
   .option(
+    '--route <route>',
+    'Render route: "montage" (advanced/editor — one single-pass Seedance 2.5 generation per scene, auto-cut into a media library for later editing; strongest continuity) or ' +
+    '"standard" (beginner — 2.0-era per-shot / short multi-shot planning, more automated but more prone to consistency drift). ' +
+    'Omit it on an interactive terminal and you will be asked; omit it without a TTY to keep the montage-first default.',
+  )
+  .option(
     '--intelligence <model>',
     'Reasoning model that develops the story, writes the script, and reads panels back during QA. ' +
     `Defaults to ${DEFAULT_INTELLIGENCE_MODEL}. A text-only choice pairs with a vision model from the same privacy tier.`,
   )
   .action(async (opts: {
     name: string; concept: string; genre: string; setting: string;
-    audioStrategy?: string; videoFamily?: string; intelligence?: string;
+    audioStrategy?: string; videoFamily?: string; route?: string; intelligence?: string;
   }) => {
     const allowedAudio = new Set(['native', 'lip-sync', 'narrator-vo']);
     if (opts.audioStrategy && !allowedAudio.has(opts.audioStrategy)) {
@@ -798,16 +834,23 @@ program
       console.error(`--video-family must be one of: ${[...VIDEO_FAMILIES].join(', ')}`);
       process.exit(2);
     }
+    if (opts.route && !RENDER_ROUTES.has(opts.route)) {
+      console.error(`--route must be one of: ${[...RENDER_ROUTES].join(', ')}`);
+      process.exit(2);
+    }
     // Ask on a real terminal; stay silent for the MCP and CI, which spawn this
     // command without a TTY and rely on the harness defaults when the flag is
     // absent.
     const videoFamily = opts.videoFamily
       ?? (stdin.isTTY ? await promptChoice('Video model family', VIDEO_FAMILY_CHOICES) : undefined);
+    const renderRoute = (opts.route
+      ?? (stdin.isTTY ? await promptChoice('Render route', RENDER_ROUTE_CHOICES) : undefined)) as RenderRoute | undefined;
 
     const series = createSeries(opts.name, opts.concept, opts.genre, opts.setting, {
       workspace: await getWorkspaceDir(program.opts().workspace),
       audioStrategy: opts.audioStrategy as 'native' | 'lip-sync' | 'narrator-vo' | undefined,
       videoFamilyPreference: videoFamily as VideoFamilyPreference | undefined,
+      montageMode: montageModeForRoute(renderRoute),
       intelligenceModel: opts.intelligence,
     });
     await saveSeries(series);
@@ -817,6 +860,7 @@ program
     console.log(`  Genre: ${series.genre}`);
     console.log(`  Concept: ${series.concept}`);
     console.log(`  Output: ${series.outputDir}`);
+    console.log(`  Render route: ${series.videoDefaults.montageMode === false ? 'standard (per-shot, more automated)' : 'montage (single-pass per scene, cut for editing)'}`);
     if (series.videoDefaults.audioStrategy) {
       console.log(`  Audio strategy: ${series.videoDefaults.audioStrategy}`);
     }
@@ -1229,6 +1273,16 @@ program
     }
   });
 
+/**
+ * Resolve a rendered shot number to its canonical clip path
+ * (`episodes/episode-NNN/scene-001/shot-NNN.mp4`). Used by the
+ * voice-harvest options on lock-character / generate-voice-reference.
+ */
+function resolveShotClipPath(series: SeriesState, episode: number, shotNumber: string): string {
+  const padded = shotNumber.replace(/^shot-/i, '').padStart(3, '0');
+  return join(getEpisodeDir(series, episode), 'scene-001', `shot-${padded}.mp4`);
+}
+
 // ── lock-character ────────────────────────────────────────────────────
 program
   .command('lock-character')
@@ -1238,7 +1292,15 @@ program
   .requiredOption('--voice-id <id>', 'Venice voice ID')
   .option('--voice-name <name>', 'Display name for the voice')
   .option('--voice-reference <file>', 'Path to an operator-supplied voice-donor clip (wav/mp3, normalized to 2-15s) used as reference_audio_urls on Seedance/HappyHorse R2V shots')
-  .action(async (opts: { project: string; character: string; voiceId: string; voiceName?: string; voiceReference?: string }) => {
+  .option('--voice-from-shot <n>', 'Harvest the voice reference from an already-rendered shot where the character speaks (episodes/episode-E/scene-001/shot-NNN.mp4) — locks later shots to the voice the audience actually heard')
+  .option('-e, --episode <number>', 'Episode the --voice-from-shot shot belongs to', '1')
+  .option('--from-start <sec>', 'With --voice-from-shot: harvest audio starting at this offset (seconds)', parseFloat)
+  .option('--from-end <sec>', 'With --voice-from-shot: harvest audio up to this offset (seconds)', parseFloat)
+  .action(async (opts: {
+    project: string; character: string; voiceId: string; voiceName?: string;
+    voiceReference?: string; voiceFromShot?: string; episode: string;
+    fromStart?: number; fromEnd?: number;
+  }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
@@ -1249,6 +1311,10 @@ program
     char.voiceName = opts.voiceName || opts.voiceId;
     char.locked = true;
 
+    if (opts.voiceReference && opts.voiceFromShot) {
+      console.error('Pass either --voice-reference or --voice-from-shot, not both.');
+      process.exit(1);
+    }
     if (opts.voiceReference) {
       const apiKey = await getVeniceApiKey();
       const client = new VeniceClient(apiKey);
@@ -1256,6 +1322,15 @@ program
       char.voiceReferencePath = relPath;
       char.voiceReferenceModel = model;
       console.log(`  Voice reference imported: ${relPath} (${model})`);
+    } else if (opts.voiceFromShot) {
+      const clipPath = resolveShotClipPath(series, parseInt(opts.episode, 10), opts.voiceFromShot);
+      const { relPath, model } = await harvestVoiceReferenceFromClip(series, char, clipPath, {
+        startSec: opts.fromStart,
+        endSec: opts.fromEnd,
+      });
+      char.voiceReferencePath = relPath;
+      char.voiceReferenceModel = model;
+      console.log(`  Voice reference harvested: ${relPath} (${model})`);
     }
 
     const charDir = getCharacterDir(series, char.name);
@@ -1275,31 +1350,52 @@ program
 // ── generate-voice-reference ──────────────────────────────────────────
 program
   .command('generate-voice-reference')
-  .description('Generate (or import) a voice-donor reference clip for a character, used as reference_audio_urls (@AudioN) on Seedance/HappyHorse R2V shots')
+  .description('Generate, import, or harvest a voice-donor reference clip for a character, used as reference_audio_urls (@AudioN) on Seedance/HappyHorse R2V shots')
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-c, --character <name>', 'Character name')
   .option('--text <text>', 'Spoken text to render (defaults to a neutral sample steered by voiceDescription)')
   .option('--voice <voice>', 'Named seed-audio voice (defaults to describe-in-prompt steering via voiceDescription)')
   .option('--speed <speed>', 'Playback speed 0.5-2', parseFloat)
   .option('--file <file>', 'Import an operator-supplied clip verbatim instead of generating')
+  .option('--from-shot <n>', 'Harvest from an already-rendered shot where the character speaks (episodes/episode-E/scene-001/shot-NNN.mp4) — locks later shots to the voice the audience actually heard. No Venice call.')
+  .option('-e, --episode <number>', 'Episode the --from-shot shot belongs to', '1')
+  .option('--from-start <sec>', 'With --from-shot: harvest audio starting at this offset (seconds)', parseFloat)
+  .option('--from-end <sec>', 'With --from-shot: harvest audio up to this offset (seconds)', parseFloat)
   .option('--model <model>', 'Override the seed-audio model id')
-  .action(async (opts: { project: string; character: string; text?: string; voice?: string; speed?: number; file?: string; model?: string }) => {
+  .action(async (opts: {
+    project: string; character: string; text?: string; voice?: string; speed?: number;
+    file?: string; model?: string; fromShot?: string; episode: string;
+    fromStart?: number; fromEnd?: number;
+  }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
     const char = getCharacter(series, opts.character);
     if (!char) { console.error(`Character "${opts.character}" not found.`); process.exit(1); }
 
-    const apiKey = await getVeniceApiKey();
-    const client = new VeniceClient(apiKey);
+    if (opts.file && opts.fromShot) {
+      console.error('Pass either --file or --from-shot, not both.');
+      process.exit(1);
+    }
 
-    const { relPath, model } = await generateVoiceReference(client, series, char, {
-      text: opts.text,
-      voice: opts.voice,
-      speed: opts.speed,
-      file: opts.file,
-      model: opts.model,
-    });
+    let relPath: string; let model: string;
+    if (opts.fromShot) {
+      const clipPath = resolveShotClipPath(series, parseInt(opts.episode, 10), opts.fromShot);
+      ({ relPath, model } = await harvestVoiceReferenceFromClip(series, char, clipPath, {
+        startSec: opts.fromStart,
+        endSec: opts.fromEnd,
+      }));
+    } else {
+      const apiKey = await getVeniceApiKey();
+      const client = new VeniceClient(apiKey);
+      ({ relPath, model } = await generateVoiceReference(client, series, char, {
+        text: opts.text,
+        voice: opts.voice,
+        speed: opts.speed,
+        file: opts.file,
+        model: opts.model,
+      }));
+    }
     char.voiceReferencePath = relPath;
     char.voiceReferenceModel = model;
 
@@ -2708,7 +2804,10 @@ program
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--skip-qa', 'Skip QA approval check', false)
   .option('--no-seedance-keyframe', 'Disable the automatic Seedance R2V keyframe pipeline that anchors identity for keyframe-only lip-sync models (see AGENTS.md rule 32).')
-  .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean }) => {
+  .option('--no-montage', 'Disable montage-first planning for this run (fall back to 2.0-era per-shot / 15s multi-shot units).')
+  .option('--auto-edit', 'After cutting montage renders, let the harness assemble the edit automatically (overrides videoDefaults.autoEdit for this run).')
+  .option('--no-auto-edit', 'Provide the montage cuts in the media library only; do not auto-assemble.')
+  .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean; montage: boolean; autoEdit?: boolean }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
@@ -2732,6 +2831,14 @@ program
       series.videoDefaults = { ...series.videoDefaults, seedanceKeyframeForWan: false };
       console.log('Seedance R2V keyframe pipeline DISABLED for this run.\n');
     }
+    if (opts.montage === false) {
+      series.videoDefaults = { ...series.videoDefaults, montageMode: false };
+      console.log('Montage-first planning DISABLED for this run (2.0-era per-shot units).\n');
+    }
+    // --auto-edit / --no-auto-edit override videoDefaults.autoEdit per run.
+    if (opts.autoEdit !== undefined) {
+      series.videoDefaults = { ...series.videoDefaults, autoEdit: opts.autoEdit };
+    }
 
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
@@ -2742,6 +2849,13 @@ program
     const ccModel = series.videoDefaults.characterConsistencyModel ?? DEFAULT_CHARACTER_CONSISTENCY_MODEL;
     console.log(`Models: action=${series.videoDefaults.actionModel}, atmosphere=${series.videoDefaults.atmosphereModel}, character-consistency=${ccModel}\n`);
     console.log(`Generation units: ${generationPlan.units.length}`);
+    const montageUnits = generationPlan.units.filter(unit => unit.unitType === 'montage');
+    if (montageUnits.length > 0) {
+      const models = Array.from(new Set(montageUnits.map(u => u.model))).join(', ');
+      const beatCount = montageUnits.reduce((sum, u) => sum + u.shotNumbers.length, 0);
+      console.log(`Montage units: ${montageUnits.length} (${models}) — ${beatCount} beats in single-pass generations, cut per-beat after render`);
+      console.log(`Auto-edit: ${resolveAutoEdit(series.videoDefaults) ? 'ON — assembling automatically after the cut' : 'OFF — cuts land in media-library/scene-NN/ for hand editing'}`);
+    }
     const multiUnits = generationPlan.units.filter(
       unit => unit.unitType === 'multishot' || unit.unitType === 'kling-multishot',
     );
@@ -2792,7 +2906,29 @@ program
 
     console.log(`\nGenerated ${videoPaths.length} video clips.`);
     console.log(`Generation plan saved to: ${join(episodeDir, 'generation-plan.json')}`);
-    console.log(`Next: assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+
+    const hadMontage = plan.units.some(unit => unit.unitType === 'montage');
+    const mediaLibraryDir = join(episodeDir, 'media-library');
+    if (hadMontage && existsSync(mediaLibraryDir)) {
+      console.log(`Media library: ${mediaLibraryDir} (per-scene cuts + uncut masters + manifest.json)`);
+    }
+
+    if (hadMontage && resolveAutoEdit(series.videoDefaults)) {
+      // Auto-edit lane: the cut per-shot clips are already at their
+      // canonical paths, so the standard assembler produces the edit.
+      console.log('\nAuto-edit is ON — assembling the episode from the montage cuts...\n');
+      await updateTreatment(series, opts.episode);
+      await program.parseAsync(['', '', 'assemble-episode', '-p', opts.project, '-e', String(opts.episode)]);
+      return;
+    }
+
+    if (hadMontage) {
+      console.log('\nAuto-edit is OFF — the montage cuts are in the media library, organized by scene and shot.');
+      console.log('Cut them by hand (or in the Venice Video Creator), or run:');
+      console.log(`  assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+    } else {
+      console.log(`Next: assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+    }
     await updateTreatment(series, opts.episode);
   });
 
@@ -3532,10 +3668,18 @@ async function runTimelineExport(opts: {
       const sfxFiles = readdirSync(sfxDir).filter((f: string) => f.endsWith('.mp3'));
       for (const f of sfxFiles) {
         const m = f.match(/shot-(\d+)([a-zA-Z]*)/);
-        if (!m) continue;
+        if (!m) {
+          // Silent drops cost operators real time hunting missing SFX in FCP —
+          // name the requirement out loud instead (2026-08-10 montage E2E).
+          console.warn(`  ⚠ SFX skipped: audio/sfx/${f} has no shot anchor in its filename. Rename it shot-NNN-<name>.mp3 (e.g. shot-007-${f}) to place it at that shot's timeline position.`);
+          continue;
+        }
         const key = String(m[1]).padStart(3, '0') + m[2];
         const place = placementMap[key];
-        if (!place) continue;
+        if (!place) {
+          console.warn(`  ⚠ SFX skipped: audio/sfx/${f} references shot ${key}, but no shot-${key}.mp4 exists in scene-001/.`);
+          continue;
+        }
         const fullPath = join(sfxDir, f);
         audio.push({
           path: fullPath,

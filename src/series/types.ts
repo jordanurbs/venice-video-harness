@@ -47,9 +47,9 @@ export interface VideoModelDefaults {
   characterConsistencyModel?: string;
   /**
    * Model for multi-shot generation units. Defaults to
-   * `DEFAULT_MULTISHOT_MODEL` (Seedance 2.0 R2V Enhanced) — the same
-   * reference-first lane as singles, so a multi-beat sequence keeps the full
-   * @Image slot plan across its internal cuts. Set explicitly (e.g. to
+   * `DEFAULT_MULTISHOT_MODEL` (Seedance 2.5 R2V) — the same reference-first
+   * lane as singles, so a multi-beat sequence keeps the full @Image slot plan
+   * across its internal cuts. Set explicitly (e.g. to
    * `kling-o3-pro-image-to-video`) only when you deliberately want another
    * family's native multi-shot format and accept its reference limitations.
    */
@@ -104,7 +104,7 @@ export interface VideoModelDefaults {
   /**
    * Operator's answer to "which video model family?" from the upfront
    * questionnaire. See VideoFamilyPreference. `auto` (or unset) keeps the
-   * harness's Seedance 2.0 defaults. Setting this swaps the action /
+   * harness's Seedance 2.5 defaults. Setting this swaps the action /
    * atmosphere / character-consistency model defaults to the chosen family.
    */
   videoFamilyPreference?: VideoFamilyPreference;
@@ -119,6 +119,41 @@ export interface VideoModelDefaults {
    * AGENTS.md rule 40.
    */
   voiceReferenceForDialogue?: boolean;
+  /**
+   * Montage-first generation (Seedance 2.5 branch default: `true`). When on,
+   * the planner groups each scene's consecutive beats into ONE long
+   * single-pass generation (up to 30s on Seedance 2.5) prompted with a
+   * timestamped SEQUENCE beat list (the "Make a full trailer with
+   * Seedance 2.5" grammar), then the montage cutter slices the render at
+   * every beat boundary into per-shot clips organized in the episode's
+   * `media-library/scene-NN/` directory. Set `false` to fall back to the
+   * 2.0-era per-shot / 15s multi-shot planning.
+   */
+  montageMode?: boolean;
+  /**
+   * Model for montage units. Defaults to `DEFAULT_MONTAGE_MODEL`
+   * (`seedance-2-5-reference-to-video`, 4-30s, up to 30 image refs).
+   */
+  montageModel?: string;
+  /**
+   * Ceiling for a single montage generation in seconds. Defaults to 30
+   * (Seedance 2.5's single-pass max). Scenes whose beats exceed this split
+   * into multiple montage units.
+   */
+  montageMaxDurationSec?: number;
+  /**
+   * What happens to a montage render after the cutter has sliced it:
+   *   - `true`  — auto-edit: the harness also assembles the cut shots into
+   *               the scene/episode edit automatically (the "fable with
+   *               harness" lane; assemble-episode picks the per-shot clips
+   *               up like any other shots).
+   *   - `false` — (default) library-only: the per-shot clips are provided in
+   *               `media-library/scene-NN/`, organized by scene and shot,
+   *               for a human (or the Venice Video Creator) to cut. Nothing
+   *               is assembled without an explicit assemble-episode run.
+   * CLI: `generate-videos --auto-edit` / `--no-auto-edit` override per run.
+   */
+  autoEdit?: boolean;
 }
 
 export interface ImageModelDefaults {
@@ -190,15 +225,18 @@ export type AudioStrategy = 'native' | 'lip-sync' | 'narrator-vo';
 
 /**
  * Operator's preferred video model family for action / atmosphere shots.
- * `auto` keeps the current defaults (Seedance 2.0). Picking a family swaps
+ * `auto` keeps the current defaults (Seedance 2.5). Picking a family swaps
  * `actionModel`, `atmosphereModel`, and `characterConsistencyModel` to that
  * family's i2v / R2V variants. `lipSyncModel` remains available for the
  * explicit exact-audio lip-sync strategy; it does not affect native dialogue.
  *
  * Family quick reference:
- *   - 'seedance'     — Seedance 2.0 (default). Strong R2V identity anchoring,
- *                      4-15s native durations, mature `audio: true` support,
- *                      strict provenance requirements (seedream face refs only).
+ *   - 'seedance'     — Seedance 2.5 (default). Strong R2V identity anchoring,
+ *                      every integer 4-30s in a single pass, up to 30 reference
+ *                      images, 480p/720p, native `audio: true` + reference audio.
+ *                      Rides the montage-first lane. (2.0 R2V Enhanced, the
+ *                      prior default, is 1080p-capable and still selectable via
+ *                      a videoDefaults override.)
  *   - 'happyhorse'   — HappyHorse 1.1 (Alibaba, #1 blind-preference T2V + I2V).
  *                      Joint single-pass video+audio, phoneme-level lip-sync in
  *                      7 languages, and R2V with up to 9 reference images. 3-15s
@@ -293,13 +331,18 @@ export function resolveVideoFamilyDefaults(
     case 'seedance':
     case 'auto':
     default:
-      // Enhanced R2V for all three lanes (2026-07-30): reference-first
-      // generation. Every shot — action, atmosphere, character — renders on
-      // the R2V lane with the full reference stack; no start image needed.
+      // Seedance 2.5 R2V for all three lanes (2026-08-07): reference-first
+      // generation on the newest Seedance family. Every shot — action,
+      // atmosphere, character — renders on the R2V lane with the full
+      // reference stack (up to 30 refs); no start image needed. 2.5 R2V is
+      // 480p/720p (the harness pins 720p for Seedance) and renders every
+      // integer 4-30s in a single pass, which is what the montage lane rides.
+      // Seedance 2.0 R2V Enhanced (1080p-capable) remains available via an
+      // explicit videoDefaults override.
       return {
-        actionModel: 'seedance-2-0-enhanced-reference-to-video',
-        atmosphereModel: 'seedance-2-0-enhanced-reference-to-video',
-        characterConsistencyModel: 'seedance-2-0-enhanced-reference-to-video',
+        actionModel: 'seedance-2-5-reference-to-video',
+        atmosphereModel: 'seedance-2-5-reference-to-video',
+        characterConsistencyModel: 'seedance-2-5-reference-to-video',
       };
   }
 }
@@ -760,7 +803,7 @@ export interface ShotScript {
  * is the legacy name, still accepted when reading old generation-plan.json
  * files.
  */
-export type GenerationUnitType = 'single' | 'multishot' | 'kling-multishot';
+export type GenerationUnitType = 'single' | 'multishot' | 'kling-multishot' | 'montage';
 export type StartFrameStrategy = 'panel' | 'previous-last-frame';
 export type EndFrameStrategy = 'natural' | 'next-panel-target';
 
@@ -769,6 +812,19 @@ export interface GenerationUnitSegment {
   startOffsetSec: number;
   durationSec: number;
   outputFile: string;
+}
+
+/**
+ * A montage unit's planned beat: one shot's window inside the single
+ * 30-second Seedance 2.5 generation. `startSec`/`endSec` are the timestamps
+ * written into the prompt's SEQUENCE block (`[0:03-0:05] ...`) and are ALSO
+ * the cut points the montage cutter uses afterwards — the prompt and the
+ * edit can never disagree because they come from the same list.
+ */
+export interface MontageBeat {
+  shotNumber: number;
+  startSec: number;
+  endSec: number;
 }
 
 export interface GenerationUnit {
@@ -793,6 +849,17 @@ export interface GenerationUnit {
   useSeedanceKeyframe?: boolean;
   /** Model used for the Seedance keyframe stage when `useSeedanceKeyframe`. */
   keyframeModel?: string;
+  /**
+   * Montage units only: the timestamped beat map for the single-pass
+   * generation. Written into the prompt's SEQUENCE block and consumed by the
+   * montage cutter to slice the rendered clip at the exact beat boundaries.
+   */
+  montageBeats?: MontageBeat[];
+  /**
+   * Montage units only: 1-based scene index within the episode. Cut clips
+   * land in the media library under `media-library/scene-NN/`.
+   */
+  sceneNumber?: number;
 }
 
 export interface GenerationPlan {
@@ -807,30 +874,36 @@ export interface GenerationPlan {
 // These are sensible defaults. Override per-project via series.json videoDefaults.
 // ---------------------------------------------------------------------------
 
-// Seedance 2.0 R2V Enhanced is the default for ALL THREE lanes (2026-07-30).
+// Seedance 2.5 R2V is the default for ALL THREE lanes (2026-08-07).
 // Reference-first generation: consistency comes from the full reference stack
 // (character sheets, location angles, storyboard blocking plates) rather than
-// a start image. Enhanced R2V is delisted from GET /models but live on
-// queue/quote (probed 2026-07-15); 1080p-capable, ~1.5x standard R2V price.
-export const DEFAULT_ACTION_MODEL = 'seedance-2-0-enhanced-reference-to-video';
-export const DEFAULT_ATMOSPHERE_MODEL = 'seedance-2-0-enhanced-reference-to-video';
-export const DEFAULT_CHARACTER_CONSISTENCY_MODEL = 'seedance-2-0-enhanced-reference-to-video';
+// a start image. Seedance 2.5 is live on quote/queue only (not on GET /models),
+// renders every integer 4-30s in a single pass at 480p/720p (the harness pins
+// 720p for Seedance), takes up to 30 reference images, and honors @Image tags —
+// the same reference-first grammar as the 2.0 R2V lane, extended to montage.
+// Seedance 2.0 R2V Enhanced (the prior default; 1080p-capable, ~1.5x price)
+// remains registry-known and selectable via a videoDefaults override.
+export const DEFAULT_ACTION_MODEL = 'seedance-2-5-reference-to-video';
+export const DEFAULT_ATMOSPHERE_MODEL = 'seedance-2-5-reference-to-video';
+export const DEFAULT_CHARACTER_CONSISTENCY_MODEL = 'seedance-2-5-reference-to-video';
 export const KLING_R2V_MODEL = 'kling-o3-standard-reference-to-video';
 
 /**
- * Default model for multi-shot units (2026-08-05): Seedance 2.0 R2V Enhanced —
- * the SAME reference-first lane as every other shot. Multi-beat sequences
- * render as ONE Seedance native multi-shot generation with `Lens switch.`
- * separators (rule 21), anchored to the full @Image slot plan (character
- * sheets, blocking plate, location angles), so identity AND geography hold
- * across the internal cuts.
+ * Default model for multi-shot units (2026-08-07): Seedance 2.5 R2V — the SAME
+ * reference-first lane as every other shot. Multi-beat sequences render as ONE
+ * Seedance native multi-shot generation with `Lens switch.` separators
+ * (rule 21), anchored to the full @Image slot plan (character sheets, blocking
+ * plate, location angles), so identity AND geography hold across the internal
+ * cuts. This is the lane used only when montage-first is disabled
+ * (`videoDefaults.montageMode: false`); otherwise scenes ride the montage lane
+ * (`DEFAULT_MONTAGE_MODEL`, also Seedance 2.5).
  *
  * The old default, `kling-o3-pro-image-to-video`, had NO `elements` and NO
  * `reference_image_urls` support — every multi-shot unit silently dropped all
  * identity anchoring (the anti-pattern 1 trap). It remains available as an
  * explicit `videoDefaults.multiShotModel` override only.
  */
-export const DEFAULT_MULTISHOT_MODEL = 'seedance-2-0-enhanced-reference-to-video';
+export const DEFAULT_MULTISHOT_MODEL = 'seedance-2-5-reference-to-video';
 
 /**
  * @deprecated The Kling i2v multi-shot lane is no longer the default
@@ -843,6 +916,55 @@ export const KLING_MULTISHOT_MODEL = 'kling-o3-pro-image-to-video';
 /** Resolve the model multi-shot units render on. */
 export function resolveMultiShotModel(videoDefaults?: Pick<VideoModelDefaults, 'multiShotModel'>): string {
   return videoDefaults?.multiShotModel ?? DEFAULT_MULTISHOT_MODEL;
+}
+
+// ---------------------------------------------------------------------------
+// Montage-first defaults (Seedance 2.5 branch, 2026-08-07)
+//
+// Seedance 2.5 R2V renders up to 30s in a single pass with up to 30 image
+// references, so a whole scene of beats renders as ONE generation prompted
+// with a timestamped SEQUENCE list ("[0:03-0:05] macro on the ignition ...")
+// — the "Make a full trailer with Seedance 2.5" grammar. The montage cutter
+// then slices the render at the same timestamps into per-shot clips.
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_MONTAGE_MODEL = 'seedance-2-5-reference-to-video';
+
+/** Seedance 2.5 single-pass ceiling (every integer 4-30s at quote). */
+export const DEFAULT_MONTAGE_MAX_DURATION_SEC = 30;
+
+/** Minimum montage generation length; below this a plain single is cheaper. */
+export const MONTAGE_MIN_DURATION_SEC = 4;
+
+/** Montage-first is the default on this branch. */
+export function resolveMontageMode(
+  videoDefaults?: Pick<VideoModelDefaults, 'montageMode'>,
+): boolean {
+  return videoDefaults?.montageMode !== false;
+}
+
+export function resolveMontageModel(
+  videoDefaults?: Pick<VideoModelDefaults, 'montageModel'>,
+): string {
+  return videoDefaults?.montageModel ?? DEFAULT_MONTAGE_MODEL;
+}
+
+export function resolveMontageMaxDurationSec(
+  videoDefaults?: Pick<VideoModelDefaults, 'montageMaxDurationSec' | 'montageModel'>,
+): number {
+  if (videoDefaults?.montageMaxDurationSec) return videoDefaults.montageMaxDurationSec;
+  return DEFAULT_MONTAGE_MAX_DURATION_SEC;
+}
+
+/**
+ * Auto-edit toggle: `true` → the harness assembles the cut automatically;
+ * `false` (default) → cut clips are provided in the media library only,
+ * organized by scene and shot (the Venice Video Creator lane).
+ */
+export function resolveAutoEdit(
+  videoDefaults?: Pick<VideoModelDefaults, 'autoEdit'>,
+): boolean {
+  return videoDefaults?.autoEdit === true;
 }
 
 /**
@@ -870,9 +992,11 @@ export function resolveLipSyncModel(family: VideoFamilyPreference): string {
   switch (family) {
     case 'seedance':
     case 'auto':
-      // Seedance 2.0 R2V accepts a top-level `audio_url` (live queue probe
-      // 2026-07-23; the i2v/t2v lanes still reject it).
-      return 'seedance-2-0-enhanced-reference-to-video';
+      // Seedance 2.5 R2V accepts a top-level `audio_url` (quote probe
+      // 2026-08-07; the i2v/t2v lanes reject it), so exact lip-sync stays
+      // in-family on the default model — the reference stack keeps anchoring
+      // identity from frame 0, no keyframe pre-pass needed (rule 32).
+      return 'seedance-2-5-reference-to-video';
     case 'minimax-h3':
       // The only H3 lane with `audio_input: true` in GET /models.
       return 'minimax-h3-reference-to-video';
@@ -959,6 +1083,7 @@ export const MODELS_SUPPORTING_ELEMENTS = new Set([
 ]);
 
 export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
+  'seedance-2-5-reference-to-video',
   'kling-o3-standard-reference-to-video',
   'kling-o3-pro-reference-to-video',
   'kling-o3-4k-reference-to-video',
@@ -1014,6 +1139,9 @@ export const MODELS_SUPPORTING_END_IMAGE = new Set([
 ]);
 
 export const MODELS_USING_IMAGE_TAGS = new Set([
+  // Seedance 2.5 R2V is pure-reference like 2.0 R2V and honors @ImageN tags
+  // (same prompt grammar per the 2.5 release notes; quote probed 2026-08-07).
+  'seedance-2-5-reference-to-video',
   'seedance-2-0-reference-to-video',
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
@@ -1052,6 +1180,12 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   'seedance-2-0-reference-to-video',
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
+  // Seedance 2.5 R2V — quote probe (2026-08-07) accepted a top-level
+  // `audio_url` (plus reference_audio_urls + reference_video_urls); the
+  // i2v/t2v 2.5 lanes reject it. Matches the audioInput:true spec in
+  // models.ts (registry-coverage test) and is the default exact-lip-sync
+  // lane for the seedance/auto family (resolveLipSyncModel).
+  'seedance-2-5-reference-to-video',
   // MiniMax H3 R2V — GET /models reports audio_input:true on the R2V variant
   // only; the t2v/i2v lanes report false and are deliberately left out.
   'minimax-h3-reference-to-video',
@@ -1082,6 +1216,7 @@ export const MODELS_SUPPORTING_PER_REFERENCE_AUDIO = new Set([
  * lip-sync `audio_url` lane.
  */
 export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
+  'seedance-2-5-reference-to-video',
   'seedance-2-0-reference-to-video',
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
@@ -1098,6 +1233,10 @@ export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
  * blocking plates) possible.
  */
 export const MAX_REFERENCE_IMAGES_BY_MODEL: Record<string, number> = {
+  // Seedance 2.5 raises the image-reference ceiling to 30 (release notes:
+  // up to 30 image / 10 video / 10 audio, 50 total). The quote endpoint does
+  // not police the count, so this budget is the harness-side enforcement.
+  'seedance-2-5-reference-to-video': 30,
   'seedance-2-0-reference-to-video': 9,
   'seedance-2-0-enhanced-reference-to-video': 9,
   'seedance-2-0-fast-reference-to-video': 9,

@@ -14,8 +14,8 @@ function ok(label, cond, detail) {
 // Default (no options) → Seedance defaults, no strategy fields set.
 {
   const s = createSeries('Default Series', 'concept', 'drama', 'somewhere');
-  ok('default actionModel is Seedance R2V Enhanced', s.videoDefaults.actionModel === 'seedance-2-0-enhanced-reference-to-video');
-  ok('default characterConsistencyModel is Seedance R2V Enhanced', s.videoDefaults.characterConsistencyModel === 'seedance-2-0-enhanced-reference-to-video');
+  ok('default actionModel is Seedance 2.5 R2V', s.videoDefaults.actionModel === 'seedance-2-5-reference-to-video');
+  ok('default characterConsistencyModel is Seedance 2.5 R2V', s.videoDefaults.characterConsistencyModel === 'seedance-2-5-reference-to-video');
   ok('audioStrategy unset by default', s.videoDefaults.audioStrategy === undefined);
   ok('videoFamilyPreference unset by default', s.videoDefaults.videoFamilyPreference === undefined);
 }
@@ -79,7 +79,7 @@ function ok(label, cond, detail) {
   const s = createSeries('Auto Series', 'concept', 'drama', 'somewhere', {
     videoFamilyPreference: 'auto',
   });
-  ok('auto family keeps Seedance defaults', s.videoDefaults.actionModel === 'seedance-2-0-enhanced-reference-to-video');
+  ok('auto family keeps Seedance defaults', s.videoDefaults.actionModel === 'seedance-2-5-reference-to-video');
   ok('auto videoFamilyPreference persisted', s.videoDefaults.videoFamilyPreference === 'auto');
 }
 
@@ -99,6 +99,16 @@ for (const strategy of ['native', 'lip-sync', 'narrator-vo']) {
   ok('combo videoFamily', s.videoDefaults.videoFamilyPreference === 'happyhorse');
   ok('combo lipSyncModel still Wan 2.7', s.videoDefaults.lipSyncModel === 'wan-2-7-image-to-video');
   ok('combo characterConsistencyModel is HappyHorse R2V', s.videoDefaults.characterConsistencyModel === 'happyhorse-1-1-reference-to-video');
+}
+
+// Render route → montageMode toggle (upfront questionnaire).
+{
+  const montage = createSeries('Montage Route', 'concept', 'drama', 'somewhere', { montageMode: true });
+  ok('montage route persists montageMode:true', montage.videoDefaults.montageMode === true);
+  const standard = createSeries('Standard Route', 'concept', 'drama', 'somewhere', { montageMode: false });
+  ok('standard route persists montageMode:false', standard.videoDefaults.montageMode === false);
+  const unset = createSeries('Unset Route', 'concept', 'drama', 'somewhere');
+  ok('no route leaves montageMode unset (harness montage-first default)', unset.videoDefaults.montageMode === undefined);
 }
 
 // resolveVideoFamilyDefaults: each family returns a complete triplet.

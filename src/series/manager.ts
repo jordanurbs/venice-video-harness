@@ -33,6 +33,15 @@ export interface CreateSeriesOptions {
   audioStrategy?: AudioStrategy;
   /** Upfront questionnaire: preferred video model family. */
   videoFamilyPreference?: VideoFamilyPreference;
+  /**
+   * Upfront questionnaire: the render route.
+   *   - `true`  → montage route (advanced/editor): one single-pass generation
+   *               per scene, auto-cut into a media library for later editing.
+   *   - `false` → standard route (beginner): 2.0-era per-shot / short
+   *               multi-shot planning, more automated but more drift-prone.
+   *   - unset   → the harness default (montage-first, `resolveMontageMode`).
+   */
+  montageMode?: boolean;
   /** Upfront questionnaire: the reasoning model behind the project. */
   intelligenceModel?: string;
   /** Directory that contains every series project. */
@@ -77,6 +86,7 @@ export function createSeries(
       lipSyncModel: resolveLipSyncModel(family),
       ...(options?.audioStrategy ? { audioStrategy: options.audioStrategy } : {}),
       ...(options?.videoFamilyPreference ? { videoFamilyPreference: options.videoFamilyPreference } : {}),
+      ...(options?.montageMode !== undefined ? { montageMode: options.montageMode } : {}),
     },
     intelligence: resolveIntelligence(options?.intelligenceModel),
     outputDir,

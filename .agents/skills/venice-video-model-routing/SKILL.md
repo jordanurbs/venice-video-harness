@@ -155,16 +155,21 @@ Almost all shots should use a reference-to-video model for identity anchoring. S
 | **Character shots (3+ chars)** | `kling-o3-standard-reference-to-video` | Auto-fallback — structured `elements` for multi-character identity | `elements`, `reference_image_urls`, `scene_image_urls`; 3-15s |
 | **Establishing / mood / action** | `seedance-2-0-image-to-video` | No characters — epic cinematic quality, physics-aware | 4-15s, `resolution: '720p'`, `aspect_ratio`, native audio |
 
-Recommended constants:
+Recommended constants (harness default is Seedance 2.5 R2V for ALL lanes since 2026-08-07; see AGENTS.md rule 51):
 
 ```
-ACTION_MODEL              = 'seedance-2-0-image-to-video'
-ATMOSPHERE_MODEL          = 'seedance-2-0-image-to-video'
-CHARACTER_CONSISTENCY_MODEL = 'seedance-2-0-reference-to-video'
-KLING_R2V_MODEL           = 'kling-o3-standard-reference-to-video'  (fallback for 3+ chars)
-MULTISHOT_MODEL           = 'seedance-2-0-enhanced-reference-to-video'  (default since 2026-08-05; resolveMultiShotModel())
-# Legacy: 'kling-o3-pro-image-to-video' — explicit videoDefaults.multiShotModel override only.
-# It has NO elements and NO reference_image_urls, so it drops all identity anchoring.
+ACTION_MODEL              = 'seedance-2-5-reference-to-video'
+ATMOSPHERE_MODEL          = 'seedance-2-5-reference-to-video'
+CHARACTER_CONSISTENCY_MODEL = 'seedance-2-5-reference-to-video'
+MONTAGE_MODEL             = 'seedance-2-5-reference-to-video'  (default scene lane, up to 30s; resolveMontageModel())
+MULTISHOT_MODEL           = 'seedance-2-5-reference-to-video'  (montage-off lane, up to 15s; resolveMultiShotModel())
+KLING_R2V_MODEL           = 'kling-o3-standard-reference-to-video'  (rare fallback — 2.5 carries up to 30 refs)
+# Seedance 2.5: every integer 4-30s, 480p/720p (harness pins 720p), up to 30 refs,
+#   @Image tags, audio_url + reference_audio_urls + reference_video_urls.
+# Prior default 'seedance-2-0-enhanced-reference-to-video' (1080p-capable) stays
+#   selectable via videoDefaults.
+# Legacy multi-shot: 'kling-o3-pro-image-to-video' — explicit videoDefaults.multiShotModel
+#   override only. It has NO elements and NO reference_image_urls, so it drops all identity anchoring.
 
 # Single image default for ALL panels (Venice removed the Seedance face restriction, 2026-07)
 IMAGE_GENERATION          = 'nano-banana-2'          # character + faceless panels alike

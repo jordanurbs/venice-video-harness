@@ -519,6 +519,10 @@ export class VeniceClient {
    *  - A model with no real vision returns EMPTY content rather than an error
    *    when handed an image, which reads as an unhelpful parse failure. That
    *    case is named explicitly so the operator can change models.
+   *  - A model WITH vision can still return empty content intermittently
+   *    (kimi-k3 did this on 4 of 12 storyboard-QA panels, 2026-08-10, while
+   *    reading the other 8 fine). Empty content therefore consumes a retry
+   *    attempt instead of failing immediately; only a repeat emptiness throws.
    *
    * Reasoning text arrives in a separate `reasoning_content` field on every
    * model checked, so it never pollutes what gets parsed.
@@ -558,11 +562,13 @@ export class VeniceClient {
 
       const raw = response.choices?.[0]?.message?.content ?? '';
       if (!raw.trim()) {
-        throw new Error(
+        lastError = new Error(
           images.length > 0
-            ? `${model} returned no content for the ${label}. Models without image support answer an image prompt with silence rather than an error -- pick a model that reads images.`
+            ? `${model} returned no content for the ${label}. Either the model cannot read images (no-vision models answer image prompts with silence rather than an error) or it dropped this response intermittently -- retried once before giving up.`
             : `${model} returned no content for the ${label}. It may have spent the whole ${maxTokens}-token budget reasoning.`,
         );
+        if (attempt === 0) continue; // intermittent empties happen even on vision models
+        throw lastError;
       }
 
       const cleaned = extractJsonBlock(raw);
