@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // The core operating rules, shipped inside the binary.
 //
-// AGENTS.md is 84KB — 49 rules and 28 anti-patterns. A repo-resident agent
+// AGENTS.md is 84KB — 55 rules and 31 anti-patterns. A repo-resident agent
 // reads it from the checkout; an MCP-connected agent reads it from the clone.
 // A user who ran `npm install -g venice-video-harness` and talks to a
 // persistent assistant (Hermes, OpenClaw) has neither, and until now the only
@@ -52,6 +52,16 @@ export const AGENT_GUIDE: readonly GuideSection[] = [
     points: [
       'approve-script and qa-approve are explicit human sign-offs, not steps an agent clears on its own.',
       '--skip-approval and --skip-qa do not make the script approved or the QA cleared; they only bypass the check. They are not the fix. Ask the human to approve.',
+      'qa-approve reads the QA report: criticals or unchecked shots block approval. --force is the operator saying they reviewed the panels themselves.',
+    ],
+  },
+  {
+    title: 'QA the rendered video, not just the panels',
+    points: [
+      'Panel QA runs BEFORE rendering and cannot catch cross-unit drift: each generation unit re-interprets the character references independently, so the same character can render as three different people across units while every unit passes in isolation.',
+      'After generate-videos, run qa-videos. It scans for head-glitch flashes and boundary jumps (free), then vision-checks per-unit identity against the sheets and cross-unit identity across hero frames (one call).',
+      'A failing video-qa-report.json blocks assemble-episode. Fix the drifting units; --skip-video-qa only bypasses the check for an operator who watched the footage.',
+      'When units drift: harvest-anchor a clean frame from a unit that PASSED into the character\'s reference stack (anchor.png outranks the sheets), then re-render only the drifting units and re-run qa-videos.',
     ],
   },
   {
@@ -68,7 +78,7 @@ export const AGENT_GUIDE: readonly GuideSection[] = [
   {
     title: 'Where the full knowledge lives',
     points: [
-      'AGENTS.md — 49 rules and 28 production anti-patterns, shipped in the package.',
+      'AGENTS.md — 55 rules and 31 production anti-patterns, shipped in the package.',
       '.agents/skills/ — venice-api, venice-video-model-routing, character-consistency, shot-composition, burn-in-subtitles, video-editing, and more.',
       '.agents/commands/ — 20 step-by-step playbooks; .agents/agents/ — 10 sub-agent roles.',
       'Read the relevant playbook before running a workflow. Validate model capabilities against src/venice/models.ts before an API call.',

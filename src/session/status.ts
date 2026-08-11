@@ -22,6 +22,8 @@ export interface EpisodeStatus {
   scriptApproved: boolean;
   qaReported: boolean;
   qaApproved: boolean;
+  /** video-qa-report.json exists (post-render QA on the rendered units). */
+  videoQaReported: boolean;
   panelCount: number;
   videoCount: number;
   hasMusic: boolean;
@@ -83,6 +85,7 @@ function classifyEpisode(
       || script?.status === 'approved',
     qaReported: existsSync(join(episodeDir, 'qa-report.json')),
     qaApproved: existsSync(join(episodeDir, 'qa-approved.json')),
+    videoQaReported: existsSync(join(episodeDir, 'video-qa-report.json')),
     panelCount: countMatching(sceneDir, /^shot-\d+\.png$/),
     videoCount: countMatching(sceneDir, /^shot-\d+\.mp4$/),
     hasMusic: existsSync(join(audioDir, 'music.mp3')),
@@ -114,8 +117,11 @@ function classifyEpisode(
       ? 'ready to render'
       : `rendering (${status.videoCount}/${status.shotCount} clips)`;
     status.nextCommand = `generate-videos ${ref}`;
+  } else if (!status.videoQaReported && !status.hasFinalCut) {
+    status.stage = 'clips complete, unverified';
+    status.nextCommand = `qa-videos ${ref}`;
   } else if (!status.hasFinalCut) {
-    status.stage = 'clips complete';
+    status.stage = 'clips verified';
     status.nextCommand = `assemble-episode ${ref}`;
   } else {
     status.stage = 'complete';

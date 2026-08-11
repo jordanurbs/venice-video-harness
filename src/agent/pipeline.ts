@@ -108,10 +108,18 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
     command: 'generate-videos -p <project> -e <n>',
   },
   {
+    id: 'qa-videos',
+    name: 'QA the rendered units (cross-unit identity, head glitches)',
+    scope: 'episode',
+    produces: 'video-qa-report.json',
+    command: 'qa-videos -p <project> -e <n>',
+  },
+  {
     id: 'assemble',
     name: 'Assemble the final cut',
     scope: 'episode',
     produces: 'episode-NNN-final.mp4',
+    gate: 'A failing video-qa-report.json blocks assembly. --skip-video-qa does not fix the units.',
     command: 'assemble-episode -p <project> -e <n>',
   },
 ];

@@ -31,11 +31,12 @@ test('the pipeline stages follow the on-disk gate order', () => {
   const ids = PIPELINE_STAGES.map(s => s.id);
   assert.deepEqual(ids, [
     'aesthetic', 'cast', 'episode', 'script', 'approve-script',
-    'storyboard', 'qa-storyboard', 'qa-approve', 'render', 'assemble',
+    'storyboard', 'qa-storyboard', 'qa-approve', 'render', 'qa-videos', 'assemble',
   ]);
-  // The two human gates are the ones that carry a gate note.
+  // The human gates are the ones that carry a gate note: the two sign-offs
+  // plus assembly, which blocks on a failing video-qa-report.json (rule 52).
   const gated = PIPELINE_STAGES.filter(s => s.gate).map(s => s.id);
-  assert.deepEqual(gated, ['approve-script', 'qa-approve']);
+  assert.deepEqual(gated, ['approve-script', 'qa-approve', 'assemble']);
 });
 
 test('the pipeline never presents --skip-* as the fix', () => {

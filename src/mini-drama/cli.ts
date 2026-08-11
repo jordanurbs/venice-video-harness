@@ -1865,6 +1865,41 @@ program
       process.exit(1);
     }
 
+    // Reference preflight. A workshop approval materializes characters and
+    // locations as DATA but generates no reference images — storyboarding
+    // without them wastes a full render pass (canopy-run burned one on
+    // 14 refless panels, 2026-08-10, then silently failed every per-panel
+    // refinement). Block until each scripted character and location has at
+    // least one reference on disk, and say exactly how to fix it.
+    {
+      const scriptedChars = [...new Set(script.shots.flatMap(s => s.characters.map(c => c.toUpperCase())))];
+      const missingChars = scriptedChars.filter(name => {
+        const dir = getCharacterDir(series, name);
+        return !['front.png', 'three-quarter.png'].some(f => existsSync(join(dir, f)));
+      });
+      const scriptedLocs = [...new Set(script.shots.map(s => s.location).filter((l): l is string => Boolean(l)))];
+      const missingLocs = scriptedLocs.filter(slug => {
+        const loc = getLocation(series, slug);
+        if (!loc) return false; // unknown slug is a script problem, not a refs problem
+        const dir = getLocationDir(series, loc.slug);
+        return !['wide.png', 'medium.png', 'detail.png'].some(f => existsSync(join(dir, f)));
+      });
+      if (missingChars.length > 0 || missingLocs.length > 0) {
+        console.error('Blocked: reference images are missing. Storyboarding without them wastes a full render pass.');
+        for (const name of missingChars) {
+          const char = series.characters.find(c => c.name.toUpperCase() === name);
+          console.error(`  Character ${name}: no reference sheet. Generate with:`);
+          console.error(`    add-character -p ${series.outputDir} --name "${char?.name ?? name}" --gender ${char?.gender ?? '<gender>'} --age "${char?.age ?? '<age>'}" --description "..." --wardrobe "..."`);
+        }
+        for (const slug of missingLocs) {
+          console.error(`  Location ${slug}: no reference angles. Generate with:`);
+          console.error(`    generate-location-references -p ${series.outputDir} -l "${slug}"`);
+        }
+        console.error('  Then re-run this command.');
+        process.exit(1);
+      }
+    }
+
     const cfgScale = opts.cfgScale ?? 10;
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
@@ -2691,32 +2726,52 @@ Verdict rules:
         prevPanelNote,
       ].filter(Boolean).join('\n');
 
-      try {
-        const parsed = await client.chatJson<{ verdict: QaVerdict; issues: string[]; notes: string }>({
-          model: qaModel,
-          systemPrompt,
-          userPrompt,
-          images,
-          maxTokens: 4000,
-          temperature: 0.3,
-          label: `shot ${shotNum} QA`,
-        });
+      // Fallback chain: the chosen model, then the project's paired vision
+      // companion (same privacy tier by construction). kimi-k3 dropped 5 of
+      // 14 vision reads on canopy-run (2026-08-10) and the whole run needed
+      // a human to notice and re-run on grok-4-5 — now the harness does that
+      // itself. An explicit --model is still tried FIRST; the companion is a
+      // rescue for intermittent empties, not a substitution.
+      const fallbackModel = intelligenceFor(series).visionModel;
+      const modelChain = [qaModel, ...(fallbackModel !== qaModel ? [fallbackModel] : [])];
+      let checked = false;
+      let lastReason = '';
+      for (const [chainIndex, model] of modelChain.entries()) {
+        try {
+          const parsed = await client.chatJson<{ verdict: QaVerdict; issues: string[]; notes: string }>({
+            model,
+            systemPrompt,
+            userPrompt,
+            images,
+            maxTokens: 4000,
+            temperature: 0.3,
+            label: `shot ${shotNum} QA`,
+          });
 
+          results.push({
+            shotNumber: shot.shotNumber, type: shot.type, characters: shot.characters,
+            ...parsed,
+          });
+
+          const icon = parsed.verdict === 'PASS' ? '✓' : parsed.verdict === 'FLAG-CRITICAL' ? '✗' : '⚠';
+          const via = chainIndex > 0 ? ` (via fallback ${model})` : '';
+          console.log(`  [${i + 1}/${shotsToCheck.length}] Shot ${shotNum}: ${icon} ${parsed.verdict}${via}${parsed.issues.length > 0 ? ' -- ' + parsed.issues[0] : ''}`);
+          checked = true;
+          break;
+        } catch (err) {
+          lastReason = err instanceof Error ? err.message : String(err);
+          if (chainIndex < modelChain.length - 1) {
+            console.warn(`  [${i + 1}/${shotsToCheck.length}] Shot ${shotNum}: ${model} failed — retrying on vision companion ${modelChain[chainIndex + 1]}...`);
+          }
+        }
+      }
+      if (!checked) {
         results.push({
           shotNumber: shot.shotNumber, type: shot.type, characters: shot.characters,
-          ...parsed,
-        });
-
-        const icon = parsed.verdict === 'PASS' ? '✓' : parsed.verdict === 'FLAG-CRITICAL' ? '✗' : '⚠';
-        console.log(`  [${i + 1}/${shotsToCheck.length}] Shot ${shotNum}: ${icon} ${parsed.verdict}${parsed.issues.length > 0 ? ' -- ' + parsed.issues[0] : ''}`);
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        results.push({
-          shotNumber: shot.shotNumber, type: shot.type, characters: shot.characters,
-          verdict: 'FLAG-LOW', issues: [`QA analysis failed: ${reason}`], notes: 'Vision API error',
+          verdict: 'FLAG-LOW', issues: [`QA analysis failed: ${lastReason}`], notes: 'Vision API error',
           errored: true,
         });
-        console.warn(`  [${i + 1}/${shotsToCheck.length}] Shot ${shotNum}: QA failed - ${reason}`);
+        console.warn(`  [${i + 1}/${shotsToCheck.length}] Shot ${shotNum}: QA failed - ${lastReason}`);
       }
     }
 
@@ -2776,12 +2831,42 @@ program
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--notes <notes>', 'QA approval notes')
-  .action(async (opts: { project: string; episode: number; notes?: string }) => {
+  .option('--force', 'Approve despite criticals/unchecked shots in the QA report (you have reviewed the panels yourself)', false)
+  .action(async (opts: { project: string; episode: number; notes?: string; force: boolean }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
     const episodeDir = getEpisodeDir(series, opts.episode);
     const qaPath = join(episodeDir, 'qa-approved.json');
+
+    // The approval artifact must mean something: read the report it claims
+    // to approve. Approving a report with criticals or unchecked shots used
+    // to be possible blindly — canopy-run cleared this gate with 5 of 14
+    // shots never actually read (2026-08-10). Now that requires --force.
+    const reportPath = join(episodeDir, 'qa-report.json');
+    if (!existsSync(reportPath)) {
+      console.error('Blocked: no qa-report.json — run qa-storyboard before qa-approve.');
+      console.error(`  Run:  qa-storyboard -p ${series.outputDir} -e ${opts.episode}`);
+      process.exit(1);
+    }
+    try {
+      const qaReport = JSON.parse(readFileSync(reportPath, 'utf-8')) as {
+        summary?: { flagCritical?: number; errored?: number };
+      };
+      const criticalCount = qaReport.summary?.flagCritical ?? 0;
+      const uncheckedCount = qaReport.summary?.errored ?? 0;
+      if ((criticalCount > 0 || uncheckedCount > 0) && !opts.force) {
+        console.error(`Blocked: the latest QA report has ${criticalCount} critical issue(s) and ${uncheckedCount} unchecked shot(s).`);
+        console.error('  Approving unread or failing panels renders money into known defects.');
+        console.error(`  Fix panels (fix-panel) or re-run QA (qa-storyboard), then approve.`);
+        console.error('  If you have reviewed the panels yourself and accept them, re-run with --force.');
+        process.exit(1);
+      }
+    } catch (err) {
+      if (err && typeof err === 'object' && 'code' in (err as NodeJS.ErrnoException)) throw err;
+      console.error(`Blocked: qa-report.json could not be parsed (${err instanceof Error ? err.message : String(err)}). Re-run qa-storyboard.`);
+      process.exit(1);
+    }
 
     const artifact = {
       episode: opts.episode,
@@ -2794,6 +2879,213 @@ program
     console.log(`  Artifact: ${qaPath}`);
     console.log(`\nVideo generation is now unblocked. Run: generate-videos -p ${series.outputDir} -e ${opts.episode}`);
     await updateTreatment(series, opts.episode);
+  });
+
+// ── qa-videos ─────────────────────────────────────────────────────────
+// Post-render QA on the RENDERED units — the layer panel QA cannot cover.
+// Catches: cross-unit identity drift (each generation unit re-interprets
+// the references independently), per-unit identity breaks vs the sheets,
+// head-glitch flashes from montage transition junk, and boundary lighting
+// jumps. Born from the canopy-run three-Wrens failure, 2026-08-10.
+program
+  .command('qa-videos')
+  .description('Vision + programmatic QA on rendered generation units (cross-unit identity, head glitches, boundary jumps)')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
+  .option('--model <model>', "Override the project's vision model for this run")
+  .option('--skip-vision', 'Run only the free programmatic checks (no vision calls)', false)
+  .action(async (opts: { project: string; episode: number; model?: string; skipVision: boolean }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+    const script = await loadEpisodeScript(series, opts.episode);
+    if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
+
+    const episodeDir = getEpisodeDir(series, opts.episode);
+    const sceneDir = join(episodeDir, 'scene-001');
+    const { loadGenerationPlan } = await import('./generation-planner.js');
+    const plan = await loadGenerationPlan(episodeDir);
+    if (!plan || plan.units.length === 0) {
+      console.error('No generation plan found — run generate-videos first.');
+      process.exit(1);
+    }
+    const {
+      detectHeadGlitch, frameLuma, ffprobeDurationSec, sampleUnitFrames,
+      checkUnitIdentity, checkCrossUnitIdentity, saveVideoQaReport,
+    } = await import('./video-qa.js');
+
+    const units = plan.units.filter(u => existsSync(join(sceneDir, u.outputFile)));
+    console.log(`QA Videos: Episode ${opts.episode} — ${units.length} rendered unit(s)\n`);
+
+    // ---- Layer 1: programmatic (free) ----
+    console.log('Programmatic checks:');
+    const headGlitches: import('./video-qa.js').HeadGlitchFinding[] = [];
+    for (const unit of units) {
+      const finding = detectHeadGlitch(join(sceneDir, unit.outputFile), unit.unitId);
+      if (finding) {
+        headGlitches.push(finding);
+        console.log(`  ✗ ${unit.unitId}: head-glitch flash at frame ${finding.frameIndex} (luma Δ${finding.lumaDelta})`);
+      }
+    }
+    if (headGlitches.length === 0) console.log('  ✓ no head-glitch flashes detected');
+
+    const boundaries: import('./video-qa.js').BoundaryFinding[] = [];
+    for (let i = 1; i < units.length; i++) {
+      const prevPath = join(sceneDir, units[i - 1].outputFile);
+      const nextPath = join(sceneDir, units[i].outputFile);
+      const prevLuma = frameLuma(prevPath, Math.max(ffprobeDurationSec(prevPath) - 0.2, 0));
+      const nextLuma = frameLuma(nextPath, 0.2);
+      if (prevLuma === undefined || nextLuma === undefined) continue;
+      const delta = Math.abs(nextLuma - prevLuma);
+      if (delta > 60) {
+        boundaries.push({ fromUnit: units[i - 1].unitId, toUnit: units[i].unitId, lumaDelta: Number(delta.toFixed(1)), severity: 'fail' });
+        console.log(`  ✗ boundary ${units[i - 1].unitId} → ${units[i].unitId}: luma jump Δ${delta.toFixed(1)}`);
+      } else if (delta > 35) {
+        boundaries.push({ fromUnit: units[i - 1].unitId, toUnit: units[i].unitId, lumaDelta: Number(delta.toFixed(1)), severity: 'warn' });
+        console.log(`  ⚠ boundary ${units[i - 1].unitId} → ${units[i].unitId}: luma jump Δ${delta.toFixed(1)}`);
+      }
+    }
+    if (boundaries.length === 0) console.log('  ✓ no boundary lighting jumps');
+
+    // ---- Layer 2: vision ----
+    let unitIdentity: import('./video-qa.js').UnitIdentityResult[] = [];
+    let crossUnit: import('./video-qa.js').CrossUnitResult = { verdict: 'PASS', issues: [], driftingUnits: [] };
+    if (!opts.skipVision) {
+      const apiKey = await getVeniceApiKey();
+      const client = new VeniceClient(apiKey);
+      const qaModel = opts.model ?? intelligenceFor(series).visionModel;
+      console.log(`\nVision checks (model: ${qaModel}):`);
+
+      const samples = sampleUnitFrames(units, sceneDir, script);
+
+      // Per-unit identity vs the reference sheets.
+      for (const unit of units) {
+        const unitFrames = samples.filter(s => s.unitId === unit.unitId);
+        if (unitFrames.length === 0) continue;
+        const charNames = [...new Set(unit.shotNumbers
+          .flatMap(n => script.shots.find(s => s.shotNumber === n)?.characters ?? []))];
+        const result = await checkUnitIdentity(client, qaModel, series, unit.unitId, unitFrames, charNames);
+        unitIdentity.push(result);
+        const icon = result.errored ? '?' : result.verdict === 'PASS' ? '✓' : result.verdict === 'FLAG-CRITICAL' ? '✗' : '⚠';
+        console.log(`  ${icon} ${unit.unitId}: ${result.errored ? 'UNCHECKED' : result.verdict}${result.issues.length > 0 ? ' — ' + result.issues[0] : ''}`);
+      }
+
+      // Cross-unit identity: one hero frame per unit, one call.
+      // The protagonist is the character appearing in the most shots.
+      const charCounts = new Map<string, number>();
+      for (const shot of script.shots) for (const c of shot.characters) {
+        charCounts.set(c, (charCounts.get(c) ?? 0) + 1);
+      }
+      const protagonist = [...charCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+      if (protagonist) {
+        const heroFrames = units
+          .map(u => samples.find(s => s.unitId === u.unitId
+            && (script.shots.find(sh => sh.shotNumber === s.shotNumber)?.characters ?? [])
+              .some(c => c.toUpperCase() === protagonist.toUpperCase())))
+          .filter((s): s is NonNullable<typeof s> => Boolean(s));
+        crossUnit = await checkCrossUnitIdentity(client, qaModel, heroFrames, protagonist);
+        const icon = crossUnit.errored ? '?' : crossUnit.verdict === 'PASS' ? '✓' : crossUnit.verdict === 'FLAG-CRITICAL' ? '✗' : '⚠';
+        console.log(`  ${icon} cross-unit (${protagonist}, ${heroFrames.length} units): ${crossUnit.errored ? 'UNCHECKED' : crossUnit.verdict}`);
+        for (const issue of crossUnit.issues) console.log(`      ${issue}`);
+        if (crossUnit.driftingUnits.length > 0) {
+          console.log(`      drifting units: ${crossUnit.driftingUnits.join(', ')}`);
+        }
+      }
+    }
+
+    const erroredCount = unitIdentity.filter(r => r.errored).length + (crossUnit.errored ? 1 : 0);
+    const criticals = headGlitches.length
+      + boundaries.filter(b => b.severity === 'fail').length
+      + unitIdentity.filter(r => !r.errored && r.verdict === 'FLAG-CRITICAL').length
+      + (!crossUnit.errored && crossUnit.verdict === 'FLAG-CRITICAL' ? 1 : 0);
+
+    const report: import('./video-qa.js').VideoQaReport = {
+      episode: opts.episode,
+      model: opts.skipVision ? 'programmatic-only' : (opts.model ?? intelligenceFor(series).visionModel),
+      analyzedAt: new Date().toISOString(),
+      headGlitches, boundaries, unitIdentity, crossUnit,
+      summary: { units: units.length, criticals, errored: erroredCount, passed: criticals === 0 && erroredCount === 0 },
+    };
+    const reportPath = await saveVideoQaReport(episodeDir, report);
+
+    console.log(`\n${'─'.repeat(50)}`);
+    console.log(`Video QA: ${criticals} critical, ${erroredCount} unchecked — ${report.summary.passed ? 'PASS' : 'NOT PASSED'}`);
+    console.log(`Report saved: ${reportPath}`);
+    if (criticals > 0) {
+      console.log('\nFix the flagged units before assembling:');
+      if (crossUnit.driftingUnits.length > 0) {
+        console.log(`  Drifting units: ${crossUnit.driftingUnits.join(', ')}`);
+        console.log('  Recommended: harvest-anchor from a unit that PASSED, then re-render the drifting units.');
+      }
+      if (headGlitches.length > 0) {
+        console.log(`  Head glitches: ${headGlitches.map(g => g.unitId).join(', ')} — re-render, or trim the flash frames.`);
+      }
+      process.exitCode = 1;
+    } else if (erroredCount === 0) {
+      console.log(`\nAll rendered units verified. Run: assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+    }
+  });
+
+// ── harvest-anchor ────────────────────────────────────────────────────
+// Promote a frame from an APPROVED render into a character's reference
+// stack as anchor.png. The reference-slot allocator prefers anchor.png
+// over the generated sheets, so subsequent renders anchor to the exact
+// rendered identity instead of re-interpreting the sheets. This is the
+// canopy-run rescue (harvest a still from the stable unit, re-render the
+// drifted ones) promoted to a first-class command.
+program
+  .command('harvest-anchor')
+  .description("Extract a frame from a rendered unit into a character's reference stack (anchor.png) to lock later renders to that exact look")
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-c, --character <name>', 'Character whose reference stack receives the anchor')
+  .requiredOption('--video <path>', 'Rendered video to harvest from (unit master or shot cut)')
+  .requiredOption('--at <seconds>', 'Timestamp of the frame to harvest', parseFloat)
+  .option('--crop <w:h:x:y>', 'Optional crop (ffmpeg crop syntax numbers) applied before saving')
+  .action(async (opts: { project: string; character: string; video: string; at: number; crop?: string }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+    const char = series.characters.find(c => c.name.toUpperCase() === opts.character.toUpperCase());
+    if (!char) { console.error(`Character not found: ${opts.character}`); process.exit(1); }
+    const videoPath = resolve(opts.video);
+    if (!existsSync(videoPath)) { console.error(`Video not found: ${videoPath}`); process.exit(1); }
+
+    const charDir = getCharacterDir(series, char.name);
+    await mkdir(charDir, { recursive: true });
+    const anchorPath = join(charDir, 'anchor.png');
+
+    // Archive any prior anchor rather than overwriting it (rule 11).
+    if (existsSync(anchorPath)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      await copyFile(anchorPath, join(charDir, `anchor-${stamp}.png`));
+    }
+
+    const vf = opts.crop ? [`crop=${opts.crop}`] : [];
+    const args = [
+      '-y', '-v', 'error', '-ss', String(opts.at), '-i', videoPath,
+      '-frames:v', '1',
+      ...(vf.length > 0 ? ['-vf', vf.join(',')] : []),
+      anchorPath,
+    ];
+    const r = spawnSync('ffmpeg', args, { encoding: 'utf-8' });
+    if (r.status !== 0 || !existsSync(anchorPath)) {
+      console.error(`ffmpeg frame extraction failed: ${r.stderr?.slice(-300)}`);
+      process.exit(1);
+    }
+
+    // Provenance sidecar so the origin of the anchor is never a mystery.
+    await writeFile(join(charDir, 'anchor.provenance.json'), JSON.stringify({
+      character: char.name,
+      sourceVideo: videoPath,
+      atSec: opts.at,
+      crop: opts.crop ?? null,
+      harvestedAt: new Date().toISOString(),
+    }, null, 2), 'utf-8');
+
+    console.log(`Anchor harvested: ${anchorPath}`);
+    console.log(`  Source: ${basename(videoPath)} @ ${opts.at}s${opts.crop ? ` (crop ${opts.crop})` : ''}`);
+    console.log(`\n${char.name}'s primary reference slot now uses this anchor on every render.`);
+    console.log('Open the file and confirm the face is sharp, well-lit, and unobstructed —');
+    console.log('a soft or occluded anchor propagates its flaws into every later shot.');
+    console.log(`Then re-render the drifting units and re-check: qa-videos -p ${series.outputDir} -e <episode>`);
   });
 
 // ── generate-videos ───────────────────────────────────────────────────
@@ -3399,10 +3691,11 @@ program
   // ambient bed under the TTS for shots whose model audio is just room tone.
   // Per-shot `shot.nativeAudio: 'mute' | 'duck' | 'keep'` always wins.
   .option('--native-volume <vol>', 'Native audio volume in the final mix (0-1). Default: 0 with --dialogue-replace, 1.0 otherwise. Per-shot shot.nativeAudio overrides this default.')
+  .option('--skip-video-qa', 'Assemble without a passing video-qa-report.json (you have reviewed the rendered units yourself)', false)
   .action(async (opts: {
     project: string; episode: number; subtitles: boolean; music: boolean;
     ambient: boolean; ambientVolume: string;
-    dialogueReplace: boolean; nativeVolume?: string;
+    dialogueReplace: boolean; nativeVolume?: string; skipVideoQa: boolean;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -3418,6 +3711,35 @@ program
     if (videoFiles.length === 0) {
       console.error('No video clips found. Run generate-videos first.');
       process.exit(1);
+    }
+
+    // Video QA gate. Panels were QA'd before rendering, but the rendered
+    // units were not QA'd against each other — assembling unverified units
+    // is how canopy-run shipped three different protagonists (2026-08-10).
+    // A missing report is a warning (qa-videos is new; old projects don't
+    // have one). A FAILING report blocks unless the operator says they've
+    // reviewed the footage themselves.
+    if (!opts.skipVideoQa) {
+      const videoQaPath = join(episodeDir, 'video-qa-report.json');
+      if (!existsSync(videoQaPath)) {
+        console.warn('⚠ No video-qa-report.json — the rendered units have not been checked for cross-unit');
+        console.warn(`  identity drift or head glitches. Recommended: qa-videos -p ${series.outputDir} -e ${opts.episode}`);
+        console.warn('  Assembling anyway (a missing report only warns; a failing one blocks).');
+      } else {
+        try {
+          const videoQa = JSON.parse(readFileSync(videoQaPath, 'utf-8')) as { summary?: { passed?: boolean; criticals?: number } };
+          if (videoQa.summary && videoQa.summary.passed === false) {
+            console.error(`Blocked: video QA found ${videoQa.summary.criticals ?? '?'} critical issue(s) in the rendered units.`);
+            console.error('  Assembling drifted or glitched units bakes the defects into the master.');
+            console.error(`  Review: ${videoQaPath}`);
+            console.error(`  Fix the flagged units (or harvest-anchor + re-render), re-run qa-videos, then assemble.`);
+            console.error('  If you have reviewed the footage yourself and accept it, re-run with --skip-video-qa.');
+            process.exit(1);
+          }
+        } catch {
+          console.warn('⚠ video-qa-report.json could not be parsed — treating as missing.');
+        }
+      }
     }
 
     console.log(`Assembling Episode ${opts.episode}: ${script.title}`);
@@ -3439,7 +3761,9 @@ program
     //                            via audioMix.suppressModelNarration, so this
     //                            ensures the final mix actually plays the TTS)
     // Operator flag (--dialogue-replace / --no-dialogue-replace) always wins.
-    const seriesAudioStrategy = series.videoDefaults.audioStrategy;
+    // Defensive: hand-edited or pre-videoDefaults series.json files exist in
+    // the wild; a missing block should mean "defaults", not a TypeError.
+    const seriesAudioStrategy = series.videoDefaults?.audioStrategy;
     const strategyImpliesReplace =
       seriesAudioStrategy === 'lip-sync' || seriesAudioStrategy === 'narrator-vo';
     const dialogueReplaceFlagPassed = opts.dialogueReplace === true;

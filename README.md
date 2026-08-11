@@ -86,7 +86,7 @@ knowledge reaches you, which is the single largest predictor of output quality.
 
 | Surface | How it runs | What you get | Use when |
 |---|---|---|---|
-| **Repo-resident agent** | Agent's cwd is a clone of this repo | Everything: `AGENTS.md` (49 rules, 28 anti-patterns), `.agents/commands/`, `.agents/agents/`, `.agents/skills/`, `.cursor/rules/` | Authoring and iteration — the best results by a wide margin |
+| **Repo-resident agent** | Agent's cwd is a clone of this repo | Everything: `AGENTS.md` (55 rules, 31 anti-patterns), `.agents/commands/`, `.agents/agents/`, `.agents/skills/`, `.cursor/rules/` | Authoring and iteration — the best results by a wide margin |
 | **MCP** | `venice-video-mcp` (on npm) shells out to this CLI | 7 action-discriminated tools, structured JSON responses, progress notifications, plus 4 companion skills carrying the pipeline order | Any agent that supports MCP — Hermes, OpenClaw, Cursor, Claude — with no clone required |
 | **Bare global CLI** | `npm install -g`, shell tool, `--help` | The compiled CLI, this README, `AGENTS.md`, `.agents/skills/`, and the self-describing commands below (`agent-guide`, `pipeline`) | When your runner has a shell but no MCP — start with `venice-video agent-guide` |
 
@@ -382,21 +382,26 @@ a silent-wrong-project bug.
 ### The pipeline is gated. This is the order
 
 ```
-new  ->  workshop  ->  workshop --approve  ->  storyboard-episode
-                                                     |
-                                                     v
-                              qa-storyboard  ->  qa-approve
-                                                     |
-                                                     v
-                    generate-videos  ->  generate-music  ->  assemble-episode  ->  finish
+new  ->  workshop  ->  workshop --approve  ->  [references]  ->  storyboard-episode
+                                                                       |
+                                                                       v
+                                                qa-storyboard  ->  qa-approve
+                                                                       |
+                                                                       v
+       generate-videos  ->  qa-videos  ->  generate-music  ->  assemble-episode  ->  finish
 ```
 
-Two gates block progress by design:
+`[references]` = `add-character` / `generate-location-references` / `generate-storyboard-refs`.
+Workshop approval materializes characters and locations as data only; `storyboard-episode`
+blocks until each scripted character and location has reference images on disk.
+
+Three gates block progress by design:
 
 | Gate | Cleared by | Blocks |
 |---|---|---|
 | Script approval | `workshop --approve` or `approve-script` | `storyboard-episode` |
-| Storyboard QA | `qa-approve`, after `qa-storyboard` reports no critical issues | `generate-videos` |
+| Storyboard QA | `qa-approve`, after `qa-storyboard` reports no critical issues — the approval reads the report, and criticals/unchecked shots require `--force` | `generate-videos` |
+| Video QA | `qa-videos` writing a passing `video-qa-report.json` (cross-unit identity, head glitches, boundary jumps) — a failing report blocks; a missing one warns | `assemble-episode` |
 
 **Do not route around a gate.** `--skip-approval` and `--skip-qa` exist for
 operators who have already reviewed the work by other means. An agent that hits
@@ -481,8 +486,8 @@ everything else falls back to a default rather than prompting.
 
 ### The rules that most affect output quality
 
-Full text lives in `AGENTS.md` > "Agent Rules" (49 rules) and "Learned
-Anti-Patterns" (28 entries). If you can only carry a few, carry these:
+Full text lives in `AGENTS.md` > "Agent Rules" (55 rules) and "Learned
+Anti-Patterns" (30 entries). If you can only carry a few, carry these:
 
 1. **Direct the scene, don't decorate it.** Name one intention for the beat and
    derive camera, light, blocking, performance, and sound from it. Stacking

@@ -87,10 +87,13 @@ export function buildReferenceSlotPlan(
     .filter((c): c is SeriesState['characters'][number] => Boolean(c));
 
   // --- Tier 1: one primary angle per character ---
+  // anchor.png outranks the generated sheets: it is a frame harvested from an
+  // APPROVED render (harvest-anchor), so it shows the exact rendered identity
+  // later units must match — the strongest anti-drift reference available.
   const primary: CandidateSlot[] = [];
   for (const char of resolvedChars) {
     const dir = getCharacterDir(series, char.name);
-    const path = ['front.png', 'three-quarter.png']
+    const path = ['anchor.png', 'front.png', 'three-quarter.png']
       .map(f => join(dir, f))
       .find(p => existsSync(p));
     if (!path) continue;
