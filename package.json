@@ -32,9 +32,12 @@
     "storyboard": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run web:copy",
     "start": "node dist/mini-drama/cli.js",
     "dev": "tsx src/mini-drama/cli.ts",
+    "web": "tsx src/mini-drama/cli.ts web",
+    "web:build": "npm --prefix src/web/ui install && npm --prefix src/web/ui run build && npm run web:copy",
+    "web:copy": "node -e \"const fs=require('node:fs');if(fs.existsSync('src/web/ui/dist')){fs.cpSync('src/web/ui/dist','dist/web/ui/dist',{recursive:true});console.log('web UI bundle copied into dist/');}\"",
     "dev:legacy": "tsx src/cli.ts",
     "transcribe": "tsx scripts/transcribe-sources.ts",
     "timeline": "tsx scripts/timeline-view.ts",
@@ -47,6 +50,7 @@
     "postinstall": "node scripts/postinstall.mjs"
   },
   "dependencies": {
+    "chokidar": "^5.0.0",
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",
     "fountain-js": "^1.1.0",

@@ -2399,6 +2399,129 @@ program
     await updateTreatment(series, opts.episode);
   });
 
+// ── fix-flagged ─────────────────────────────────────────────
+// Batch panel repair: read qa-report.json and run fix-panel across every
+// flagged shot in one command (the web UI's "Fix all" button). Severity
+// selection defaults to critical+moderate — FLAG-LOW is stylistic variance
+// that an identity edit usually can't improve and sometimes degrades.
+program
+  .command('fix-flagged')
+  .description('Fix ALL panels flagged by the latest storyboard QA report (batch fix-panel)')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
+  .option('--severity <levels>', 'Comma-separated verdicts to fix: critical, moderate, low', 'critical,moderate')
+  .option('--edit-model <model>', 'Multi-edit model (default: nano-banana-2-edit)', DEFAULT_IMAGE_EDIT_MODEL)
+  .option('--requa', 'Re-run qa-storyboard on the fixed shots afterwards', false)
+  .action(async (opts: {
+    project: string; episode: number; severity: string; editModel: string; requa: boolean;
+  }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+
+    const script = await loadEpisodeScript(series, opts.episode);
+    if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
+
+    const episodeDir = getEpisodeDir(series, opts.episode);
+    const reportPath = join(episodeDir, 'qa-report.json');
+    if (!existsSync(reportPath)) {
+      console.error('No qa-report.json — run qa-storyboard first.');
+      process.exit(1);
+    }
+    const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as {
+      results?: Array<{ shotNumber: number; verdict?: string; issues?: string[]; errored?: boolean }>;
+    };
+
+    const wanted = new Set(
+      opts.severity.split(',').map(s => `FLAG-${s.trim().toUpperCase()}`),
+    );
+    const flagged = (report.results ?? []).filter(
+      r => r.verdict && wanted.has(r.verdict) && !r.errored,
+    );
+    if (flagged.length === 0) {
+      console.log(`No shots matching severity [${opts.severity}] in the QA report — nothing to fix.`);
+      return;
+    }
+
+    const apiKey = await getVeniceApiKey();
+    const client = new VeniceClient(apiKey);
+
+    console.log(`Fixing ${flagged.length} flagged panel(s): ${flagged.map(f => f.shotNumber).join(', ')}\n`);
+    const fixed: number[] = [];
+    const failed: Array<{ shot: number; reason: string }> = [];
+
+    for (let i = 0; i < flagged.length; i++) {
+      const flag = flagged[i];
+      const shot = script.shots.find(s => s.shotNumber === flag.shotNumber);
+      const shotNum = String(flag.shotNumber).padStart(3, '0');
+      const progress = `[${i + 1}/${flagged.length}]`;
+      if (!shot) {
+        failed.push({ shot: flag.shotNumber, reason: 'not found in script' });
+        console.warn(`  ${progress} Shot ${shotNum}: not in script — skipping`);
+        continue;
+      }
+      if (shot.characters.length === 0) {
+        // No characters to anchor — an identity edit can't act on the flag.
+        console.log(`  ${progress} Shot ${shotNum}: no characters (${flag.verdict}) — skipping (regenerate instead)`);
+        continue;
+      }
+      const panelPath = join(episodeDir, 'scene-001', `shot-${shotNum}.png`);
+      if (!existsSync(panelPath)) {
+        failed.push({ shot: flag.shotNumber, reason: 'panel missing on disk' });
+        console.warn(`  ${progress} Shot ${shotNum}: panel missing — skipping`);
+        continue;
+      }
+      // Feed the QA findings into the edit prompt so the fix targets the
+      // actual flagged defects instead of a generic identity pass.
+      const issueContext = flag.issues && flag.issues.length > 0
+        ? ` QA found: ${flag.issues.join('; ')}. Correct these specific issues.`
+        : '';
+      try {
+        console.log(`  ${progress} Shot ${shotNum} (${flag.verdict}): fixing ${shot.characters.join(', ')}...`);
+        const locRef = resolveLocationRefForShot(series, shot).refPath;
+        await fixPanel(
+          client, series, panelPath, shot.characters,
+          opts.editModel as MultiEditModel,
+          undefined,
+          shot.episodeWardrobe, shot.environment, locRef,
+        );
+        // Append the QA context to the recipe trail for the finisher.
+        if (issueContext) {
+          await appendRecipePass(panelPath, {
+            kind: 'mechanical', role: 'mechanical', model: 'fix-flagged',
+            label: 'qa context', prompt: issueContext.trim(),
+          });
+        }
+        fixed.push(flag.shotNumber);
+      } catch (err) {
+        failed.push({ shot: flag.shotNumber, reason: err instanceof Error ? err.message : String(err) });
+        console.warn(`  ${progress} Shot ${shotNum}: FAILED - ${err}`);
+      }
+    }
+
+    console.log(`\n${'─'.repeat(50)}`);
+    console.log(`fix-flagged: ${fixed.length} fixed, ${failed.length} failed, ${flagged.length - fixed.length - failed.length} skipped`);
+    for (const f of failed) console.log(`  Shot ${String(f.shot).padStart(3, '0')}: ${f.reason}`);
+
+    if (opts.requa && fixed.length > 0) {
+      console.log(`\nRe-running storyboard QA on fixed shots: ${fixed.join(',')}`);
+      const { spawnSync: spawn } = await import('node:child_process');
+      // Forward process.execArgv so the child inherits the tsx loader when
+      // this CLI runs from TypeScript source (`tsx src/mini-drama/cli.ts`).
+      // Without it, plain node tries to resolve the .ts entry's .js import
+      // specifiers and dies with ERR_MODULE_NOT_FOUND (2026-08-11).
+      const r = spawn(process.execPath, [
+        ...process.execArgv,
+        process.argv[1], 'qa-storyboard',
+        '-p', series.outputDir, '-e', String(opts.episode),
+        '--shots', fixed.join(','),
+      ], { stdio: 'inherit' });
+      if (r.status !== 0) console.warn('Re-QA exited non-zero — review manually.');
+    } else if (fixed.length > 0) {
+      console.log(`\nNext: qa-storyboard -p ${series.outputDir} -e ${opts.episode} --shots ${fixed.join(',')}`);
+    }
+    await updateTreatment(series, opts.episode);
+  });
+
 // ── insert-shot ─────────────────────────────────────────────
 // Splices a new shot into an existing script with a suffix-letter id
 // (3 -> 3b -> 3c) so the order of the original numeric shotNumbers is
@@ -4412,6 +4535,36 @@ program
     // into this module.
     const { startShell } = await import('../session/shell.js');
     await startShell(program);
+  });
+
+program
+  .command('web')
+  .description('Start the local web UI (browser dashboard + command runner) over the workspace')
+  .option('--port <port>', 'Port to listen on', '3000')
+  .option('--host <host>', 'Host to bind (localhost only by default)', '127.0.0.1')
+  .action(async (opts: { port: string; host: string }) => {
+    const port = Number.parseInt(opts.port, 10);
+    if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
+      console.error('--port must be a number between 1 and 65535.');
+      process.exit(1);
+    }
+    const workspace = await getWorkspaceDir(program.opts().workspace);
+    // Imported lazily so one-shot CLI invocations never pay for the server
+    // (or its chokidar watcher).
+    const { startWebServer } = await import('../web/server.js');
+    const server = await startWebServer({ workspaceDir: workspace, port, host: opts.host });
+    console.log(`venice-video web running at http://${opts.host}:${server.port}`);
+    console.log(`  workspace: ${workspace}`);
+    console.log('  Ctrl-C to stop.');
+    // Keep the process alive until interrupted; close the watcher cleanly.
+    await new Promise<void>(resolvePromise => {
+      const stop = async () => {
+        await server.close();
+        resolvePromise();
+      };
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+    });
   });
 
 applyContextDefaults(program);
