@@ -44,11 +44,13 @@ import {
   DEFAULT_IMAGE_EDIT_MODEL,
   DEFAULT_LIP_SYNC_MODEL,
   resolveAutoEdit,
+  resolveUseStoryboardPlates,
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
 import { upscaleVideo, estimateUpscaleCostUsd } from '../venice/upscale.js';
-import { generateImage, generateWithReferences } from '../venice/generate.js';
+import { generateImage } from '../venice/generate.js';
+import { draftPanelWithReferences, type ReferenceDraftCharacter } from '../venice/reference-draft.js';
 import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { appendRecipePass } from '../venice/recipe.js';
 import { getVeniceApiKey } from '../config.js';
@@ -308,7 +310,7 @@ async function mergeAndGenerateEpisodeLocations(
     addLocation(series, merged);
 
     const dir = getLocationDir(series, slug);
-    const hasRefs = ['wide.png', 'medium.png', 'detail.png'].some(f => existsSync(join(dir, f)));
+    const hasRefs = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'].some(f => existsSync(join(dir, f)));
     if (!hasRefs) toGenerate.push(merged);
   }
 
@@ -318,7 +320,7 @@ async function mergeAndGenerateEpisodeLocations(
     return;
   }
 
-  console.log(`\nGenerating reference images for ${toGenerate.length} new location(s) (~$${(toGenerate.length * 3 * 0.04).toFixed(2)} est. — 3 angles each)...`);
+  console.log(`\nGenerating reference images for ${toGenerate.length} new location(s) (~$${(toGenerate.length * 4 * 0.04).toFixed(2)} est. — 1 wide plate + 3 derived angles each)...`);
   for (const loc of toGenerate) {
     console.log(`  Location: ${loc.name} (${loc.slug})`);
     try {
@@ -331,9 +333,9 @@ async function mergeAndGenerateEpisodeLocations(
 
 /**
  * Resolve the best on-disk location reference image for a shot, plus a prompt
- * note carrying the location's locked description + lighting. Closer shot
- * types prefer the medium angle; everything else prefers the wide establishing
- * angle. Returns undefined refPath when the shot has no location or no images.
+ * note carrying the location's locked description + lighting. Prefers the wide
+ * hero plate, then the derived same-room angles. Returns undefined refPath
+ * when the shot has no location or no images.
  */
 function resolveLocationRefForShot(
   series: SeriesState,
@@ -343,10 +345,9 @@ function resolveLocationRefForShot(
   const location = getLocation(series, shot.location);
   if (!location) return { note: '' };
   const dir = getLocationDir(series, location.slug);
-  const closer = shot.type === 'close-up' || shot.type === 'reaction' || shot.type === 'insert';
-  const order = closer
-    ? ['medium.png', 'wide.png', 'detail.png']
-    : ['wide.png', 'medium.png', 'detail.png'];
+  // Wide (hero plate) first, then the derived same-room angles, then legacy
+  // ladder names for pre-2026-08-13 projects.
+  const order = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
   const refPath = order.map(f => join(dir, f)).find(p => existsSync(p));
   const note = ` Location: ${location.description}`
     + (location.lightingNotes ? ` Lighting: ${location.lightingNotes}.` : '')
@@ -700,6 +701,42 @@ program
     if (opts.approve) {
       if (!existing) throw new Error('No workshop draft exists. Run `venice-video workshop` first.');
       await approveWorkshop(series, existing);
+
+      // Materialize the approved cast and locations as ART, not just data.
+      // Historically approval wrote series.json and stopped, leaving the
+      // operator to run add-character / generate-location-references per
+      // entity before storyboard-episode's reference preflight would pass —
+      // the #1 "why is it blocked?" trip-up. Approval now closes that gap:
+      // every character missing its sheet and every location missing its
+      // angles gets generated here (skip-existing, so re-approval is cheap).
+      // Failures warn and continue — a single failed angle should not
+      // invalidate the approval; the Cast tab / add-character can retake it.
+      try {
+        const apiKey = await getVeniceApiKey();
+        const refClient = new VeniceClient(apiKey);
+        const { generateCharacterReferences } = await import('./character-reference-generator.js');
+        for (const character of series.characters) {
+          const charDir = getCharacterDir(series, character.name);
+          const hasSheet = ['front.png', 'three-quarter.png', 'profile.png', 'full-body.png']
+            .some(f => existsSync(join(charDir, f)));
+          if (hasSheet) continue;
+          console.log(`Generating reference sheet for ${character.name}...`);
+          await generateCharacterReferences(refClient, series, character, { skipExisting: true });
+        }
+        for (const location of series.locations ?? []) {
+          const locDir = getLocationDir(series, location.slug);
+          const hasAngles = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png']
+            .some(f => existsSync(join(locDir, f)));
+          if (hasAngles) continue;
+          console.log(`Generating location references for ${location.name}...`);
+          await generateLocationReferences(refClient, series, location, {});
+        }
+        await saveSeries(series);
+      } catch (err) {
+        console.warn(`  ⚠ Reference generation after approval hit a problem: ${(err as Error).message}`);
+        console.warn('  Approval stands. Generate missing references from the Cast tab, add-character, or generate-location-references.');
+      }
+
       await refreshTreatment(series, { episode: existing.script.episode });
       console.log(`${language.projectNoun} workshop approved.`);
       console.log('  Aesthetic, characters, locations, and script are now production state.');
@@ -1063,10 +1100,12 @@ program
   //                 "aspect_ratio": "1:1", "resolution": "1K", "seed": 42 }
   //   }
   .option('--override-prompt <path>', 'Path to a JSON file containing per-angle prompt overrides (see header comment in cli.ts add-character)')
+  .option('--angles <list>', 'Comma-separated subset of angles to (re)generate: front,three-quarter,profile,full-body. Default: all.')
+  .option('--prompt <text>', 'Inline positive-prompt override applied verbatim to every angle in this run (per-angle control: --override-prompt). Pair with --angles to retake one angle with a custom prompt.')
   .action(async (opts: {
     project: string; name: string; gender: string; age: string;
     description?: string; wardrobe: string; voiceDesc?: string; baseTraits?: string; skipImages: boolean;
-    overridePrompt?: string;
+    overridePrompt?: string; angles?: string; prompt?: string;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -1131,13 +1170,30 @@ program
       const sharedResolution = override.shared?.resolution ?? '1K';
       const sharedSeed = override.shared?.seed ?? seed;
 
-      const angles: ('front' | 'three-quarter' | 'profile' | 'full-body')[] = ['front', 'three-quarter', 'profile', 'full-body'];
-      const filenames = ['front.png', 'three-quarter.png', 'profile.png', 'full-body.png'];
+      const allAngles: ('front' | 'three-quarter' | 'profile' | 'full-body')[] = ['front', 'three-quarter', 'profile', 'full-body'];
+      let angles = allAngles;
+      if (opts.angles) {
+        const requested = opts.angles.split(',').map(a => a.trim()).filter(Boolean);
+        const invalid = requested.filter(a => !allAngles.includes(a as (typeof allAngles)[number]));
+        if (invalid.length > 0) {
+          console.error(`--angles must be a subset of: ${allAngles.join(', ')} (got: ${invalid.join(', ')})`);
+          process.exit(2);
+        }
+        angles = allAngles.filter(a => requested.includes(a));
+      }
+      const filenames = angles.map(a => `${a}.png`);
 
       console.log(`Generating reference images for ${character.name}...`);
 
       for (let i = 0; i < angles.length; i++) {
         const angle = angles[i];
+        // Regeneration is non-destructive: an existing angle is archived, not
+        // overwritten (matches generate-location-references --force behavior).
+        const existingPath = join(charDir, filenames[i]);
+        if (existsSync(existingPath)) {
+          const archive = existingPath.replace(/\.png$/, `-force-archive-${Date.now()}.png`);
+          await copyFile(existingPath, archive);
+        }
         const angleOverride = override.angles?.[angle];
 
         // Default prompt build (still used when override.angles[angle].positive
@@ -1149,7 +1205,7 @@ program
             model: sharedModel,
             negativePromptStrategy: series.videoDefaults.imageDefaults?.negativePromptStrategy ?? 'auto',
           });
-        const prompt = angleOverride?.positive ?? defaultPositive;
+        const prompt = opts.prompt ?? angleOverride?.positive ?? defaultPositive;
         const baseNegatives = [
           'deformed', 'blurry', 'bad anatomy', 'low quality',
           'multiple people', 'watermark',
@@ -1410,7 +1466,7 @@ program
 // ── add-location ──────────────────────────────────────────────────────
 program
   .command('add-location')
-  .description('Add and generate reference images for a location (wide / medium / detail)')
+  .description('Add and generate reference images for a location (wide hero plate + derived angle-2/angle-3/angle-4)')
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('--name <name>', 'Location name')
   .requiredOption('--description <desc>', 'Locked prose description of the environment')
@@ -1462,18 +1518,26 @@ program
   .requiredOption('-l, --location <slugOrName>', 'Location slug or name')
   .option('--model <model>', 'Override the image-generation model')
   .option('--force', 'Regenerate angles that already exist (archives prior versions)', false)
-  .action(async (opts: { project: string; location: string; model?: string; force: boolean }) => {
+  .option('--angles <list>', 'Comma-separated angles to (re)generate. Canonical: wide,angle-2,angle-3,angle-4 (wide is generated from scratch; the rest are DERIVED by multi-editing wide). Any other name creates a CUSTOM angle (extra coverage, e.g. "reverse-angle,behind-the-desk") and requires --prompt describing the view. Default: wide + angle-2/angle-3/angle-4.')
+  .option('--prompt <text>', 'Inline positive-prompt override applied verbatim to every angle in this run (required for custom angles)')
+  .action(async (opts: { project: string; location: string; model?: string; force: boolean; angles?: string; prompt?: string }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
     const location = getLocation(series, opts.location);
     if (!location) { console.error(`Location "${opts.location}" not found.`); process.exit(1); }
 
+    const angles = opts.angles
+      ? opts.angles.split(',').map(a => a.trim()).filter(Boolean)
+      : undefined;
+
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const { generated, skipped } = await generateLocationReferences(client, series, location, {
       model: opts.model,
       force: opts.force,
+      angles,
+      promptOverride: opts.prompt,
     });
     console.log(`\nLocation references for ${location.name}: generated ${generated.length}, skipped ${skipped.length}`);
   });
@@ -1636,6 +1700,12 @@ The recommended native pipeline uses Seedance or HappyHorse with character voice
 NO MUSIC / NO SFX FROM THE VIDEO MODEL:
 Every shot "description" MUST end with the literal phrase: "No background music, no sound effects, no soundtrack, dry recording." The harness adds music and ambient/SFX in post via separate Venice audio calls; baked-in music or SFX from the video model fights the assembler's mix. The "sfx" field in the schema below describes what the harness should generate in post — it does NOT instruct the video model to produce sound effects.
 
+RECURRING PROPS ARE CAST:
+Any inanimate object that appears in 2+ shots, carries a plot beat, or gets an insert/close-up of its own (a hero phone, a letter, a weapon, a MacGuffin) needs a locked visual identity, exactly like a character. For each such object:
+- Emit a top-level "objectCast" array entry: {"name": "<CAPS NAME, e.g. THE PHONE>", "description": "<exact look: era, materials, color, wear, distinguishing marks>"}.
+- Include the object's name in each relevant shot's "characters" array alongside the people, so the reference pipeline anchors its identity across shots.
+- Do NOT nominate incidental set dressing — only objects whose visual identity must hold across separately generated shots.
+
 LOCATIONS — TAG EVERY SHOT WITH A LOCATION:
 Define the physical place(s) this ${language.containerNounLower} uses as first-class locations, and tag every shot with the location it plays in. Locations anchor the environment across shots (consistent architecture, set dressing, and lighting) the same way character references anchor identity.
 - Emit a top-level "locations" array. Each entry: {"name": "<Display Name>", "slug": "<kebab-case-slug>", "description": "<locked prose description of the environment — architecture, materials, set dressing, scale>", "lightingNotes": "<the established lighting for this place>", "spatialAnchors": "<the locked geography: 3-5 named landmarks and their FIXED positions relative to each other, e.g. 'bar counter along the back wall; entrance door opposite it; window with neon sign left of the door as seen from the counter'>"}.
@@ -1670,6 +1740,9 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
   "status": "draft",
   "locations": [
     {"name": "<Display Name>", "slug": "<kebab-case-slug>", "description": "<locked environment description>", "lightingNotes": "<established lighting>", "spatialAnchors": "<locked geography: named landmarks and their fixed relative positions>"}
+  ],
+  "objectCast": [
+    {"name": "<CAPS NAME of a recurring hero prop, e.g. THE PHONE>", "description": "<exact look: era, materials, color, wear, distinguishing marks>"}
   ],
   "shots": [
     {
@@ -1736,23 +1809,52 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
         addEpisode(series, script.title || `${language.segmentNoun} ${opts.episode}`);
       }
 
+      // Materialize LLM-nominated recurring props ("objectCast") as object
+      // cast members so the reference pipeline anchors their identity across
+      // shots. Clean-plate base traits per anti-pattern 22: the reference
+      // must show the object ALONE or the video model re-stages the
+      // reference image's whole composition into every shot that uses it.
+      const objectCast = (script as EpisodeScript & {
+        objectCast?: Array<{ name?: string; description?: string }>;
+      }).objectCast ?? [];
+      for (const prop of objectCast) {
+        if (!prop.name || !prop.description) continue;
+        if (getCharacter(series, prop.name)) continue;
+        addCharacter(series, {
+          name: prop.name.toUpperCase(),
+          gender: 'other',
+          age: 'n/a',
+          description: prop.description,
+          fullDescription: prop.description,
+          wardrobe: 'n/a',
+          voiceDescription: 'n/a (inanimate object)',
+          baseTraits: `inanimate object, prop; ${prop.description}; shown alone on a neutral background, clean product-plate framing, no people, no hands, no faces, no scene furniture`,
+          locked: false,
+          seed: Math.abs([...prop.name].reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0)) % 999_999_999,
+        } as MiniDramaCharacter);
+        console.log(`  Object cast added: ${prop.name.toUpperCase()} (generate references from the Cast tab or add-character)`);
+      }
+
       // Merge any locations the LLM introduced into the series, then generate
       // reference images for locations that don't have them yet. Locations
       // tagged on shots but missing from the script's locations[] are also
       // synthesized as stubs so every referenced slug resolves.
       await mergeAndGenerateEpisodeLocations(client, series, script);
 
-      // Plan storyboard blocking plates per scene beat (multi-character runs
-      // in the same location) and generate them now so the operator can QA
-      // the blocking alongside the script draft. Assignments land on
-      // shot.storyboardRef; plates go to storyboards/<slug>.png.
-      try {
-        const { generated, skipped } = await ensureEpisodeStoryboardReferences(client, series, script);
-        if (generated.length > 0 || skipped.length > 0) {
-          console.log(`  Storyboard blocking plates: ${generated.length} generated, ${skipped.length} reused.`);
+      // Storyboard blocking plates are OFF by default (2026-08-13): the
+      // reference-first path anchors spatial consistency with coherent
+      // location angles + the shot's authored text blocking (rule 49). Opt in
+      // series-wide with videoDefaults.useStoryboardPlates, or generate them
+      // on demand with `generate-storyboard-refs`.
+      if (resolveUseStoryboardPlates(series.videoDefaults)) {
+        try {
+          const { generated, skipped } = await ensureEpisodeStoryboardReferences(client, series, script);
+          if (generated.length > 0 || skipped.length > 0) {
+            console.log(`  Storyboard blocking plates: ${generated.length} generated, ${skipped.length} reused.`);
+          }
+        } catch (err) {
+          console.warn(`  ⚠ Storyboard plate pass failed: ${(err as Error).message}`);
         }
-      } catch (err) {
-        console.warn(`  ⚠ Storyboard plate pass failed: ${(err as Error).message}`);
       }
 
       const savedPath = await saveEpisodeScript(series, script);
@@ -1836,6 +1938,29 @@ Respond with ONLY valid JSON matching this exact schema (no markdown, no code fe
   });
 
 // ── storyboard-episode ────────────────────────────────────────────────
+
+/**
+ * Parse a shot spec string ("5,8,11" or "5-9" or "3, 7-9") into a sorted,
+ * de-duplicated list of shot numbers. Ignores blanks and malformed tokens.
+ */
+function parseShotSpec(spec: string): number[] {
+  const out = new Set<number>();
+  for (const raw of spec.split(',')) {
+    const token = raw.trim();
+    if (!token) continue;
+    const range = /^(\d+)\s*-\s*(\d+)$/.exec(token);
+    if (range) {
+      const lo = Math.min(Number.parseInt(range[1], 10), Number.parseInt(range[2], 10));
+      const hi = Math.max(Number.parseInt(range[1], 10), Number.parseInt(range[2], 10));
+      for (let n = lo; n <= hi; n++) out.add(n);
+      continue;
+    }
+    const n = Number.parseInt(token, 10);
+    if (Number.isFinite(n)) out.add(n);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
 program
   .command('storyboard-episode')
   .description('Generate storyboard panel images from an episode script')
@@ -1847,7 +1972,8 @@ program
   .option('--debug', 'Save prompt payloads as shot-NNN.prompt.json for debugging', false)
   .option('--skip-approval', 'Skip script approval check', false)
   .option('--force', 'Regenerate all panels, ignoring any that already exist', false)
-  .action(async (opts: { project: string; episode: number; refine: boolean; editModel: string; cfgScale?: number; debug: boolean; skipApproval: boolean; force: boolean }) => {
+  .option('--shots <list>', 'Regenerate ONLY these shots (comma/range list, e.g. "5,8,11" or "5-9"). Implies --force for the listed shots: their existing panels are archived and rebuilt, every other shot is left untouched. Use after removing a bad character/location reference to rebuild just the panels that were drafted from it.')
+  .action(async (opts: { project: string; episode: number; refine: boolean; editModel: string; cfgScale?: number; debug: boolean; skipApproval: boolean; force: boolean; shots?: string }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
 
@@ -1865,24 +1991,50 @@ program
       process.exit(1);
     }
 
+    // Targeted regeneration: --shots limits every pass to a subset of the
+    // script. The listed shots are force-rebuilt (their existing panels are
+    // archived); everything else is left exactly as it was. This is the
+    // "I removed a bad reference, rebuild the panels that used it" path.
+    const validShotNumbers = new Set(script.shots.map(s => s.shotNumber));
+    let shotFilter: Set<number> | null = null;
+    if (opts.shots) {
+      const requested = parseShotSpec(opts.shots);
+      const known = requested.filter(n => validShotNumbers.has(n));
+      const unknown = requested.filter(n => !validShotNumbers.has(n));
+      if (unknown.length > 0) {
+        console.warn(`Ignoring shot numbers not in this episode's script: ${unknown.join(', ')}`);
+      }
+      if (known.length === 0) {
+        console.error('Blocked: --shots matched no shots in this episode. Nothing to regenerate.');
+        process.exit(1);
+      }
+      shotFilter = new Set(known);
+      console.log(`Targeted regeneration: shots ${known.join(', ')} (existing panels archived and rebuilt; other shots untouched).\n`);
+    }
+
     // Reference preflight. A workshop approval materializes characters and
     // locations as DATA but generates no reference images — storyboarding
     // without them wastes a full render pass (canopy-run burned one on
     // 14 refless panels, 2026-08-10, then silently failed every per-panel
     // refinement). Block until each scripted character and location has at
-    // least one reference on disk, and say exactly how to fix it.
+    // least one reference on disk, and say exactly how to fix it. When
+    // --shots is set, only the targeted shots' entities are preflighted, so
+    // an unrelated entity that lost its refs can't block a narrow rebuild.
     {
-      const scriptedChars = [...new Set(script.shots.flatMap(s => s.characters.map(c => c.toUpperCase())))];
+      const preflightShots = shotFilter
+        ? script.shots.filter(s => shotFilter!.has(s.shotNumber))
+        : script.shots;
+      const scriptedChars = [...new Set(preflightShots.flatMap(s => s.characters.map(c => c.toUpperCase())))];
       const missingChars = scriptedChars.filter(name => {
         const dir = getCharacterDir(series, name);
         return !['front.png', 'three-quarter.png'].some(f => existsSync(join(dir, f)));
       });
-      const scriptedLocs = [...new Set(script.shots.map(s => s.location).filter((l): l is string => Boolean(l)))];
+      const scriptedLocs = [...new Set(preflightShots.map(s => s.location).filter((l): l is string => Boolean(l)))];
       const missingLocs = scriptedLocs.filter(slug => {
         const loc = getLocation(series, slug);
         if (!loc) return false; // unknown slug is a script problem, not a refs problem
         const dir = getLocationDir(series, loc.slug);
-        return !['wide.png', 'medium.png', 'detail.png'].some(f => existsSync(join(dir, f)));
+        return !['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'].some(f => existsSync(join(dir, f)));
       });
       if (missingChars.length > 0 || missingLocs.length > 0) {
         console.error('Blocked: reference images are missing. Storyboarding without them wastes a full render pass.');
@@ -1907,13 +2059,17 @@ program
     await mkdir(sceneDir, { recursive: true });
 
     console.log(`Generating storyboard for Episode ${opts.episode}: ${script.title}`);
-    console.log(`${script.shots.length} shots to generate`);
+    console.log(`${shotFilter ? shotFilter.size : script.shots.length} shots to generate${shotFilter ? ` (of ${script.shots.length})` : ''}`);
     console.log(`  cfg_scale: ${cfgScale} | seed: ${series.aestheticSeed ?? 'random'} | refine: ${opts.refine}\n`);
 
     // ── Pass 1: Generate base panels ──────────────────────────────────
     console.log('Pass 1: Generating base panels...\n');
 
     const newlyGenerated = new Set<number>();
+    // Shots whose identity was already composited from real reference bytes
+    // during drafting (draftPanelWithReferences) — pass 2 skips the identity
+    // refinement for these to avoid a redundant double-edit.
+    const referenceDrafted = new Set<number>();
     const totalShots = script.shots.length;
     let generatedCount = 0;
     let skippedCount = 0;
@@ -1922,18 +2078,23 @@ program
 
     for (let shotIdx = 0; shotIdx < totalShots; shotIdx++) {
       const shot = script.shots[shotIdx];
+      // Targeted mode: pass over every shot outside the filter.
+      if (shotFilter && !shotFilter.has(shot.shotNumber)) continue;
+      // Filtered shots are always rebuilt (archive + regenerate), so --shots
+      // needs no separate --force.
+      const forceShot = opts.force || (shotFilter?.has(shot.shotNumber) ?? false);
       const shotNum = String(shot.shotNumber).padStart(3, '0');
       const imgPath = join(sceneDir, `shot-${shotNum}.png`);
       const progress = `[${shotIdx + 1}/${totalShots}]`;
 
-      if (existsSync(imgPath) && !opts.force) {
+      if (existsSync(imgPath) && !forceShot) {
         skippedCount++;
         console.log(`  ${progress} Shot ${shotNum}: already exists, skipping`);
         continue;
       }
 
-      // Archive existing panel before overwriting (--force mode)
-      if (existsSync(imgPath) && opts.force) {
+      // Archive existing panel before overwriting (--force / --shots mode)
+      if (existsSync(imgPath) && forceShot) {
         const archivePath = imgPath.replace(/\.png$/, `-force-archive-${Date.now()}.png`);
         const { rename: renameFile } = await import('node:fs/promises');
         await renameFile(imgPath, archivePath);
@@ -1967,56 +2128,78 @@ program
 
       try {
         const storyboardAR = series.storyboardAspectRatio ?? '16:9';
-        let imgBuffer: Buffer;
+        let imgBuffer: Buffer | undefined;
+        // True when draftPanelWithReferences already wrote the panel (and its
+        // recipe/provenance) to disk — the buffer write path below is skipped.
+        let draftedViaEdit = false;
 
-        // For character shots, use generateWithReferences for identity anchoring.
-        // Panels used to force seedream-v5-lite whenever a character was present,
-        // because Seedance 2.0 rejected face-bearing images from other families.
-        // Venice removed that restriction (2026-07), so ALL panels — character
-        // and faceless alike — use the operator's imageDefaults.generationModel
-        // (default nano-banana-2), the higher-quality general default.
+        // Character shots are drafted through /image/multi-edit with REAL
+        // reference bytes (draftPanelWithReferences). The old path used
+        // generateWithReferences, which silently dropped every reference
+        // image — /image/generate has no reference input — so panels were
+        // drafted from prompt text alone and drifted off-model (root cause
+        // of the storyboard QA burden; fixed 2026-08-11).
         const hasChars = shot.characters && shot.characters.length > 0;
         const panelModel = series.videoDefaults.imageDefaults?.generationModel
           ?? DEFAULT_IMAGE_GENERATION_MODEL;
+        const panelEditModel = (series.videoDefaults.imageDefaults?.editModel
+          ?? DEFAULT_IMAGE_EDIT_MODEL) as MultiEditModel;
 
         const charRefPaths: string[] = [];
         if (hasChars) {
-          const charRefs = shot.characters
-            .map(name => {
-              const char = series.characters.find(c => c.name.toUpperCase() === name.toUpperCase());
-              if (!char) return null;
-              const charDir = getCharacterDir(series, char.name);
-              const frontPath = join(charDir, 'front.png');
-              if (!existsSync(frontPath)) return null;
-              charRefPaths.push(frontPath);
-              return {
-                name: char.name,
-                role: char.description.slice(0, 80),
-                base64Image: readFileSync(frontPath).toString('base64'),
-              };
-            })
-            .filter(Boolean) as import('../venice/types.js').CharacterReference[];
-
-          // Location environment reference: appended AFTER the face refs so it
-          // never consumes a face slot (faceSlots stays = character count).
-          // generateWithReferences concatenates all refs; the extra one is used
-          // as a general environment/style anchor.
-          const charRefsWithLocation = [...charRefs];
-          let locationPromptSuffix = '';
-          if (locInfo.refPath) {
-            charRefsWithLocation.push({
-              name: 'LOCATION',
-              role: 'environment reference — setting, architecture, lighting',
-              base64Image: readFileSync(locInfo.refPath).toString('base64'),
-            } as import('../venice/types.js').CharacterReference);
-            charRefPaths.push(locInfo.refPath);
-            locationPromptSuffix = ` The final reference image is the location environment — match its setting, architecture, and lighting; it is not a character.`;
+          // Resolve identity references for the shot's characters (anchor.png
+          // outranks front.png — same precedence as the video reference slots).
+          const draftChars: ReferenceDraftCharacter[] = [];
+          for (const name of shot.characters) {
+            const char = series.characters.find(c => c.name.toUpperCase() === name.toUpperCase());
+            if (!char) continue;
+            const charDir = getCharacterDir(series, char.name);
+            const refPath = ['anchor.png', 'front.png', 'three-quarter.png']
+              .map(f => join(charDir, f))
+              .find(p => existsSync(p));
+            if (!refPath) {
+              console.warn(`  ${progress} Shot ${shotNum}: no reference image for ${char.name} — identity will be text-only.`);
+              continue;
+            }
+            charRefPaths.push(refPath);
+            const wardrobe = shot.episodeWardrobe?.[char.name.toUpperCase()] ?? char.wardrobe;
+            draftChars.push({
+              name: char.name,
+              identityLine: `${char.description.slice(0, 120)}, wearing ${wardrobe}`,
+              refPath,
+            });
           }
 
-          if (charRefs.length > 0) {
-            const result = await generateWithReferences(client, {
+          const aestheticStr = series.aesthetic
+            ? [series.aesthetic.style, series.aesthetic.palette, series.aesthetic.lighting].filter(Boolean).join(', ')
+            : undefined;
+
+          if (draftChars.length > 0 && locInfo.refPath) {
+            // Location plate exists: compose characters INTO the location via
+            // multi-edit. Geography is inherited from the plate pixels and
+            // identity from the character reference bytes — one call, both
+            // anchored. (Multi-edit budget: base + 2 layers.)
+            charRefPaths.unshift(locInfo.refPath);
+            await draftPanelWithReferences(client, {
+              model: panelEditModel,
+              basePath: locInfo.refPath,
+              baseKind: 'location',
+              characters: draftChars,
+              sceneDescription: effectivePrompt,
+              blocking: shot.blocking,
+              aesthetic: aestheticStr,
+              aspectRatio: storyboardAR,
+              outPath: imgPath,
+              recipeLabel: 'reference-drafted panel (location base)',
+            });
+            draftedViaEdit = true;
+          } else if (draftChars.length > 0) {
+            // No location plate: t2i-draft the scene composition first, then
+            // immediately composite real identity in via multi-edit — the
+            // character's actual face enters before the panel ever lands.
+            const response = await generateImage(client, {
               model: panelModel,
-              prompt: effectivePrompt + locationPromptSuffix,
+              prompt: effectivePrompt,
               negative_prompt: imagePrompt.negativePrompt,
               resolution: '1K',
               aspect_ratio: storyboardAR,
@@ -2025,11 +2208,37 @@ program
               seed: imagePrompt.seed,
               safe_mode: false,
               hide_watermark: true,
-              referenceImages: charRefsWithLocation,
-              faceSlots: Math.min(charRefs.length, 2),
             });
-            imgBuffer = Buffer.from(result.base64, 'base64');
+            const draftBuffer = Buffer.from(response.images[0].b64_json, 'base64');
+            await writeFile(imgPath, draftBuffer);
+            await appendRecipePass(imgPath, {
+              kind: 'generate',
+              role: 'content',
+              model: panelModel,
+              label: 'scene draft (pre-identity)',
+              prompt: effectivePrompt,
+              negativePrompt: imagePrompt.negativePrompt,
+              seed: imagePrompt.seed,
+              cfgScale,
+              aspectRatio: storyboardAR,
+              resolution: '1K',
+            }, { provenance: 'generate', hasFace: true });
+            await draftPanelWithReferences(client, {
+              model: panelEditModel,
+              basePath: imgPath,
+              baseKind: 'scene-draft',
+              characters: draftChars,
+              sceneDescription: effectivePrompt,
+              blocking: shot.blocking,
+              aesthetic: aestheticStr,
+              aspectRatio: storyboardAR,
+              outPath: imgPath,
+              recipeLabel: 'reference-drafted panel (identity composite)',
+            });
+            draftedViaEdit = true;
           } else {
+            // Characters named but no reference images on disk anywhere —
+            // legacy text-only draft (with a warning already emitted above).
             const response = await generateImage(client, {
               model: panelModel,
               prompt: effectivePrompt,
@@ -2045,29 +2254,26 @@ program
             imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
           }
         } else if (locInfo.refPath) {
-          // No characters, but a location ref exists — anchor the establishing
-          // panel to the location environment via generateWithReferences
-          // (faceSlots 0 → the ref is a pure environment/style anchor).
+          // No characters, but a location ref exists — draft the establishing
+          // panel as an EDIT of the location plate itself (the old path sent
+          // the plate to generateWithReferences, which dropped the bytes).
+          // Geography, architecture, and lighting are inherited pixel-for-pixel.
           charRefPaths.push(locInfo.refPath);
-          const result = await generateWithReferences(client, {
-            model: panelModel,
-            prompt: effectivePrompt + ` This reference image is the location environment — match its setting, architecture, and lighting.`,
-            negative_prompt: imagePrompt.negativePrompt,
-            resolution: '1K',
-            aspect_ratio: storyboardAR,
-            steps: 30,
-            cfg_scale: cfgScale,
-            seed: imagePrompt.seed,
-            safe_mode: false,
-            hide_watermark: true,
-            referenceImages: [{
-              name: 'LOCATION',
-              role: 'environment reference',
-              base64Image: readFileSync(locInfo.refPath).toString('base64'),
-            } as import('../venice/types.js').CharacterReference],
-            faceSlots: 0,
+          await draftPanelWithReferences(client, {
+            model: panelEditModel,
+            basePath: locInfo.refPath,
+            baseKind: 'location',
+            characters: [],
+            sceneDescription: effectivePrompt,
+            blocking: shot.blocking,
+            aesthetic: series.aesthetic
+              ? [series.aesthetic.style, series.aesthetic.palette, series.aesthetic.lighting].filter(Boolean).join(', ')
+              : undefined,
+            aspectRatio: storyboardAR,
+            outPath: imgPath,
+            recipeLabel: 'reference-drafted establishing panel (location base)',
           });
-          imgBuffer = Buffer.from(result.base64, 'base64');
+          draftedViaEdit = true;
         } else {
           const response = await generateImage(client, {
             model: panelModel,
@@ -2084,7 +2290,19 @@ program
           imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
         }
 
-        if (imgBuffer) {
+        if (draftedViaEdit) {
+          // draftPanelWithReferences already wrote the panel, restored the
+          // aspect ratio, and appended its recipe/provenance passes.
+          referenceDrafted.add(shot.shotNumber);
+          newlyGenerated.add(shot.shotNumber);
+          generatedCount++;
+          const elapsed = ((Date.now() - shotStart) / 1000).toFixed(1);
+          shotTimes.push(Date.now() - shotStart);
+          const avgTime = shotTimes.reduce((a, b) => a + b, 0) / shotTimes.length;
+          const remaining = totalShots - shotIdx - 1 - skippedCount;
+          const eta = remaining > 0 ? ` | ETA ~${Math.ceil((avgTime * remaining) / 60000)}min` : '';
+          console.log(`  ${progress} Shot ${shotNum}: saved, reference-drafted (${elapsed}s${eta})`);
+        } else if (imgBuffer) {
           await writeFile(imgPath, imgBuffer);
 
           // Venice can return WebP internally disguised as PNG -- convert immediately.
@@ -2118,6 +2336,11 @@ program
             aspectRatio: storyboardAR,
             resolution: '1K',
             referenceImagePaths: charRefPaths.length > 0 ? charRefPaths : undefined,
+            // This branch only runs when NO reference bytes reached the
+            // model (text-only fallback) — record that so the UI can flag it.
+            extra: hasChars
+              ? { referenceUsage: { base: 'none', anchored: [], textOnly: shot.characters } }
+              : undefined,
           }, { provenance: 'generate', hasFace: hasChars });
 
           newlyGenerated.add(shot.shotNumber);
@@ -2156,8 +2379,9 @@ program
         }
       }
 
-      const charShots = script.shots.filter(s => s.characters.length > 0);
-      const nonCharShots = script.shots.filter(s => s.characters.length === 0);
+      const inFilter = (n: number) => !shotFilter || shotFilter.has(n);
+      const charShots = script.shots.filter(s => s.characters.length > 0 && inFilter(s.shotNumber));
+      const nonCharShots = script.shots.filter(s => s.characters.length === 0 && inFilter(s.shotNumber));
       const refinableShots = [...charShots, ...nonCharShots];
       const totalRefinable = refinableShots.length;
       let refineIdx = 0;
@@ -2172,6 +2396,13 @@ program
 
         if (shot.skipRefine) {
           console.log(`  ${progress} Shot ${shotNum}: refinement disabled (skipRefine), skipping`);
+          continue;
+        }
+
+        // Reference-drafted panels already carry real identity bytes from
+        // drafting — a second identity edit degrades more than it fixes.
+        if (referenceDrafted.has(shot.shotNumber)) {
+          console.log(`  ${progress} Shot ${shotNum}: reference-drafted, identity refinement not needed, skipping`);
           continue;
         }
 
@@ -2247,7 +2478,8 @@ program
     // we run a dedicated multi-edit pass that injects the logo/scene image
     // as a reference so the model visually integrates it into the panel.
     const scenePropShots = script.shots.filter(
-      s => s.sceneImagePaths && s.sceneImagePaths.length > 0,
+      s => s.sceneImagePaths && s.sceneImagePaths.length > 0
+        && (!shotFilter || shotFilter.has(s.shotNumber)),
     );
 
     if (scenePropShots.length > 0) {
@@ -3297,19 +3529,22 @@ program
       return mix;
     })();
 
-    // Storyboard blocking plates (per scene beat): plan beats for the
-    // episode, generate any plates missing on disk, and persist the
-    // storyboardRef assignments so the video prompts can bind them as
-    // @ImageN composition references. Best-effort — a failure just means
-    // the shots render without a blocking plate.
-    try {
-      const { generated, skipped } = await ensureEpisodeStoryboardReferences(client, series, script);
-      if (generated.length > 0 || skipped.length > 0) {
-        console.log(`Storyboard blocking plates: ${generated.length} generated, ${skipped.length} reused.\n`);
-        await saveEpisodeScript(series, script);
+    // Storyboard blocking plates are OFF by default (2026-08-13) — the
+    // reference-first path relies on coherent location angles + text blocking
+    // (rule 49). Any plates already generated on disk (e.g. via
+    // `generate-storyboard-refs`) are still consumed as a PROTECTED @ImageN
+    // slot by the allocator; this block only controls AUTO-generation. Opt in
+    // series-wide with videoDefaults.useStoryboardPlates.
+    if (resolveUseStoryboardPlates(series.videoDefaults)) {
+      try {
+        const { generated, skipped } = await ensureEpisodeStoryboardReferences(client, series, script);
+        if (generated.length > 0 || skipped.length > 0) {
+          console.log(`Storyboard blocking plates: ${generated.length} generated, ${skipped.length} reused.\n`);
+          await saveEpisodeScript(series, script);
+        }
+      } catch (err) {
+        console.warn(`⚠ Storyboard plate pass failed: ${(err as Error).message}\n`);
       }
-    } catch (err) {
-      console.warn(`⚠ Storyboard plate pass failed: ${(err as Error).message}\n`);
     }
 
     const { videoPaths, plan } = await generateEpisodeVideos(client, series, script.shots, sceneDir, generationPlan, effectiveAudioMix);
@@ -4044,7 +4279,7 @@ const EXPORT_IMPORT_HINTS: Record<ExportFormat, string> = {
 
 async function runTimelineExport(opts: {
   project: string; episode: number; fps: string; width: string; height: string;
-  format: ExportFormat;
+  format: ExportFormat; relative?: boolean;
 }): Promise<void> {
   const series = await loadSeries(resolve(opts.project));
   if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -4154,6 +4389,7 @@ async function runTimelineExport(opts: {
   const epNum = String(opts.episode).padStart(3, '0');
   const ext = EXPORT_FORMAT_EXTENSIONS[opts.format];
   const outPath = join(episodeDir, `episode-${epNum}${ext}`);
+  const relativePaths = opts.relative === true; // default: ABSOLUTE (FCP links/relinks reliably; relative broke FCP linking)
   const finalPath = await exportTimeline(opts.format, {
     outputPath: outPath,
     segments,
@@ -4163,9 +4399,13 @@ async function runTimelineExport(opts: {
     width: parseInt(opts.width, 10),
     height: parseInt(opts.height, 10),
     eventName: script.title,
+    relativePaths,
   });
 
   console.log(`Timeline (${opts.format}): ${finalPath}`);
+  console.log(`  Media paths: ${relativePaths
+    ? 'relative to the XML (opt-in via --relative; useful for Resolve/Premiere portability — keep the XML beside its scene-001/ and audio/ folders)'
+    : 'absolute file:// (default; FCP links/relinks reliably — on another machine use File > Relink Files > Original Media, Locate All at the folder)'}`);
   console.log(`  Segments: ${segments.length}`);
   console.log(`  Connected clips: ${audio.length}`);
   console.log(`    dialogue (lane -1): ${audio.filter(a => a.lane === -1).length}`);
@@ -4183,16 +4423,18 @@ program
   .option('--fps <fps>', 'Frames per second', '24')
   .option('--width <px>', 'Sequence width', '1920')
   .option('--height <px>', 'Sequence height', '1080')
+  .option('--absolute', 'Write absolute file:// media paths. This is the DEFAULT (kept for explicitness); FCP links and relinks these reliably.', false)
+  .option('--relative', 'Opt in to media paths RELATIVE to the XML (e.g. ./scene-001/shot-001.mp4). Useful for Resolve/Premiere portability, but FCP does not link/relink relative paths reliably, so it is NOT the default.', false)
   .action(async (opts: {
     project: string; episode: number; format: string;
-    fps: string; width: string; height: string;
+    fps: string; width: string; height: string; absolute: boolean; relative: boolean;
   }) => {
     const validFormats: ExportFormat[] = ['fcpxml', 'premiere', 'davinci'];
     if (!validFormats.includes(opts.format as ExportFormat)) {
       console.error(`--format must be one of: ${validFormats.join(' | ')}`);
       process.exit(1);
     }
-    await runTimelineExport({ ...opts, format: opts.format as ExportFormat });
+    await runTimelineExport({ ...opts, format: opts.format as ExportFormat, relative: opts.relative === true && !opts.absolute });
   });
 
 // Back-compat alias kept so anyone scripted against 's command name
@@ -4205,10 +4447,12 @@ program
   .option('--fps <fps>', 'Frames per second', '24')
   .option('--width <px>', 'Sequence width', '1920')
   .option('--height <px>', 'Sequence height', '1080')
+  .option('--absolute', 'Write absolute file:// media paths (this is the DEFAULT; FCP links/relinks these reliably).', false)
+  .option('--relative', 'Opt in to media paths relative to the .fcpxml (for Resolve/Premiere portability; FCP does not relink relative paths reliably).', false)
   .action(async (opts: {
-    project: string; episode: number; fps: string; width: string; height: string;
+    project: string; episode: number; fps: string; width: string; height: string; absolute: boolean; relative: boolean;
   }) => {
-    await runTimelineExport({ ...opts, format: 'fcpxml' });
+    await runTimelineExport({ ...opts, format: 'fcpxml', relative: opts.relative === true && !opts.absolute });
   });
 
 // ── finish / upscale ──────────────────────────────────────────────────

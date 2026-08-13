@@ -7,14 +7,19 @@
 // models (Seedance 2.0 family, HappyHorse 1.1 R2V) — NEVER as a start frame —
 // with a role clause restricting it to composition/blocking authority.
 //
-// Composition strategy mirrors panel generation: generateWithReferences with
-// each character's front.png as a face ref plus the location wide.png as an
-// environment anchor, so the plate itself stays consistent with the canonical
-// assets it will sit alongside in the reference array.
+// Composition strategy (2026-08-11): plates are drafted via /image/multi-edit
+// with the location wide.png as the BASE image and character references as
+// layers (draftPanelWithReferences). The location's geography is inherited
+// pixel-for-pixel and each character's face comes from real reference bytes.
+// The old path used generateWithReferences, which silently dropped every
+// reference image (/image/generate has no reference input) — plates were
+// text-only drafts, which is why they showed "random characters" in
+// approximately-right places. Text-only generation remains only as the
+// fallback when a beat has neither characters-with-refs nor a location image.
 // ---------------------------------------------------------------------------
 
 import { join, basename } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile, rename } from 'node:fs/promises';
 import type { VeniceClient } from '../venice/client.js';
 import type { SeriesState, StoryboardReference, EpisodeScript, ShotScript } from '../series/types.js';
@@ -25,11 +30,12 @@ import {
   getStoryboardDir,
   getStoryboardRefPath,
 } from '../series/manager.js';
-import { generateWithReferences, generateImage } from '../venice/generate.js';
+import { generateImage } from '../venice/generate.js';
+import { draftPanelWithReferences, type ReferenceDraftCharacter } from '../venice/reference-draft.js';
 import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { appendRecipePass } from '../venice/recipe.js';
-import { DEFAULT_IMAGE_GENERATION_MODEL } from '../series/types.js';
-import type { CharacterReference } from '../venice/types.js';
+import { DEFAULT_IMAGE_GENERATION_MODEL, DEFAULT_IMAGE_EDIT_MODEL } from '../series/types.js';
+import type { MultiEditModel } from '../venice/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 
 function buildAestheticString(aesthetic: AestheticProfile): string {
@@ -89,30 +95,34 @@ export async function generateStoryboardReference(
   const aspect = series.storyboardAspectRatio ?? '16:9';
   const aestheticStr = buildAestheticString(series.aesthetic);
 
-  // Gather character face refs (front.png per character).
+  // Gather character identity refs (anchor.png outranks front.png — same
+  // precedence as the video reference slots).
   const refPaths: string[] = [];
-  const charRefs: CharacterReference[] = [];
+  const draftChars: ReferenceDraftCharacter[] = [];
   for (const name of ref.characters) {
     const char = series.characters.find(c => c.name.toUpperCase() === name.toUpperCase());
     if (!char) {
       console.warn(`  Storyboard ref "${ref.slug}": character "${name}" not found in series — skipping their face ref.`);
       continue;
     }
-    const frontPath = join(getCharacterDir(series, char.name), 'front.png');
-    if (!existsSync(frontPath)) {
-      console.warn(`  Storyboard ref "${ref.slug}": no front.png for ${char.name} — generate character references first.`);
+    const charDir = getCharacterDir(series, char.name);
+    const charRefPath = ['anchor.png', 'front.png', 'three-quarter.png']
+      .map(f => join(charDir, f))
+      .find(p => existsSync(p));
+    if (!charRefPath) {
+      console.warn(`  Storyboard ref "${ref.slug}": no reference image for ${char.name} — generate character references first.`);
       continue;
     }
-    refPaths.push(frontPath);
-    charRefs.push({
+    refPaths.push(charRefPath);
+    draftChars.push({
       name: char.name,
-      role: char.description.slice(0, 80),
-      base64Image: readFileSync(frontPath).toString('base64'),
+      identityLine: char.description.slice(0, 120),
+      refPath: charRefPath,
     });
   }
 
-  // Location environment ref (wide angle), appended after face refs.
-  let locationSuffix = '';
+  // Location base image (wide angle preferred) + spatial anchors.
+  let locationBasePath: string | undefined;
   let locationSpatialAnchors = '';
   if (ref.location) {
     const loc = getLocation(series, ref.location);
@@ -121,18 +131,9 @@ export async function generateStoryboardReference(
         locationSpatialAnchors = ` Fixed location layout (never rearrange): ${loc.spatialAnchors}.`;
       }
       const locDir = getLocationDir(series, loc.slug);
-      const wide = ['wide.png', 'medium.png', 'detail.png']
+      locationBasePath = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png']
         .map(f => join(locDir, f))
         .find(p => existsSync(p));
-      if (wide) {
-        refPaths.push(wide);
-        charRefs.push({
-          name: 'LOCATION',
-          role: 'environment reference — setting, architecture, lighting',
-          base64Image: readFileSync(wide).toString('base64'),
-        } as CharacterReference);
-        locationSuffix = ' The final reference image is the location environment — match its setting, architecture, and lighting; it is not a character.';
-      }
     }
   }
 
@@ -148,7 +149,7 @@ export async function generateStoryboardReference(
     ...(locationSpatialAnchors ? [locationSpatialAnchors.trim()] : []),
     `STYLE REMINDER: ${aestheticStr}.`,
   ];
-  const prompt = promptParts.join(' ') + locationSuffix;
+  const prompt = promptParts.join(' ');
 
   const negativePrompt = [
     'comic panels', 'multiple panels', 'panel layout', 'panel borders', 'panel grid',
@@ -156,24 +157,30 @@ export async function generateStoryboardReference(
     'deformed', 'blurry', 'bad anatomy', 'watermark', 'text', 'signature', 'low quality',
   ].join(', ');
 
-  let imgBuffer: Buffer;
-  if (charRefs.length > 0) {
-    const result = await generateWithReferences(client, {
-      model,
-      prompt,
-      negative_prompt: negativePrompt,
-      resolution: '1K',
-      aspect_ratio: aspect,
-      steps: 30,
-      cfg_scale: cfgScale,
-      seed: ref.seed,
-      safe_mode: false,
-      hide_watermark: true,
-      referenceImages: charRefs,
-      faceSlots: Math.min(ref.characters.length, 5),
+  const editModel = (series.videoDefaults.imageDefaults?.editModel
+    ?? DEFAULT_IMAGE_EDIT_MODEL) as MultiEditModel;
+
+  let finalPath: string;
+  if (locationBasePath) {
+    // Compose the plate INTO the actual location image: geography inherited
+    // pixel-for-pixel, identities from real character reference bytes.
+    // draftPanelWithReferences writes the file, restores the aspect ratio,
+    // and appends its own recipe/provenance pass.
+    const result = await draftPanelWithReferences(client, {
+      model: editModel,
+      basePath: locationBasePath,
+      baseKind: 'location',
+      characters: draftChars,
+      sceneDescription: prompt,
+      aspectRatio: aspect,
+      outPath: imgPath,
+      recipeLabel: `storyboard blocking plate (${ref.slug})`,
     });
-    imgBuffer = Buffer.from(result.base64, 'base64');
-  } else {
+    refPaths.unshift(locationBasePath);
+    finalPath = result.path;
+    console.log(`  Storyboard ref: saved -> ${basename(finalPath)} (location-based draft)`);
+  } else if (draftChars.length > 0) {
+    // No location image: t2i-draft the staging, then composite identity in.
     const response = await generateImage(client, {
       model,
       prompt,
@@ -189,11 +196,56 @@ export async function generateStoryboardReference(
     if (!response.images?.[0]) {
       throw new Error(`Storyboard reference "${ref.slug}": no image returned.`);
     }
-    imgBuffer = Buffer.from(response.images[0].b64_json, 'base64');
+    const draftPath = await writeImageBytesSmart(
+      Buffer.from(response.images[0].b64_json, 'base64'),
+      imgPath,
+    );
+    const result = await draftPanelWithReferences(client, {
+      model: editModel,
+      basePath: draftPath,
+      baseKind: 'scene-draft',
+      characters: draftChars,
+      sceneDescription: prompt,
+      aspectRatio: aspect,
+      outPath: imgPath,
+      recipeLabel: `storyboard blocking plate identity composite (${ref.slug})`,
+    });
+    finalPath = result.path;
+    console.log(`  Storyboard ref: saved -> ${basename(finalPath)} (identity composite)`);
+  } else {
+    // Neither characters-with-refs nor location image — pure text draft.
+    const response = await generateImage(client, {
+      model,
+      prompt,
+      negative_prompt: negativePrompt,
+      resolution: '1K',
+      aspect_ratio: aspect,
+      steps: 30,
+      cfg_scale: cfgScale,
+      seed: ref.seed,
+      safe_mode: false,
+      hide_watermark: true,
+    });
+    if (!response.images?.[0]) {
+      throw new Error(`Storyboard reference "${ref.slug}": no image returned.`);
+    }
+    finalPath = await writeImageBytesSmart(Buffer.from(response.images[0].b64_json, 'base64'), imgPath);
+    console.log(`  Storyboard ref: saved -> ${basename(finalPath)} (text-only draft — no refs available)`);
+    // Only the text-only path logs its own recipe pass here — the drafted
+    // paths append theirs inside draftPanelWithReferences.
+    await appendRecipePass(finalPath, {
+      kind: 'generate',
+      role: 'identity',
+      model,
+      label: `storyboard blocking plate (${ref.slug})`,
+      prompt,
+      negativePrompt,
+      seed: ref.seed,
+      cfgScale,
+      aspectRatio: aspect,
+      resolution: '1K',
+    }, { provenance: 'generate', hasFace: ref.characters.length > 0 });
   }
-
-  const finalPath = await writeImageBytesSmart(imgBuffer, imgPath);
-  console.log(`  Storyboard ref: saved -> ${basename(finalPath)}`);
 
   await writeFile(imgPath.replace(/\.png$/, '.prompt.json'), JSON.stringify({
     slug: ref.slug,
@@ -211,20 +263,6 @@ export async function generateStoryboardReference(
     seed: ref.seed,
     generatedAt: new Date().toISOString(),
   }, null, 2), 'utf-8');
-
-  await appendRecipePass(finalPath, {
-    kind: 'generate',
-    role: 'identity',
-    model,
-    label: `storyboard blocking plate (${ref.slug})`,
-    prompt,
-    negativePrompt,
-    seed: ref.seed,
-    cfgScale,
-    aspectRatio: aspect,
-    resolution: '1K',
-    referenceImagePaths: refPaths.length > 0 ? refPaths : undefined,
-  }, { provenance: 'generate', hasFace: ref.characters.length > 0 });
 
   return { path: finalPath, skipped: false };
 }

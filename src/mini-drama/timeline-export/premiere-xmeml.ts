@@ -28,7 +28,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { pathToFileUri, probeAudioInfo, toFrames, xmlEscape } from './probe.js';
+import { pathToMediaSrc, probeAudioInfo, toFrames, xmlEscape } from './probe.js';
 import type { TimelineAudioClip, TimelineExportOptions, TimelineSegment } from './types.js';
 
 interface FileRecord {
@@ -109,9 +109,20 @@ export async function exportPremiereXml(opts: TimelineExportOptions): Promise<st
     audioByTrack[laneToTrackIndex(a.lane)].push(a);
   }
 
-  const masterDurSec = opts.totalDurationSec
-    ?? opts.segments.reduce((acc, s) => Math.max(acc, s.startSec + s.durSec), 0);
-  const masterDurFrames = toFrames(masterDurSec, fps);
+  // Frame-accurate video spine: accumulate clip start/end in INTEGER FRAMES so
+  // clip N+1's start == clip N's end exactly. Deriving each start from the
+  // cumulative startSec float (rounded independently of duration) could leave a
+  // ~1-frame gap at cuts, the same defect fixed in the FCPXML exporters.
+  const segDurFrames = opts.segments.map(s => toFrames(s.durSec, fps));
+  const segStartFrames: number[] = [];
+  {
+    let acc = 0;
+    for (const df of segDurFrames) {
+      segStartFrames.push(acc);
+      acc += df;
+    }
+  }
+  const masterDurFrames = segDurFrames.reduce((a, b) => a + b, 0);
 
   // 3. Track files that have already emitted their <pathurl>. Subsequent
   //    references in <clipitem> use the bare <file id="..."/> form.
@@ -121,7 +132,10 @@ export async function exportPremiereXml(opts: TimelineExportOptions): Promise<st
     if (!includePath) {
       return [`              <file id="${rec.id}"/>`];
     }
-    const uri = pathToFileUri(rec.path);
+    const uri = pathToMediaSrc(rec.path, {
+      relativeTo: opts.relativePaths ? dirname(opts.outputPath) : undefined,
+      encode: true,
+    });
     const lines = [
       `              <file id="${rec.id}">`,
       `                <name>${xmlEscape(rec.name)}</name>`,
@@ -178,8 +192,9 @@ export async function exportPremiereXml(opts: TimelineExportOptions): Promise<st
   for (let i = 0; i < opts.segments.length; i++) {
     const s = opts.segments[i];
     const rec = (s as TimelineSegment & { _file: FileRecord })._file;
-    const startFr = toFrames(s.startSec, fps);
-    const endFr = startFr + toFrames(s.durSec, fps);
+    const durFr = segDurFrames[i];
+    const startFr = segStartFrames[i];
+    const endFr = startFr + durFr;
     const includePath = !emittedFiles.has(rec.id);
     lines.push(`          <clipitem id="vclip-${i + 1}">`);
     lines.push(`            <name>${xmlEscape(s.label)}</name>`);
@@ -188,7 +203,7 @@ export async function exportPremiereXml(opts: TimelineExportOptions): Promise<st
     lines.push(`            <start>${startFr}</start>`);
     lines.push(`            <end>${endFr}</end>`);
     lines.push(`            <in>0</in>`);
-    lines.push(`            <out>${toFrames(s.durSec, fps)}</out>`);
+    lines.push(`            <out>${durFr}</out>`);
     for (const ln of fileElement(rec, includePath, rec.durFrames)) lines.push(ln);
     lines.push(`          </clipitem>`);
   }

@@ -88,32 +88,25 @@ export async function generateImage(
 // ---- generateWithReferences -----------------------------------------------
 
 /**
- * Generate a scene image while injecting character face references for
- * identity consistency across storyboard frames.
+ * @deprecated **This function CANNOT deliver image-conditioned generation and
+ * never could.** The Venice `/image/generate` endpoint has no reference-image
+ * input (its only image conditioning is `style_references`, aesthetic-only,
+ * on krea/luma models). The `referenceImages` bytes passed here are DROPPED —
+ * only a text line ("Image 1: face reference for X") reaches the model, which
+ * then draws the character from prompt text alone. This was the root cause of
+ * storyboard character drift (verified 2026-08-11): the original doc comment
+ * claimed the refs were sent in an `image` field, but no such field was ever
+ * assigned and no such multi-reference field exists in the API contract.
  *
- * **How it works**
+ * For real reference-conditioned drafting use `draftPanelWithReferences`
+ * (src/venice/reference-draft.ts), which routes through `/image/multi-edit` —
+ * the only image endpoint that accepts reference bytes (base + 2 layers).
  *
- * 1. The caller supplies up to 14 {@link CharacterReference} entries via
- *    `options.referenceImages`.
- * 2. The first N entries (where N = `options.faceSlots`, default 5, max 5)
- *    are treated as **face references**.  For each one a role-assignment line
- *    is prepended to the prompt so the model knows which reference image
- *    corresponds to which character:
- *
- *    ```
- *    Image 1: face reference for MARCUS (the detective)
- *    Image 2: face reference for LENA (the journalist)
- *    ```
- *
- * 3. All reference images (face + non-face) are concatenated as a
- *    comma-separated base-64 string in the `image` field, which Venice
- *    interprets as a multi-reference input.
- *
- * 4. The fidelity is set to a moderate default (0.35) to allow creative
- *    freedom while anchoring character likeness.
+ * Retained only for the legacy `storyboard/assembler.ts` lane. Emits a
+ * runtime warning on every call.
  *
  * @param client  An authenticated {@link VeniceClient} instance.
- * @param options Generation parameters plus reference images.
+ * @param options Generation parameters plus reference images (NOT SENT).
  * @returns       The generated image as base-64 and the seed used.
  */
 export async function generateWithReferences(
@@ -136,6 +129,14 @@ export async function generateWithReferences(
   } = options;
 
   // ---- Validate reference counts ------------------------------------------
+
+  if (referenceImages.length > 0) {
+    console.warn(
+      `  ⚠ generateWithReferences: ${referenceImages.length} reference image(s) supplied but /image/generate ` +
+      'has NO reference input — the bytes are NOT sent; identity is prompt-text only. ' +
+      'Use draftPanelWithReferences (multi-edit) for real reference conditioning.',
+    );
+  }
 
   if (referenceImages.length > MAX_REFERENCE_IMAGES) {
     throw new Error(

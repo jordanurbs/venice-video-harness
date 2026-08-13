@@ -141,7 +141,7 @@ export type EntityArt = Map<string, string[]>;
 
 /** Reference angles to show per entity, in display order. */
 const CHARACTER_ART_ANGLES = ['front.png', 'full-body.png'];
-const LOCATION_ART_ANGLES = ['wide.png', 'medium.png', 'detail.png'];
+const LOCATION_ART_ANGLES = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
 
 export async function buildEntityArt(
   series: SeriesState,
@@ -276,6 +276,12 @@ ${language.locationGuidance}
 
 Treat 4K as a final delivery/finishing target, never as a reason to make every draft generation at 4K. Native dialogue means the selected video model speaks in-frame; Seedance and HappyHorse use voice-donor references when available. Exact lip-sync means Venice speech is rendered first, passed to the video model as an audio file, and the character's mouth follows that recording. Respect the project's selected audio strategy.
 
+THE AESTHETIC IS TIME-INVARIANT. The "aesthetic" object describes the ONE look shared by every frame of the project — it is injected verbatim into every reference image, storyboard panel, and video generation. It must NEVER describe a change over the story ("starts X, blooms into Y", "act three introduces Z") and must never name story events or one-scene elements (a celebration, confetti, an explosion): those leak into every generation, including scenes they don't belong in. Story-driven visual shifts belong in the affected shots' own descriptions ("the room now warm and saturated, confetti falling"), not in the aesthetic. If the project genuinely changes look mid-story, the aesthetic describes the DOMINANT/opening look only.
+
+RECURRING PROPS ARE CAST. Any inanimate object that appears in 2+ shots, carries a plot beat, or gets an insert/close-up of its own (a hero phone, a letter, a weapon, a vehicle, a MacGuffin) must be nominated as an OBJECT CAST MEMBER in "characters": name in CAPS (e.g. "THE PHONE"), gender "other", age "n/a", wardrobe "n/a", and a "baseTraits" field of the form "inanimate object, prop; <exact look: era, materials, color, wear, distinguishing marks>; shown alone on a neutral background, clean product-plate framing, no people, no hands, no faces, no scene furniture". The description/fullDescription lock the object's exact appearance. List the object's name in each shot's "characters" array exactly like a person, so the reference pipeline anchors its identity across shots. Do NOT nominate incidental set dressing — only objects whose visual identity must hold across separately generated shots.
+
+OBJECT CAST STAYS OUT OF LOCATIONS. A location's "description", "lightingNotes", and "spatialAnchors" must NEVER mention an object cast member (or a close synonym of one — "a sealed letter on the desk", "the case ledger", "an open ledger"): location plates are generated as EMPTY clean stages, and any hero prop painted into the plate becomes a duplicate look-alike when the real reference is composited in per shot. Generic set dressing (books, papers, instruments) is fine; the specific hero props are not. If the geography needs a named surface for a prop ("the desk where the ledger sits"), name the SURFACE in spatialAnchors ("the detective's desk"), never the prop.
+
 SPATIAL CONSISTENCY IS A FIRST-CLASS DELIVERABLE. Every location gets a "spatialAnchors" field: 3-5 named landmarks and their FIXED positions relative to each other (e.g. "bar counter along the back wall; entrance door opposite it; neon window left of the door as seen from the counter"). Every shot with characters gets a "blocking" field: 1-2 sentences of concrete geometry — each character's position relative to the location's named anchors, their frame side (screen left/center/right) and depth (foreground/background), and their facing/eyeline direction. Across consecutive shots in a scene, characters keep their screen side and relative positions unless a movement is written into the action; preserve screen direction and eyelines (180-degree rule); and always reference the SAME named anchors so "by the window" means one specific window. This geometry is injected verbatim into every image, blocking-plate, and video prompt, so vague blocking becomes spatial drift on screen.
 
 Every shot must have one dramatic intention, specific camera/blocking/light/performance direction, a location slug, a valid duration string, and no background music or sound effects baked into its description. Return ONLY valid JSON matching the requested schema.`;
@@ -326,7 +332,7 @@ ${JSON.stringify({
     themes: ['theme'],
     structure: [{ name: 'Act or movement', purpose: 'dramatic purpose', beats: ['beat'] }],
     aesthetic: { style: '', palette: '', lighting: '', lensCharacteristics: '', filmStock: '' },
-    characters: [{ name: '', gender: 'other', age: '', description: '', fullDescription: '', wardrobe: '', voiceDescription: '', locked: false, seed: 1 }],
+    characters: [{ name: '', gender: 'other', age: '', description: '', fullDescription: '', wardrobe: '', voiceDescription: '', baseTraits: 'omit for people; for object cast: "inanimate object, prop; <exact look>; shown alone on a neutral background, clean product-plate framing, no people, no hands, no faces, no scene furniture"', locked: false, seed: 1 }],
     locations: [{ name: '', slug: '', description: '', lightingNotes: '', spatialAnchors: 'named landmarks and their fixed relative positions', seed: 1 }],
     script: { episode: 1, title: '', seriesName: series.name, totalDuration: '', status: 'draft', locations: [], shots: [{ shotNumber: 1, type: 'establishing', environment: 'DAY_EXTERIOR', location: '', duration: '10s', videoModel: 'atmosphere', description: '', blocking: 'each character/object: position vs named location anchors, frame side, depth, facing/eyeline — consistent with adjacent shots', panelDescription: '', characters: [], dialogue: null, sfx: null, cameraMovement: '', transition: 'CUT' }] },
     productionNotes: { delivery: inputs.delivery, audioApproach: '', continuityPriorities: [''], risks: [''], openQuestions: [''] },

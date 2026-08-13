@@ -9,7 +9,9 @@
 //     it on <asset> fails DTD validation.)
 //   - per-asset audioRate + audioChannels probed from each file
 //   - primary storyline: one <asset-clip> per video segment in sequence, with
-//     <adjust-volume amount="-96dB"/> to mute the segment's silent audio
+//     <adjust-volume amount="0dB"/> so the clip's native audio plays at full
+//     volume (dialogue/ambient is baked into the video clips). Connected audio
+//     clips (dialogue/sfx/music) still ride their own lanes below.
 //   - connected audio MUST be children of their containing primary clip (NOT
 //     siblings on the spine). Each child <audio> uses lane="-N" (negative =
 //     connected below primary) and an offset expressed in the parent's local
@@ -24,7 +26,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
-  pathToFileUri,
+  pathToMediaSrc,
   probeAudioInfo,
   segmentContaining,
   toRationalTime,
@@ -108,8 +110,22 @@ export async function exportFcpxml(opts: TimelineExportOptions): Promise<string>
   }
 
   // 3. Emit XML.
-  const masterDur = opts.totalDurationSec
-    ?? opts.segments.reduce((acc, s) => Math.max(acc, s.startSec + s.durSec), 0);
+  // Frame-accurate spine: accumulate clip offsets in INTEGER FRAMES so that
+  // clip N+1's offset == clip N's offset + clip N's duration, exactly.
+  // Rounding each clip's offset (from the cumulative startSec float) and its
+  // duration independently let the two disagree by up to a frame, leaving a
+  // ~1-frame black gap at every cut on import. Accumulating in frames removes
+  // it: the sequence duration is the summed frames.
+  const segDurFrames = opts.segments.map(s => Math.max(1, Math.round(s.durSec * fps)));
+  const segOffsetFrames: number[] = [];
+  {
+    let acc = 0;
+    for (const df of segDurFrames) {
+      segOffsetFrames.push(acc);
+      acc += df;
+    }
+  }
+  const spineTotalFrames = segDurFrames.reduce((a, b) => a + b, 0);
   const lines: string[] = [];
   lines.push(`<?xml version="1.0" encoding="UTF-8"?>`);
   lines.push(`<!DOCTYPE fcpxml>`);
@@ -117,8 +133,9 @@ export async function exportFcpxml(opts: TimelineExportOptions): Promise<string>
   lines.push(`  <resources>`);
   lines.push(`    <format id="${FORMAT_ID}" name="FFVideoFormat${width}x${height}p${fps}" frameDuration="1/${fps}s" width="${width}" height="${height}" colorSpace="1-1-1 (Rec. 709)"/>`);
 
+  const relativeTo = opts.relativePaths ? dirname(opts.outputPath) : undefined;
   for (const a of assetById.values()) {
-    const uri = pathToFileUri(a.path);
+    const uri = pathToMediaSrc(a.path, { relativeTo, encode: true });
     const hasVideo = a.hasVideo ? '1' : '0';
     const formatAttr = a.hasVideo ? ` format="${FORMAT_ID}"` : '';
     lines.push(`    <asset id="${a.id}" name="${xmlEscape(a.name)}" start="0s" duration="${a.durRt}" hasVideo="${hasVideo}" hasAudio="1"${formatAttr} audioSources="1" audioChannels="${a.audioChannels}" audioRate="${a.audioRate}">`);
@@ -130,25 +147,30 @@ export async function exportFcpxml(opts: TimelineExportOptions): Promise<string>
   lines.push(`  <library>`);
   lines.push(`    <event name="${xmlEscape(eventName)}">`);
   lines.push(`      <project name="${xmlEscape(projectName)}">`);
-  lines.push(`        <sequence format="${FORMAT_ID}" duration="${toRationalTime(masterDur, fps)}" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">`);
+  lines.push(`        <sequence format="${FORMAT_ID}" duration="${spineTotalFrames}/${fps}s" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">`);
   lines.push(`          <spine>`);
 
   for (let i = 0; i < opts.segments.length; i++) {
     const s = opts.segments[i];
     const segAsset = (s as TimelineSegment & { _asset: AssetRecord })._asset;
     const children = buckets[i];
-    const open = `            <asset-clip name="${xmlEscape(s.label)}" ref="${segAsset.id}" offset="${toRationalTime(s.startSec, fps)}" duration="${toRationalTime(s.durSec, fps)}" start="0s" tcFormat="NDF" audioRole="dialogue.dialogue"`;
+    const offsetFrames = segOffsetFrames[i];
+    const durFrames = segDurFrames[i];
+    // Parent's frame-accurate spine offset in seconds — connected-audio child
+    // offsets are expressed relative to THIS, not the (float) startSec.
+    const parentOffsetSec = offsetFrames / fps;
+    const open = `            <asset-clip name="${xmlEscape(s.label)}" ref="${segAsset.id}" offset="${offsetFrames}/${fps}s" duration="${durFrames}/${fps}s" start="0s" tcFormat="NDF" audioRole="dialogue.dialogue"`;
     if (children.length === 0) {
       lines.push(open + `>`);
-      lines.push(`              <adjust-volume amount="-96dB"/>`);
+      lines.push(`              <adjust-volume amount="0dB"/>`);
       lines.push(`            </asset-clip>`);
       continue;
     }
     lines.push(open + `>`);
-    lines.push(`              <adjust-volume amount="-96dB"/>`);
+    lines.push(`              <adjust-volume amount="0dB"/>`);
     for (const ch of children) {
       const chAsset = (ch as TimelineAudioClip & { _asset: AssetRecord })._asset;
-      const localOffset = ch.startSec - s.startSec;
+      const localOffset = ch.startSec - parentOffsetSec;
       lines.push(`              <audio name="${xmlEscape(ch.label)}" ref="${chAsset.id}" offset="${toRationalTime(localOffset, fps)}" duration="${toRationalTime(ch.audioDur, fps)}" start="0s" lane="${ch.lane}" role="${ch.role}"/>`);
     }
     lines.push(`            </asset-clip>`);

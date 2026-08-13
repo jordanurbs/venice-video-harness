@@ -343,5 +343,22 @@ export async function loadEpisodeScript(
   const filePath = join(episodeDir, 'script.json');
   if (!existsSync(filePath)) return null;
   const raw = await readFile(filePath, 'utf-8');
-  return JSON.parse(raw) as EpisodeScript;
+  const script = JSON.parse(raw) as EpisodeScript;
+
+  // Normalize malformed dialogue: workshop LLMs sometimes emit `dialogue: {}`
+  // or a dialogue object missing `character`/`line`. Every consumer guards
+  // with a truthy check then calls `shot.dialogue.character.toUpperCase()`,
+  // so an empty object crashes generate-videos mid-run (venice-4m-again,
+  // 2026-08-12: "Cannot read properties of undefined (reading 'toUpperCase')"
+  // after the first unit rendered). A dialogue without a speaker and a line
+  // is not dialogue — normalize it to null at the single load point.
+  for (const shot of script.shots ?? []) {
+    const d = shot.dialogue as { character?: unknown; line?: unknown } | null | undefined;
+    if (d && (typeof d.character !== 'string' || d.character.trim() === ''
+      || typeof d.line !== 'string' || d.line.trim() === '')) {
+      console.warn(`  ⚠ Shot ${shot.shotNumber}: malformed dialogue (missing character/line) — treating as no dialogue.`);
+      shot.dialogue = null;
+    }
+  }
+  return script;
 }

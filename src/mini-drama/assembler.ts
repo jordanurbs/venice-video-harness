@@ -140,6 +140,7 @@ function normalizeClip(
   inputPath: string,
   outputPath: string,
   trim?: ShotTrim,
+  nativeAudio?: 'mute' | 'duck' | 'keep',
 ): void {
   const filters: string[] = [];
   const ffmpegArgs: string[] = ['-y'];
@@ -165,6 +166,30 @@ function normalizeClip(
   if (filters.length > 0) {
     ffmpegArgs.push('-vf', filters.join(','));
   }
+
+  // Audio processing, applied in EVERY assembly path (native or
+  // dialogue-replace) so the documented "shot.nativeAudio always wins"
+  // contract holds:
+  //   - per-shot native level: mute (Seedance sometimes bakes a score/drone
+  //     into a non-dialogue beat — muting it here leaves only the post music
+  //     bed), duck, or keep;
+  //   - de-click: a short fade in/out on every clip removes the pop at hard
+  //     cuts between separately-generated units (a Seedance single's junk
+  //     head, or a native line ending without a breath tail), without
+  //     audibly shortening speech.
+  const audioFilters: string[] = [];
+  if (nativeAudio === 'mute') audioFilters.push('volume=0');
+  else if (nativeAudio === 'duck') audioFilters.push('volume=0.3');
+  const rawDur = getVideoDuration(inputPath);
+  const effDur = Math.max(0, rawDur - (trim?.trimStart ?? 0) - (trim?.trimEnd ?? 0));
+  if (effDur > 0.2) {
+    const outStart = Math.max(0, effDur - 0.04).toFixed(3);
+    audioFilters.push('afade=t=in:st=0:d=0.02', `afade=t=out:st=${outStart}:d=0.04`);
+  }
+  if (audioFilters.length > 0) {
+    ffmpegArgs.push('-af', audioFilters.join(','));
+  }
+
   ffmpegArgs.push(
     '-c:v',
     'libx264',
@@ -234,6 +259,16 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
 
   const trimMap = new Map(shotTrims.map(t => [t.shotNumber, t]));
 
+  // Per-shot lookup so `nativeAudio` (mute/duck/keep) applies in the normalize
+  // pass below — used by BOTH the native and dialogue-replace mixes.
+  const shotByKey = new Map<string, ShotScript>();
+  if (options.shots) {
+    for (const s of options.shots) {
+      shotByKey.set(shotKey(s.shotNumber), s);
+      if (s.shotIdSuffix) shotByKey.set(shotKey(`${s.shotNumber}${s.shotIdSuffix}`), s);
+    }
+  }
+
   // ── Step 1: Normalize all clips to identical encoding ──
   const normDir = join(dirname(outputPath), '.tmp-norm');
   await mkdir(normDir, { recursive: true });
@@ -247,13 +282,15 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
     const shotNum = parseInt(shotNumStr, 10);
     const normPath = join(normDir, `${shotName}.mp4`);
     const trim = trimMap.get(shotNum);
+    const matchingShot = shotByKey.get(shotKey(shotNumStr));
 
     const trimInfo: string[] = [];
     if (trim?.trimStart) trimInfo.push(`trim start ${trim.trimStart}s`);
     if (trim?.trimEnd) trimInfo.push(`trim end ${trim.trimEnd}s`);
     if (trim?.flip) trimInfo.push('flip');
+    if (matchingShot?.nativeAudio) trimInfo.push(`native=${matchingShot.nativeAudio}`);
 
-    normalizeClip(videoPath, normPath, trim);
+    normalizeClip(videoPath, normPath, trim, matchingShot?.nativeAudio);
     normalizedFiles.push(normPath);
 
     const info = trimInfo.length > 0 ? ` (${trimInfo.join(', ')})` : '';
@@ -267,17 +304,6 @@ export async function assembleEpisode(options: AssemblyOptions): Promise<string>
     console.log(`  Replacing dialogue with Venice TTS (native audio default ${Math.round(nativeAudioVolume * 100)}%; per-shot shot.nativeAudio overrides)...`);
     const tmpDir = join(dirname(outputPath), '.tmp-dialogue-mix');
     await mkdir(tmpDir, { recursive: true });
-
-    // Build a quick lookup so per-shot `nativeAudio` overrides win.
-    const shotByKey = new Map<string, ShotScript>();
-    if (options.shots) {
-      for (const s of options.shots) {
-        shotByKey.set(shotKey(s.shotNumber), s);
-        if (s.shotIdSuffix) {
-          shotByKey.set(shotKey(`${s.shotNumber}${s.shotIdSuffix}`), s);
-        }
-      }
-    }
 
     processedFiles = [];
     let missing = 0;

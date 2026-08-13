@@ -1409,36 +1409,72 @@ export function buildCharacterReferencePromptParts(
   const cap = options?.maxChars
     ?? getMaxPositivePromptChars(options?.model ?? 'seedream-v5-lite');
 
-  const anglePrompts: Record<string, string> = {
+  // Object cast members (recurring hero props riding the character system —
+  // see the workshop's RECURRING PROPS ARE CAST rule) must not get the
+  // person-portrait angle ladder: "front portrait, looking at camera" plus a
+  // people-heavy series style overwhelms "inanimate object" and renders a
+  // person (the THE-PHONE-as-detective failure, 2026-08-11). Objects get
+  // product-plate angle language and person-suppressing negatives instead.
+  const isObject = /^\s*inanimate object/i.test(char.baseTraits ?? '');
+
+  const personAnglePrompts: Record<string, string> = {
     'front': 'front portrait, looking at camera, centered, studio lighting, neutral background',
     'three-quarter': 'three-quarter view, 45 degree angle, studio lighting, neutral background',
     'profile': 'side profile, 90 degree angle, studio lighting, neutral background',
     'full-body': 'full body, head to toe, standing pose, studio lighting, neutral background',
   };
+  const objectAnglePrompts: Record<string, string> = {
+    'front': 'product photograph of a single object, straight-on front view, centered, studio lighting, plain neutral background, nothing else in frame',
+    'three-quarter': 'product photograph of a single object, three-quarter view at 45 degrees, studio lighting, plain neutral background, nothing else in frame',
+    'profile': 'product photograph of a single object, side view at 90 degrees, studio lighting, plain neutral background, nothing else in frame',
+    'full-body': 'product photograph of a single object, full view showing the entire object, studio lighting, plain neutral background, nothing else in frame',
+  };
+  const anglePrompts = isObject ? objectAnglePrompts : personAnglePrompts;
 
-  // Style is a single front-loaded cue; the rest (palette, lensCharacteristics,
-  // film stock) move to negativeAdditions as anti-realism guards.
-  const styleCue = aesthetic.style;
+  // IDENTITY OUTRANKS STYLE (2026-08-11). The old order put the style cue
+  // first and greedily appended until the cap; a long authored aesthetic
+  // (e.g. a 390-char style on a 300-cap model) consumed the whole budget and
+  // the prompt shipped with NO angle, NO description, NO wardrobe — every
+  // sheet rendered the same style tableau with invented figures
+  // (venice-4m-users, all 16 angles identical). A reference sheet with weak
+  // style but the right subject is useful; the inverse is garbage.
+  //
+  // New contract: the angle instruction and a character anchor are ALWAYS
+  // present (hard floor); the style cue gets whatever budget remains and is
+  // truncated at a word boundary when it doesn't fit.
+  const anglePart = `${anglePrompts[angle]}.`;
 
-  // Build prompt parts in priority order. We greedily append until the cap
-  // is hit; the tail is dropped and the consumer can choose to push the
-  // dropped pieces into the negative prompt.
-  const parts = [
-    `STYLE: ${styleCue}.`,
-    `${anglePrompts[angle]}.`,
-    `${char.fullDescription}.`,
-    `${baseTraits}.`,
-    `${char.wardrobe}.`,
-  ];
-  let positive = '';
-  for (const p of parts) {
-    const candidate = positive ? `${positive} ${p}` : p;
-    if (candidate.length > cap) break;
-    positive = candidate;
+  // Character anchor, itself budget-aware: traits and wardrobe are
+  // non-negotiable; fullDescription is trimmed to fit around them.
+  // Placeholder wardrobe values on object cast members ("n/a", "none")
+  // must not leak literal junk tokens into the prompt.
+  const wardrobe = /^\s*(n\/?a|none|-)\s*\.?\s*$/i.test(char.wardrobe ?? '')
+    ? ''
+    : char.wardrobe;
+  const identityBudget = Math.max(cap - anglePart.length - 1, 120);
+  const fixedIdentity = [`${baseTraits}.`, wardrobe ? `${wardrobe}.` : '']
+    .filter(Boolean).join(' ');
+  let descBudget = identityBudget - fixedIdentity.length - 1;
+  let desc = char.fullDescription;
+  if (desc.length + 1 > descBudget) {
+    desc = descBudget > 40 ? `${desc.slice(0, descBudget - 1).replace(/\s+\S*$/, '')}` : '';
   }
-  // If the very first part already exceeds the cap, hard-truncate.
-  if (!positive) {
-    positive = parts[0].slice(0, cap);
+  const identityPart = [desc ? `${desc}.` : '', fixedIdentity].filter(Boolean).join(' ');
+
+  let positive = `${anglePart} ${identityPart}`.trim();
+  // Hard floor even if identity alone overflows a tiny cap.
+  if (positive.length > cap) {
+    positive = positive.slice(0, cap).replace(/\s+\S*$/, '');
+  }
+
+  // Style rides in the remaining budget, truncated at a word boundary.
+  const styleBudget = cap - positive.length - 1;
+  if (styleBudget > 24) {
+    let styleCue = `STYLE: ${aesthetic.style}.`;
+    if (styleCue.length > styleBudget) {
+      styleCue = `${styleCue.slice(0, styleBudget - 1).replace(/\s+\S*$/, '')}.`;
+    }
+    positive = `${positive} ${styleCue}`;
   }
 
   // Style-reminder content + photorealism guards belong on the negative side.
@@ -1464,10 +1500,17 @@ export function buildCharacterReferencePromptParts(
     ? ['photorealistic', 'photograph', 'photo', '3D render', 'Pixar']
     : [];
 
+  // NOTE (2026-08-11): the old code emitted `not ${filmStock}` and
+  // `not ${palette}` here. In a comma-separated negative prompt those parse
+  // as individual negative tokens — "oxblood", "gold leaf", "500T" — which
+  // actively suppressed the series' own palette in every reference sheet.
+  // Multi-word "not X" phrases do not survive tokenization; drop them and
+  // keep only single-concept anti-photoreal guards.
   const negativeAdditions = [
-    aesthetic.filmStock ? `not ${aesthetic.filmStock}` : null,
-    aesthetic.palette && wantsAntiPhotoreal ? `not ${aesthetic.palette}` : null,
     ...antiPhotorealParts,
+    // Object plates must never contain people — the aesthetic's human
+    // imagery ("detective", "celebration") otherwise leaks a person in.
+    ...(isObject ? ['person', 'people', 'human', 'man', 'woman', 'face', 'hands', 'portrait'] : []),
     'no text',
     'no labels',
     'no annotations',

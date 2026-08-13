@@ -1,7 +1,6 @@
-import { readFile, writeFile, rename } from 'node:fs/promises';
+import { writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import type { VeniceClient } from '../venice/client.js';
 import type { MultiEditModel } from '../venice/types.js';
 import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
@@ -9,110 +8,10 @@ import type { SeriesState, ShotScript, ShotEnvironment, MiniDramaCharacter } fro
 import { FEMALE_BASE_TRAITS, MALE_BASE_TRAITS, DAYTIME_ENVIRONMENTS, DEFAULT_IMAGE_EDIT_MODEL } from '../series/types.js';
 import { getCharacterDir } from '../series/manager.js';
 import { appendRecipePass } from '../venice/recipe.js';
-
-function runCommand(command: string, args: string[]): string {
-  const result = spawnSync(command, args, {
-    encoding: 'utf-8',
-    stdio: 'pipe',
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
-    const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
-    const detail = stderr || stdout || `exit code ${result.status}`;
-    throw new Error(`${command} failed: ${detail}`);
-  }
-  return typeof result.stdout === 'string' ? result.stdout : '';
-}
-
-/**
- * Venice multi-edit always returns 1024x1024 regardless of input.
- * This crops the center of the square output to match the original
- * panel's aspect ratio, then scales to the original dimensions.
- *
- * For 9:16 (768x1376): crops center 576x1024 strip, scales to 768x1376.
- * Veo 3.1 auto-corrects 1:1 input, so atmosphere shots can skip this.
- *
- * WARNING: For 16:9 panels (1376x768), the 1:1→16:9 crop removes ~25%
- * from top and bottom. Close-up face shots lose foreheads and chins.
- * For close-ups needing forehead detail (logos, sigils), generate the
- * panel from scratch instead of multi-editing an existing one.
- */
-function getImageDimensions(filePath: string): [number, number] | null {
-  const info = runCommand('ffprobe', [
-    '-v',
-    'error',
-    '-select_streams',
-    'v:0',
-    '-show_entries',
-    'stream=width,height',
-    '-of',
-    'csv=p=0:s=x',
-    filePath,
-  ]).trim();
-  const match = info.match(/^(\d+)x(\d+)$/);
-  return match ? [Number(match[1]), Number(match[2])] : null;
-}
-
-/**
- * Convert WebP-disguised PNGs to real PNGs (Venice returns WebP internally).
- * This ensures multi-edit gets proper PNG input and dimensions parse correctly.
- */
-async function ensureRealPng(filePath: string): Promise<void> {
-  const raw = await readFile(filePath);
-  const isWebp =
-    raw.length >= 12 &&
-    raw.subarray(0, 4).toString('ascii') === 'RIFF' &&
-    raw.subarray(8, 12).toString('ascii') === 'WEBP';
-  if (isWebp) {
-    const tmpPath = filePath.replace(/\.png$/, '-webp-conv.png');
-    runCommand('ffmpeg', ['-i', filePath, '-y', tmpPath]);
-    await rename(tmpPath, filePath);
-  }
-}
-
-async function restoreAspectRatio(
-  filePath: string,
-  targetWidth: number,
-  targetHeight: number,
-): Promise<void> {
-  const dims = getImageDimensions(filePath);
-  if (!dims) return;
-  const [curW, curH] = dims;
-  if (curW === targetWidth && curH === targetHeight) return;
-
-  const targetRatio = targetWidth / targetHeight;
-  const curRatio = curW / curH;
-
-  // Only crop if aspect ratios actually differ
-  if (Math.abs(targetRatio - curRatio) < 0.01) return;
-
-  let cropW: number, cropH: number;
-  if (targetRatio < curRatio) {
-    // Target is taller (e.g. 9:16) -- crop width, keep height
-    cropH = curH;
-    cropW = Math.round(curH * targetRatio);
-  } else {
-    // Target is wider -- crop height, keep width
-    cropW = curW;
-    cropH = Math.round(curW / targetRatio);
-  }
-
-  const cropX = Math.round((curW - cropW) / 2);
-  const cropY = Math.round((curH - cropH) / 2);
-
-  const tmpPath = filePath.replace(/\.png$/, '-crop-tmp.png');
-  runCommand('ffmpeg', [
-    '-i',
-    filePath,
-    '-vf',
-    `crop=${cropW}:${cropH}:${cropX}:${cropY},scale=${targetWidth}:${targetHeight}:flags=lanczos`,
-    '-y',
-    tmpPath,
-  ]);
-  await rename(tmpPath, filePath);
-  console.log(`  Restored aspect ratio: ${curW}x${curH} → ${targetWidth}x${targetHeight}`);
-}
+// Multi-edit post-processing (WebP fix + 1:1→target aspect restore) is shared
+// with the reference-drafted panel path; see src/venice/edit-post.ts. The
+// 16:9 close-up crop warning documented there applies to every caller here.
+import { ensureRealPng, restoreAspectRatio, getImageDimensions } from '../venice/edit-post.js';
 
 function buildCharacterFixPrompt(
   char: MiniDramaCharacter,
@@ -216,19 +115,28 @@ export async function fixPanel(
   const wantLocationRef = Boolean(environmentRefPath) && existsSync(environmentRefPath!);
   for (const char of chars.slice(0, 2)) {
     const charDir = getCharacterDir(series, char.name);
-    const frontPath = join(charDir, 'front.png');
-    if (!existsSync(frontPath)) {
-      throw new Error(`Reference image not found for ${char.name}: ${frontPath}`);
+    // anchor.png (harvested from an approved render) outranks the generated
+    // sheets — same precedence as the reference-slot allocator and the
+    // reference-drafting path. Requiring front.png specifically made the
+    // whole refinement throw when only anchor/three-quarter existed — one
+    // of the "sometimes references aren't used" intermittency sources.
+    const primaryPath = ['anchor.png', 'front.png', 'three-quarter.png']
+      .map(f => join(charDir, f))
+      .find(p => existsSync(p));
+    if (!primaryPath) {
+      throw new Error(`No reference image found for ${char.name} in ${charDir} (looked for anchor.png, front.png, three-quarter.png)`);
     }
-    charRefs.push(await loadImageAsDataUri(frontPath));
-    charRefPaths.push(frontPath);
+    charRefs.push(await loadImageAsDataUri(primaryPath));
+    charRefPaths.push(primaryPath);
     // For single-character shots, use a second angle for stronger identity
     // anchoring — UNLESS a location ref wants that last slot.
     if (chars.length === 1 && !wantLocationRef) {
-      const threeQuarterPath = join(charDir, 'three-quarter.png');
-      if (existsSync(threeQuarterPath)) {
-        charRefs.push(await loadImageAsDataUri(threeQuarterPath));
-        charRefPaths.push(threeQuarterPath);
+      const secondPath = ['three-quarter.png', 'profile.png', 'full-body.png']
+        .map(f => join(charDir, f))
+        .find(p => existsSync(p) && p !== primaryPath);
+      if (secondPath) {
+        charRefs.push(await loadImageAsDataUri(secondPath));
+        charRefPaths.push(secondPath);
       }
     }
   }
@@ -292,6 +200,7 @@ export async function fixPanel(
   // called with at least one character reference, so the panel now
   // contains a human face.
   const editModelUsed = model ?? DEFAULT_IMAGE_EDIT_MODEL;
+  const anchoredNames = chars.slice(0, 2).map(c => c.name);
   await appendRecipePass(panelPath, {
     kind: 'multi-edit',
     role: 'identity',
@@ -300,9 +209,19 @@ export async function fixPanel(
     prompt,
     referenceImagePaths: charRefPaths,
     archivedPrevious,
-    extra: origW > 0 && origH > 0
-      ? { aspectRestore: `1024x1024 -> ${origW}x${origH} center crop + scale` }
-      : undefined,
+    extra: {
+      ...(origW > 0 && origH > 0
+        ? { aspectRestore: `1024x1024 -> ${origW}x${origH} center crop + scale` }
+        : {}),
+      // Same summary shape as reference-draft.ts — the web UI's per-shot
+      // badge reads the LAST referenceUsage in the recipe, so a repair pass
+      // supersedes the draft's record.
+      referenceUsage: {
+        base: 'panel',
+        anchored: anchoredNames,
+        textOnly: chars.slice(2).map(c => c.name),
+      },
+    },
   }, { provenance: 'edit', hasFace: true });
 
   console.log(`  Fixed panel saved: ${panelPath}`);

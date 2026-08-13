@@ -19,7 +19,7 @@
 // ---------------------------------------------------------------------------
 
 import { join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import type { SeriesState, ShotScript } from '../series/types.js';
 import { getMaxReferenceImages } from '../series/types.js';
 import {
@@ -62,8 +62,17 @@ interface CandidateSlot {
   roleClause: string;
 }
 
-const LOCATION_ANGLE_ORDER_DEFAULT = ['wide.png', 'medium.png', 'detail.png'];
-const LOCATION_ANGLE_ORDER_CLOSER = ['medium.png', 'wide.png', 'detail.png'];
+// Wide (the hero plate) first, then the derived same-room angles, then the
+// legacy distance-ladder names (only present on pre-2026-08-13 projects). The
+// derived angles are all multi-edits of the wide plate, so they depict ONE
+// coherent space — safe to send together as "same place, different angle".
+const LOCATION_ANGLE_ORDER_DEFAULT = [
+  'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png',
+];
+// Closer shot types no longer prefer a "medium" distance angle (the ladder is
+// gone); the same wide-first order applies. Kept as a named constant so the
+// call site reads clearly.
+const LOCATION_ANGLE_ORDER_CLOSER = LOCATION_ANGLE_ORDER_DEFAULT;
 
 /**
  * Build the ordered reference slot plan for a shot on an @Image-tag model.
@@ -135,18 +144,44 @@ export function buildReferenceSlotPlan(
       const closer = shot.type === 'close-up' || shot.type === 'reaction' || shot.type === 'insert';
       const order = closer ? LOCATION_ANGLE_ORDER_CLOSER : LOCATION_ANGLE_ORDER_DEFAULT;
       const angleRole: Record<string, string> = {
-        'wide.png': 'a wide angle of the location',
+        'wide.png': 'a wide establishing angle of the location',
+        'angle-2.png': 'another angle of the same location',
+        'angle-3.png': 'another angle of the same location',
+        'angle-4.png': 'another angle of the same location',
         'medium.png': 'a second angle of the same location',
         'detail.png': 'a third angle of the same location (detail)',
       };
+      // Custom angles (operator-generated extra coverage beyond the canonical
+      // set, e.g. reverse-angle.png) queue after the canonical angles, in
+      // stable name order. Archives and sidecar-less strays are excluded by
+      // pattern.
+      const canonical = new Set([
+        'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png',
+      ]);
+      let customAngles: string[] = [];
+      try {
+        customAngles = readdirSync(dir)
+          .filter(f =>
+            /\.png$/i.test(f)
+            && !canonical.has(f)
+            && !f.includes('archive')
+            && !f.includes('-pre-'))
+          .sort();
+      } catch {
+        // No location dir — canonical loop below reports nothing either.
+      }
+
       let angleCount = 0;
-      for (const f of order) {
+      for (const f of [...order, ...customAngles]) {
         const p = join(dir, f);
         if (!existsSync(p)) continue;
         angleCount += 1;
+        const customName = canonical.has(f) ? null : f.replace(/\.png$/i, '').replace(/-/g, ' ');
         const anglePhrase = angleCount === 1
           ? `is the location environment reference (${loc.name}) — match its setting, architecture, and lighting; it is not a character`
-          : `is ${angleRole[f] ?? 'another angle of the same location'} (${loc.name}) — same place, different angle; keep the environment consistent with it`;
+          : customName
+            ? `is another angle of the same location (${loc.name}: ${customName}) — same place, different angle; keep the environment consistent with it`
+            : `is ${angleRole[f] ?? 'another angle of the same location'} (${loc.name}) — same place, different angle; keep the environment consistent with it`;
         location.push({
           kind: 'location',
           path: p,

@@ -7,6 +7,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { relative as relPath } from 'node:path';
 import type { TimelineSegment } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -42,6 +43,38 @@ export function toFrames(seconds: number, fps: number): number {
  */
 export function pathToFileUri(p: string): string {
   return 'file://' + encodeURI(p).replace(/'/g, '%27');
+}
+
+/**
+ * Build the `src` value for a media reference, either an absolute `file://`
+ * URI or a path RELATIVE to the XML document's directory.
+ *
+ * Relative form (e.g. `./scene-001/shot-001.mp4`) is what makes an exported
+ * timeline portable: Apple's FCPXML `media-rep` spec explicitly allows a URL
+ * "relative to the location of the FCPXML document", and DaVinci Resolve /
+ * Premiere honor it too. As long as the `.fcpxml` travels with its media in
+ * the same relative layout (the harness always writes it beside `scene-001/`
+ * and `audio/`), the media resolves on any machine. Absolute paths never
+ * survive a move without a manual relink.
+ *
+ * @param relativeTo  When set, emit a relative path from this directory.
+ *                    When omitted, emit an absolute `file://` URI.
+ * @param encode      URI-encode the result (true for FCPXML/Premiere; false
+ *                    for the DaVinci variant, which takes raw paths).
+ */
+export function pathToMediaSrc(
+  p: string,
+  opts: { relativeTo?: string; encode?: boolean } = {},
+): string {
+  const { relativeTo, encode = true } = opts;
+  if (relativeTo) {
+    let rel = relPath(relativeTo, p);
+    // Keep URL slashes; on macOS/Linux path.relative already uses '/'.
+    rel = rel.split(/[\\/]/).join('/');
+    if (!rel.startsWith('.') && !rel.startsWith('/')) rel = `./${rel}`;
+    return encode ? encodeURI(rel).replace(/'/g, '%27') : rel;
+  }
+  return encode ? 'file://' + encodeURI(p).replace(/'/g, '%27') : 'file://' + p;
 }
 
 /**

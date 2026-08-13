@@ -62,6 +62,14 @@ export interface TimelineExportOptions {
   eventName?: string;
   /** Project / sequence name. Defaults to `<eventName> — fine-tune`. */
   projectName?: string;
+  /**
+   * Emit media `src` paths RELATIVE to the output document's directory
+   * (portable — the timeline resolves media on any machine as long as the
+   * XML travels with its media in the same relative layout). When false/unset,
+   * absolute `file://` paths are written (break on a machine move). Default
+   * is set by the CLI to relative.
+   */
+  relativePaths?: boolean;
 }
 
 // ---- Back-compat aliases (FCPXML-specific names) --------------------------

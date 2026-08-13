@@ -27,7 +27,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { probeAudioInfo, segmentContaining, toRationalTime, xmlEscape } from './probe.js';
+import { pathToMediaSrc, probeAudioInfo, segmentContaining, toRationalTime, xmlEscape } from './probe.js';
 import type { TimelineAudioClip, TimelineExportOptions, TimelineSegment } from './types.js';
 
 interface AssetRecord {
@@ -39,16 +39,6 @@ interface AssetRecord {
   durRt: string;
   audioRate: number;
   audioChannels: number;
-}
-
-/**
- * DaVinci-tuned variant of `pathToFileUri`. Wraps an absolute path in a
- * `file://` prefix WITHOUT URI-encoding spaces, apostrophes, or other
- * filesystem-legal characters. macOS / Linux Resolve both accept this form;
- * the FCP X path doesn't because FCPXML 1.10 validators sometimes flag it.
- */
-function pathToResolveFileUri(p: string): string {
-  return 'file://' + p;
 }
 
 export async function exportDavinciFcpxml(opts: TimelineExportOptions): Promise<string> {
@@ -105,8 +95,20 @@ export async function exportDavinciFcpxml(opts: TimelineExportOptions): Promise<
     buckets[segmentContaining(opts.segments, a.startSec)].push(a);
   }
 
-  const masterDur = opts.totalDurationSec
-    ?? opts.segments.reduce((acc, s) => Math.max(acc, s.startSec + s.durSec), 0);
+  // Frame-accurate spine: accumulate clip offsets in INTEGER FRAMES so that
+  // clip N+1's offset == clip N's offset + clip N's duration, exactly.
+  // Independently rounding offset and duration left a ~1-frame black gap at
+  // every cut on import. The sequence duration is the summed frames.
+  const segDurFrames = opts.segments.map(s => Math.max(1, Math.round(s.durSec * fps)));
+  const segOffsetFrames: number[] = [];
+  {
+    let acc = 0;
+    for (const df of segDurFrames) {
+      segOffsetFrames.push(acc);
+      acc += df;
+    }
+  }
+  const spineTotalFrames = segDurFrames.reduce((a, b) => a + b, 0);
 
   const lines: string[] = [];
   lines.push(`<?xml version="1.0" encoding="UTF-8"?>`);
@@ -117,9 +119,10 @@ export async function exportDavinciFcpxml(opts: TimelineExportOptions): Promise<
   // from the source media and avoids the false "missing LUT" warning.
   lines.push(`    <format id="${FORMAT_ID}" name="FFVideoFormat${width}x${height}p${fps}" frameDuration="1/${fps}s" width="${width}" height="${height}"/>`);
 
+  const relativeTo = opts.relativePaths ? dirname(opts.outputPath) : undefined;
   for (const a of assetById.values()) {
-    //  difference (3): raw file:// path, no URI-encoding.
-    const uri = pathToResolveFileUri(a.path);
+    //  difference (3): raw path, no URI-encoding (relative or absolute file://).
+    const uri = pathToMediaSrc(a.path, { relativeTo, encode: false });
     const hasVideo = a.hasVideo ? '1' : '0';
     const formatAttr = a.hasVideo ? ` format="${FORMAT_ID}"` : '';
     lines.push(`    <asset id="${a.id}" name="${xmlEscape(a.name)}" start="0s" duration="${a.durRt}" hasVideo="${hasVideo}" hasAudio="1"${formatAttr} audioSources="1" audioChannels="${a.audioChannels}" audioRate="${a.audioRate}">`);
@@ -131,25 +134,30 @@ export async function exportDavinciFcpxml(opts: TimelineExportOptions): Promise<
   lines.push(`  <library>`);
   lines.push(`    <event name="${xmlEscape(eventName)}">`);
   lines.push(`      <project name="${xmlEscape(projectName)}">`);
-  lines.push(`        <sequence format="${FORMAT_ID}" duration="${toRationalTime(masterDur, fps)}" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">`);
+  lines.push(`        <sequence format="${FORMAT_ID}" duration="${spineTotalFrames}/${fps}s" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">`);
   lines.push(`          <spine>`);
 
   for (let i = 0; i < opts.segments.length; i++) {
     const s = opts.segments[i];
     const segAsset = (s as TimelineSegment & { _asset: AssetRecord })._asset;
     const children = buckets[i];
-    const open = `            <asset-clip name="${xmlEscape(s.label)}" ref="${segAsset.id}" offset="${toRationalTime(s.startSec, fps)}" duration="${toRationalTime(s.durSec, fps)}" start="0s" tcFormat="NDF" audioRole="dialogue.dialogue"`;
+    const offsetFrames = segOffsetFrames[i];
+    const durFrames = segDurFrames[i];
+    // Parent's frame-accurate spine offset in seconds — connected-audio child
+    // offsets are expressed relative to THIS, not the (float) startSec.
+    const parentOffsetSec = offsetFrames / fps;
+    const open = `            <asset-clip name="${xmlEscape(s.label)}" ref="${segAsset.id}" offset="${offsetFrames}/${fps}s" duration="${durFrames}/${fps}s" start="0s" tcFormat="NDF" audioRole="dialogue.dialogue"`;
     if (children.length === 0) {
       lines.push(open + `>`);
-      lines.push(`              <adjust-volume amount="-96dB"/>`);
+      lines.push(`              <adjust-volume amount="0dB"/>`);
       lines.push(`            </asset-clip>`);
       continue;
     }
     lines.push(open + `>`);
-    lines.push(`              <adjust-volume amount="-96dB"/>`);
+    lines.push(`              <adjust-volume amount="0dB"/>`);
     for (const ch of children) {
       const chAsset = (ch as TimelineAudioClip & { _asset: AssetRecord })._asset;
-      const localOffset = ch.startSec - s.startSec;
+      const localOffset = ch.startSec - parentOffsetSec;
       //  difference (2): emit <audio-channel-source> hinting at the
       // actual channel count Resolve should mount the track as. Mono
       // dialogue (channels=1) imports as a mono Resolve track; stereo

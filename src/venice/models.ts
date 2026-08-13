@@ -77,6 +77,13 @@ export const MAX_POSITIVE_PROMPT_CHARS: Record<string, number> = {
   'seedream-v5-lite-edit': 300,
   'nano-banana-pro': 500,
   'nano-banana-pro-edit': 500,
+  // nano-banana-2 accepts long prompts (promptCharacterLimit 1500+ per the
+  // Venice API skill). It previously fell through to the 300-char default —
+  // a seedream-specific silent-reject guard — which truncated character
+  // reference prompts to a style fragment with NO character in it (the
+  // venice-4m-users all-sheets-identical failure, 2026-08-11).
+  'nano-banana-2': 1500,
+  'nano-banana-2-edit': 1500,
   'gpt-image-2': 600,
   'gpt-image-2-edit': 600,
 };

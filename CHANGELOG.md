@@ -1,5 +1,203 @@
 # Changelog
 
+## Unreleased — 2026-08-13
+
+### Added
+
+- **`storyboard-episode --shots <list>` — targeted panel regeneration.** Rebuild
+  only specific panels (comma/range list, e.g. `--shots 5,8,11` or `--shots 5-9`)
+  instead of the whole episode. Implies `--force` for the listed shots: their
+  existing panels are archived and rebuilt from the current reference set; every
+  other shot is left untouched, and all three passes (draft, refine, scene-ref)
+  honor the filter. The reference preflight is scoped to the targeted shots, so
+  an unrelated entity that lost its refs can't block a narrow rebuild. This is
+  the "I removed a bad character/location reference, rebuild just the panels that
+  were drafted from it" path.
+
+- **Web UI: per-shot "Regenerate panel" + "Regenerate affected panels".** The
+  Shots view now flags panels whose recipe was drafted from a reference image
+  that has since been removed from disk (an amber `refs removed` badge, plus a
+  banner listing the affected shots and the missing references). A per-shot
+  "Regenerate panel" button rebuilds one panel; the banner's "Regenerate
+  affected panels" button rebuilds them all in one `storyboard-episode --shots`
+  pass. Staleness is computed from the current panel's recipe passes only (the
+  passes at/after the most recent draft), so it clears as soon as a panel is
+  rebuilt and never false-positives on the append-only history of an archived
+  panel. Video-render passes never count — they feed the `.mp4`, not the `.png`.
+
+### Fixed
+
+- **Timeline exports keep clip audio at 0dB (native audio plays).** The spine
+  emitted `<adjust-volume amount="-96dB"/>` on every clip — a hangover from the
+  panels→video era when clips had silent audio and all sound came from connected
+  lanes. On native-audio cuts (Seedance dialogue/ambient baked into the clips)
+  that muted everything on import. Now every asset-clip is `0dB` (FCPXML +
+  DaVinci exporters). Connected dialogue/SFX/music still ride their own lanes.
+  (Follow-up idea: mute a clip only when a lane-1 dialogue clip replaces it, for
+  Venice-TTS dialogue-replace projects — captured in WORKFLOW-IMPROVEMENTS.)
+
+- **Timeline exports no longer leave a ~1-frame black gap at every cut.** The
+  spine emitted each clip's `offset` and `duration` by rounding floats to frames
+  independently (`toRationalTime(startSec)` vs `toRationalTime(durSec)`), so the
+  cumulative offset rounding and per-clip duration rounding disagreed by up to a
+  frame — on import each shot appeared to flash to black just before the next.
+  All three exporters now accumulate clip offsets in INTEGER FRAMES, so clip
+  N+1's offset is exactly clip N's offset + clip N's duration and the spine is
+  perfectly contiguous. The sequence/`<duration>` total is the summed frames,
+  and connected-audio child offsets are computed against the parent clip's
+  frame-accurate offset (not the float `startSec`). Applies to
+  `timeline-export/fcpxml.ts`, `davinci-fcpxml.ts`, and `premiere-xmeml.ts`
+  (whose integer `<start>`/`<end>` were likewise derived from the cumulative
+  float and are now accumulated).
+
+- **Timeline media paths default to ABSOLUTE again (relative broke FCP
+  linking).** A prior change in this same Unreleased cycle made the exporters
+  write media paths RELATIVE to the XML by default for cross-machine
+  portability. That regressed Final Cut Pro: with relative `./scene-001/...`
+  `src` values FCP failed to link many clips and relinking threw an error (FCP
+  effectively wants absolute `file://` paths). The default is now ABSOLUTE
+  `file://` again, which FCP links and relinks reliably. Relative output is
+  preserved as an OPT-IN via a new `--relative` flag on `export-timeline` /
+  `export-fcpxml` (still useful for Resolve/Premiere); `--absolute` and the
+  bare default both emit absolute paths. Cross-machine portability is handled
+  by FCP's File > Relink Files > Original Media (Locate All at the folder); a
+  future `export-timeline --bundle` (self-contained media copy beside the XML)
+  is the durable portability answer. The `pathToMediaSrc()` helper in
+  `timeline-export/probe.ts` still supports both modes.
+
+- **`shot.nativeAudio` (mute/duck/keep) is now honored in the native mix, not
+  only the dialogue-replace path.** The per-shot override was applied only when
+  replacing dialogue with Venice TTS; in the default native path it was ignored
+  despite the documented "shot.nativeAudio always wins" contract. It is now
+  applied in `normalizeClip` (via an audio `volume` filter) so it works in every
+  assembly. The motivating case: Seedance sometimes bakes a score/drone into a
+  non-dialogue beat's native track (visible as harmonic bands in a spectrogram),
+  which fought the post music bed and popped at the next cut; `nativeAudio:
+  'mute'` on those beats now leaves only the post bed.
+
+- **Audio pop at hard cuts between separately-generated units.** `assembler.ts`
+  `normalizeClip` now applies a short audio fade (20ms in / 40ms out) to every
+  clip during normalization. Hard cuts between a montage master and a
+  single-shot render popped because Seedance singles often carry a junk audio
+  burst at their head and native lines can end without a breath tail; the
+  per-clip de-click removes the click without audibly shortening speech.
+  Complements the cut-qa audio-pop check (rule 29).
+
+### Changed
+
+- **Location references are now coherent same-room angles (anchor → derive), and
+  storyboard plates are off by default.** See AGENTS.md rule 56 for the full
+  rationale. Two coupled changes:
+  - **`location-generator.ts` derives angles from one wide plate.** `wide.png`
+    is the only from-scratch t2i generation (the hero establishing plate);
+    `angle-2` / `angle-3` / `angle-4` are each a `/image/multi-edit` re-angle of
+    `wide.png` (nano-banana-2-edit), with a "SAME room, only the camera moves"
+    contract. This replaces the old `wide` / `medium` / `detail` ladder — three
+    INDEPENDENT text-to-image gens (same seed, different prompt) that produced
+    three different-looking rooms and were fed to the video model together as
+    "the same place," the root cause of location drift. Angle prompts lead with
+    the wall that should fill the new frame (a negative "turn away from X"
+    reverts to the master). The edit model preserves the wide's exact frame (no
+    1:1 crop). Legacy `medium`/`detail` are still read on old projects; the
+    default set is `wide,angle-2,angle-3,angle-4`. `wide.png` is generated first
+    automatically when a derivation needs it. Validated on `il-caso-impossibile`
+    (detectives-study, 3/3 coherent angles).
+  - **Storyboard blocking plates no longer auto-generate.**
+    `workshop-episode` / `generate-videos` skip plate generation unless
+    `videoDefaults.useStoryboardPlates: true` (`resolveUseStoryboardPlates`).
+    A full pictorial plate used as an R2V reference pulls every shot in a beat
+    toward one composition ("too similar" drift) and is a conflicting fourth
+    environment signal; spatial consistency now rides the coherent location
+    angles + the shot's text `blocking` (rule 49). Plates stay available via
+    `generate-storyboard-refs` and are still consumed as the PROTECTED slot
+    when present on disk. `reference-slots.ts`, the location-ref lookups
+    (`video-generator.ts`, `cli.ts`), the plate base image
+    (`storyboard-reference-generator.ts`), and the art-angle lists
+    (`workshop.ts`, `web/state.ts`) were updated to the new angle names.
+
+## Unreleased — 2026-08-11
+
+### Added
+
+- **Web UI: "Generate videos — skip storyboard" button.** Renders an episode
+  straight from references without panels or the storyboard QA gate
+  (`generate-videos --skip-qa`). On Seedance R2V this is pure reference mode:
+  character sheets, blocking plates, and location angles carry all
+  consistency and no start frame is sent. Shots with no references at all
+  are skipped with a warning. Shown in the Shots view whenever the QA gate
+  is not yet cleared; the billed-render confirm spells out the trade.
+
+- **`fix-flagged` — batch panel repair (web UI "Fix all flagged" button).**
+  Reads the episode's `qa-report.json` and runs the fix-panel multi-edit pass
+  across every flagged shot in one command. `--severity critical,moderate`
+  (default; FLAG-LOW is excluded — stylistic variance that identity edits
+  rarely improve), `--requa` re-runs `qa-storyboard --shots <fixed>` on just
+  the repaired panels. Each fix feeds the QA report's specific findings into
+  the recipe trail. Whitelisted in the web UI job runner; the Shots view shows
+  a "Fix all flagged" button whenever critical/moderate flags exist.
+
+- **Per-shot reference-usage visibility.** Every reference-conditioned pass
+  (draft, plate, fix) now records a `referenceUsage` summary in the recipe
+  sidecar — which identities were anchored to real reference bytes vs
+  prompt-text fallback, and what the base image was. The web UI Shots view
+  shows a per-shot badge: green `refs n/n` when fully anchored, amber with
+  the affected names when any character fell back to text-only (missing
+  sheet, or dropped by the multi-edit 2-layer budget). Text-only fallback
+  drafts record usage too, so degraded panels are visible at a glance
+  instead of buried in job logs.
+
+### Fixed
+
+- **`fixPanel` required `front.png` specifically and threw when a character
+  had only `anchor.png`/`three-quarter.png`** — one source of "sometimes the
+  reference isn't used": the whole refinement pass failed for that shot and
+  the unrefined draft shipped. Now resolves anchor → front → three-quarter,
+  the same precedence as the reference-slot allocator and reference drafting.
+
+- **Character reference sheets could ship with no character in the prompt.**
+  `buildCharacterReferencePromptParts` put the style cue first and greedily
+  appended parts until the per-model cap; a long authored aesthetic (390-char
+  style) on a model with the conservative 300-char default cap consumed the
+  whole budget, so every angle of every character shipped the SAME truncated
+  style-only prompt — 16 near-identical scene tableaus with invented figures,
+  objects rendered as people (venice-4m-users). Three fixes:
+  - Priority inverted: the angle instruction + a character anchor (traits,
+    wardrobe, trimmed description) are now a guaranteed floor; the style cue
+    gets the remaining budget and is word-boundary truncated.
+  - `nano-banana-2`/`-edit` added to `MAX_POSITIVE_PROMPT_CHARS` at 1500 —
+    they previously fell through to the 300 default, a seedream-specific
+    silent-reject guard.
+  - Dropped the `not ${palette}` / `not ${filmStock}` negative additions:
+    multi-word "not X" phrases tokenize into individual negative terms
+    ("oxblood", "gold leaf"), actively suppressing the series' own palette.
+  - Placeholder wardrobe values ("n/a", "none") on object cast members no
+    longer leak into prompts.
+
+- **Storyboard drafting never sent reference images (root cause of character
+  drift).** `generateWithReferences` claimed to attach character/location
+  reference bytes to `/image/generate`, but the endpoint has no reference
+  input and the bytes were silently dropped — every "reference-anchored"
+  panel and blocking plate was drafted from prompt text alone, leaving the
+  storyboard QA agent to repair identity and geography panel by panel.
+  Panel and plate drafting now routes through `/image/multi-edit` (the only
+  image endpoint that accepts reference bytes) via the new
+  `draftPanelWithReferences` (`src/venice/reference-draft.ts`):
+  - **Character shots with a location:** the panel is composed INTO the
+    location plate (base image) with character refs as layers — geography
+    inherited pixel-for-pixel, identity from real reference bytes, one call.
+  - **Character shots without a location:** t2i scene draft, then an
+    immediate identity composite before the panel lands.
+  - **Establishing shots with a location:** drafted as an edit of the
+    location plate instead of a text-only regeneration.
+  - **Blocking plates** (`storyboard-reference-generator.ts`) use the same
+    location-base + character-layer composition.
+  - Pass-2 identity refinement is skipped for reference-drafted panels
+    (identity is already real; a second edit only degrades).
+  - `generateWithReferences` is deprecated with a runtime warning; the
+    legacy `storyboard/assembler.ts` lane still calls it.
+  - Multi-edit post-processing (WebP fix + 1:1→target aspect restore) is
+    extracted from `panel-fixer.ts` into shared `src/venice/edit-post.ts`.
+
 ## 2.16.0 — 2026-08-10
 
 Released: the `seedance-2-5-montage` branch merged to main (PR #24) after a

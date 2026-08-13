@@ -154,6 +154,22 @@ export interface VideoModelDefaults {
    * CLI: `generate-videos --auto-edit` / `--no-auto-edit` override per run.
    */
   autoEdit?: boolean;
+  /**
+   * Auto-generate composed storyboard blocking plates per scene beat during
+   * `workshop-episode` and `generate-videos`. Default `false` (2026-08-13):
+   * the reference-first path anchors spatial consistency with coherent
+   * location angles (all derived from one wide plate — see
+   * `location-generator.ts`) plus the shot's authored text `blocking`
+   * (rule 49). A blocking plate is a full pictorial frame; feeding it as an
+   * R2V reference drags every shot in a beat toward the plate's composition
+   * ("too similar" drift), and its composited version of the location is a
+   * fourth, conflicting environment signal. Plates remain available on demand
+   * via `generate-storyboard-refs` (and are still consumed as a PROTECTED
+   * slot when present on disk) for dense multi-character blocking the text
+   * geometry can't disambiguate. Set `true` to restore the old auto-plate
+   * behaviour series-wide.
+   */
+  useStoryboardPlates?: boolean;
 }
 
 export interface ImageModelDefaults {
@@ -941,6 +957,18 @@ export function resolveMontageMode(
   videoDefaults?: Pick<VideoModelDefaults, 'montageMode'>,
 ): boolean {
   return videoDefaults?.montageMode !== false;
+}
+
+/**
+ * Auto-generate storyboard blocking plates? Off by default (2026-08-13) —
+ * the reference-first path relies on coherent location angles + text blocking.
+ * Plates are opt-in series-wide (`videoDefaults.useStoryboardPlates: true`) or
+ * on demand via `generate-storyboard-refs`.
+ */
+export function resolveUseStoryboardPlates(
+  videoDefaults?: Pick<VideoModelDefaults, 'useStoryboardPlates'>,
+): boolean {
+  return videoDefaults?.useStoryboardPlates === true;
 }
 
 export function resolveMontageModel(
