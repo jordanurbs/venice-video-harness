@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 2026-08-13
+## 2.17.0 — 2026-08-13
 
 ### Added
 
@@ -115,7 +115,7 @@
     (`storyboard-reference-generator.ts`), and the art-angle lists
     (`workshop.ts`, `web/state.ts`) were updated to the new angle names.
 
-## Unreleased — 2026-08-11
+## 2.17.0 — 2026-08-11 (reference drafting; shipped in 2.17.0)
 
 ### Added
 
