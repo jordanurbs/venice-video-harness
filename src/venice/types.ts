@@ -153,6 +153,13 @@ export interface VideoQueueRequest {
    * least one reference image (audio-only is rejected at validation).
    */
   reference_audio_urls?: string[];
+  /**
+   * Output encoding bitrate mode (Seedance 2.x). `'high'` encodes at ~5-6x the
+   * bitrate for sharper output and far fewer compression artifacts (larger
+   * files); `'standard'` is the Venice default. Does not affect token price.
+   * The harness attaches `'high'` to Seedance 2.5 renders by default.
+   */
+  bitrate_mode?: 'standard' | 'high';
 }
 
 export interface VideoQueueResponse {

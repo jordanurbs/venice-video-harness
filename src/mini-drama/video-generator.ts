@@ -44,7 +44,7 @@ import {
 } from './voice-reference.js';
 import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
-import { getVideoModel, modelSupportsDuration } from '../venice/models.js';
+import { getVideoModel, modelSupportsDuration, resolveBitrateMode, type BitrateMode } from '../venice/models.js';
 import { appendRecipePass } from '../venice/recipe.js';
 import {
   clearPendingJob,
@@ -533,6 +533,12 @@ interface RenderVideoOptions {
   audioPath?: string;
   videoUrl?: string;
   aspectRatio?: string;
+  /**
+   * Output encoding bitrate mode. Only attached for models that accept it
+   * (Seedance 2.x); Seedance 2.5 defaults to `'high'` for a large fidelity
+   * gain at no extra cost. Pass `'standard'` to opt back into smaller files.
+   */
+  bitrateMode?: BitrateMode;
   /** Seedance compatibility strategy when images aren't seedream-originated. */
   seedanceCompatibility?: 'prompt' | 'fallback' | 'launder';
   /**
@@ -639,6 +645,13 @@ async function renderVideoFile(
   } else if (effectiveModel.includes('sora-2')) {
     body.resolution = '720p';
   }
+
+  // bitrate_mode: Seedance 2.5 encodes at 'high' by default — ~5-6x the
+  // bitrate for a sharp, artifact-free file at no extra token cost. Other
+  // families don't accept the field, so resolveBitrateMode returns undefined
+  // and it's left off the body.
+  const bitrateMode = resolveBitrateMode(effectiveModel, options.bitrateMode);
+  if (bitrateMode) body.bitrate_mode = bitrateMode;
 
   // Seedance image-to-video inherits aspect from the start image and
   // returns HTTP 400 if aspect_ratio is provided. Reference-to-video and
@@ -981,6 +994,7 @@ async function pollRenderedVideo(
           referenceImagePaths: referenceImagePaths?.filter(isPath),
           extra: {
             audio: prompt.audio,
+            ...(body.bitrate_mode ? { bitrateMode: body.bitrate_mode } : {}),
             ...(voiceReferencePaths && voiceReferencePaths.length > 0
               ? { voiceReferencePaths: voiceReferencePaths.filter(isPath) } : {}),
             ...(sceneImagePaths && sceneImagePaths.length > 0

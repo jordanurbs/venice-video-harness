@@ -17,7 +17,7 @@ import type {
   VideoQuoteRequest,
   VideoQuoteResponse,
 } from './types.js';
-import { getVideoModel, buildModelParams } from './models.js';
+import { getVideoModel, buildModelParams, resolveBitrateMode, type BitrateMode } from './models.js';
 import { MODELS_SUPPORTING_REFERENCE_AUDIO } from '../series/types.js';
 import { assertNotSilentRejectVideo } from './rejection.js';
 
@@ -78,6 +78,12 @@ export interface QueueVideoOptions {
    * when at least one reference image is present (Venice rejects audio-only).
    */
   referenceAudioUrls?: string[];
+  /**
+   * Output encoding bitrate mode. Only sent to models that accept it (Seedance
+   * 2.x). When omitted, Seedance 2.5 defaults to `'high'` — a large fidelity
+   * gain at no extra cost. Pass `'standard'` to opt back into smaller files.
+   */
+  bitrateMode?: BitrateMode;
 }
 
 /**
@@ -128,6 +134,11 @@ export async function queueVideo(
     endImageUrl: options.endImageUrl,
   });
   Object.assign(body, modelParams);
+
+  // bitrate_mode: Seedance 2.5 defaults to 'high' (sharper encode, no price
+  // change); other models don't accept the field, so it's omitted for them.
+  const bitrateMode = resolveBitrateMode(options.model, options.bitrateMode);
+  if (bitrateMode) body.bitrate_mode = bitrateMode;
 
   if (options.elements && options.elements.length > 0) {
     if (!modelSpec || modelSpec.supportsElements) {

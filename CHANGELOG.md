@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.18.0 — 2026-08-21
+
+### Added
+
+- **Seedance 2.5 renders default to `bitrate_mode: "high"`.** Every Seedance 2.5
+  generation now attaches `bitrate_mode: "high"` to the `/video/queue` body,
+  which encodes at ~5-6x the bitrate for a visibly sharper file with far fewer
+  compression artifacts. It does **not** affect token price (the field is a
+  pure encode setting, not a compute tier). Applies to the whole family
+  (`seedance-2-5-text-to-video` / `-image-to-video` / `-reference-to-video`,
+  and the `-basic` id spellings) across both queue paths: the shared
+  `queueVideo` helper and the mini-drama series/episode/montage pipeline
+  (`renderVideoFile`). Non-Seedance-2.5 models never receive the field, so the
+  wan-3-0 / Veo / Kling fallbacks are untouched.
+  - New helpers in `src/venice/models.ts`: `resolveBitrateMode(model, override?)`
+    and `isSeedance25VideoModel(model)`, plus the `BitrateMode` type and
+    `DEFAULT_SEEDANCE_25_BITRATE_MODE` constant.
+  - Overridable per call: pass `bitrateMode: 'standard'` to `queueVideo` /
+    `renderVideoFile` to opt back into smaller files.
+  - The chosen mode is recorded in the video recipe/provenance sidecar
+    (`extra.bitrateMode`).
+
 ## 2.17.0 — 2026-08-13
 
 ### Added

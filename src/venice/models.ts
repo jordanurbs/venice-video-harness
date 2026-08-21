@@ -1237,6 +1237,46 @@ export function closestValidDuration(modelId: string, requestedSec: number): str
   return parsed[0]?.label;
 }
 
+// ---- Bitrate mode (Seedance 2.x) ------------------------------------------
+
+/**
+ * Venice's `bitrate_mode` for the Seedance family: `'high'` encodes at ~5-6x
+ * the bitrate for sharper output and far fewer compression artifacts (larger
+ * files), `'standard'` is the API default. It does NOT affect token price.
+ */
+export type BitrateMode = 'standard' | 'high';
+
+/**
+ * Default `bitrate_mode` applied to every Seedance 2.5 render. Seedance 2.5's
+ * standard encode is visibly soft/blocky on detailed footage; `'high'` is the
+ * dramatic-quality default and costs nothing extra.
+ */
+export const DEFAULT_SEEDANCE_25_BITRATE_MODE: BitrateMode = 'high';
+
+/**
+ * True for any Seedance 2.5 video model id — the registry ids
+ * (`seedance-2-5-text-to-video`, `-image-to-video`, `-reference-to-video`) as
+ * well as the `-basic` / `-i2v` id spellings some launch scripts use.
+ */
+export function isSeedance25VideoModel(modelId: string): boolean {
+  return modelId.startsWith('seedance-2-5');
+}
+
+/**
+ * Resolve the `bitrate_mode` to attach to a `/video/queue` body for a model.
+ * An explicit override always wins; otherwise Seedance 2.5 defaults to `'high'`
+ * and every other model returns `undefined` (the field is Seedance-only, so
+ * callers should skip it rather than send it to models that reject it).
+ */
+export function resolveBitrateMode(
+  modelId: string,
+  override?: BitrateMode,
+): BitrateMode | undefined {
+  if (override) return override;
+  if (isSeedance25VideoModel(modelId)) return DEFAULT_SEEDANCE_25_BITRATE_MODE;
+  return undefined;
+}
+
 /**
  * Build the model-specific parameters for a video queue request.
  * Handles resolution, aspect_ratio, and end_image_url based on model capabilities.
