@@ -9,7 +9,7 @@ import test from 'node:test';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 
-import { PIPELINE_STAGES, formatPipeline } from '../dist/agent/pipeline.js';
+import { PIPELINE_STAGES, PIPELINE_BRANCHES, formatPipeline } from '../dist/agent/pipeline.js';
 import { AGENT_GUIDE, formatGuide } from '../dist/agent/guide.js';
 
 const repoRoot = new URL('..', import.meta.url).pathname;
@@ -47,6 +47,19 @@ test('the pipeline never presents --skip-* as the fix', () => {
   }
 });
 
+test('loop mode is a discoverable alternate branch, not a linear stage', () => {
+  // It must never leak into the gated order (that would imply a QA gate).
+  assert.ok(!PIPELINE_STAGES.some(s => s.id === 'loop'));
+  const loop = PIPELINE_BRANCHES.find(b => b.id === 'loop');
+  assert.ok(loop, 'PIPELINE_BRANCHES must include loop');
+  assert.equal(loop.availableAfter, 'script');
+  assert.match(loop.command, /--mode <looping\|production>/);
+  // The formatted output surfaces it as an alternate path.
+  const text = formatPipeline();
+  assert.match(text, /Alternate paths/);
+  assert.match(text, /Loop mode/);
+});
+
 test('pipeline --json prints exactly one JSON object', async () => {
   const result = await run(['pipeline', '--json']);
   assert.equal(result.status, 0, result.stderr);
@@ -54,6 +67,9 @@ test('pipeline --json prints exactly one JSON object', async () => {
   assert.equal(parsed.version, 1);
   assert.equal(parsed.stages.length, PIPELINE_STAGES.length);
   assert.equal(parsed.stages[0].id, 'aesthetic');
+  // Alternate paths (loop mode) travel in the JSON too.
+  assert.ok(Array.isArray(parsed.branches));
+  assert.ok(parsed.branches.some(b => b.id === 'loop'));
 });
 
 test('the guide covers the money-losing non-negotiables', () => {
@@ -63,6 +79,14 @@ test('the guide covers the money-losing non-negotiables', () => {
   assert.match(text, /background/);      // long-render timeout survival
   assert.match(text, /gates are human/); // the approval gates
   assert.ok(AGENT_GUIDE.length >= 5);
+});
+
+test('the guide surfaces loop mode and the i2v/R2V lanes', () => {
+  const text = formatGuide().toLowerCase();
+  assert.match(text, /modes of operation/); // the section exists
+  assert.match(text, /loop/);                // loop mode is named
+  assert.match(text, /i2v/);                 // i2v is a known lane
+  assert.match(text, /r2v/);                 // distinguished from R2V
 });
 
 test('agent-guide --json prints exactly one JSON object', async () => {

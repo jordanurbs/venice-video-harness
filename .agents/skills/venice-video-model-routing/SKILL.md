@@ -372,6 +372,15 @@ Both skip the storyboard/QA gates and write only under `loop/`. See `LoopEngine`
 (`src/mini-drama/loop-engine.ts`) and AGENTS.md rule 58. Watch is a preview, not a production
 path; create is the "keep the good takes" path.
 
+**The loop plays AND renders concurrently — it does not pre-generate.** The browser loops the
+takes that already exist while the worker keeps generating new ones, swapping each shot's newer
+take in on the loop's NEXT pass (never mid-clip). It only *looks* pre-generated when (a) it is
+PAUSED — budget hit or Pause clicked — and just replays what is on disk (raise `--budget` or
+pass `--unbounded` to keep it going), or (b) it is in `create` mode, whose slow Max R2V renders
+can't keep up with a short loop cycle, so evolution lags. `watch` (looping/Turbo) renders faster
+than it plays and visibly evolves as you watch; `create` (production) is for gathering keeper
+takes, not a live-evolving watch. `--max-takes` is a per-shot ring buffer, not a total/stop.
+
 The Creator app mirrors this: `VideoModelCapabilities.wantsSimplePrompt(id:)` gates the
 same trimming in `ShotPromptBuilder`, and relaxes the `produce_shots` motion/length gate
 so a correctly short H3 Max prompt isn't rejected as thin.

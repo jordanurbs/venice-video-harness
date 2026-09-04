@@ -124,8 +124,47 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
   },
 ];
 
-export function pipelineAsJson(): { version: 1; stages: readonly PipelineStage[] } {
-  return { version: 1, stages: PIPELINE_STAGES };
+/**
+ * An alternate entry point that is NOT part of the linear order above. Branches
+ * are reachable once their `availableAfter` stage is done, run OUTSIDE the gate
+ * sequence, and an agent walking `PIPELINE_STAGES` will never be told they
+ * exist — which is exactly why they are stated here as data too. `pipeline`
+ * prints them and `pipeline --json` emits them under `branches`.
+ */
+export interface PipelineBranch {
+  /** Stable id an agent can branch on. */
+  id: string;
+  /** One-line human name. */
+  name: string;
+  /** The stage id after which this branch becomes available. */
+  availableAfter: string;
+  /** What it does and how it differs from the linear path. */
+  summary: string;
+  /** Any gate it skips or precondition it needs. */
+  note?: string;
+  /** Literal command that runs it. `<...>` marks a value to fill. */
+  command: string;
+}
+
+export const PIPELINE_BRANCHES: readonly PipelineBranch[] = [
+  {
+    id: 'loop',
+    name: 'Loop mode — watch the plan render, or gather usable takes',
+    availableAfter: 'script',
+    summary:
+      'Continuously renders the whole shot script and plays it as a live browser loop, hot-swapping each shot in as its take finishes and regenerating fresh takes while it plays. Requires ONE decision up front: LOOPING (creative flow, lower quality — MiniMax H3 Max Turbo 480P, t2v then i2v last-frame chaining, identity not locked) or PRODUCTION (gather usable shots, higher quality — Max R2V + the full reference stack @768P, identity locked).',
+    note:
+      'Skips the storyboard/QA gates and writes ONLY under episodes/episode-NNN/loop/ — canonical scene-001 renders and series.json are never touched, so it can run alongside production. Only precondition: a shot script with >=1 shot. Money-capped by --budget (default $2); --mode is REQUIRED in a non-interactive run.',
+    command: 'loop -p <project> -e <n> --mode <looping|production>',
+  },
+];
+
+export function pipelineAsJson(): {
+  version: 1;
+  stages: readonly PipelineStage[];
+  branches: readonly PipelineBranch[];
+} {
+  return { version: 1, stages: PIPELINE_STAGES, branches: PIPELINE_BRANCHES };
 }
 
 export function formatPipeline(): string {
@@ -143,5 +182,20 @@ export function formatPipeline(): string {
   });
   lines.push('`venice-video status -p <project>` reports where a project stands and the next command.');
   lines.push('Gates are human decisions. Never use --skip-approval / --skip-qa to get past them.');
-  return lines.join('\n');
+
+  if (PIPELINE_BRANCHES.length > 0) {
+    lines.push('');
+    lines.push('Alternate paths (not steps in the order above — a shot script is the only prerequisite):');
+    lines.push('');
+    for (const branch of PIPELINE_BRANCHES) {
+      lines.push(`• ${branch.name}`);
+      lines.push(`      available  once the "${branch.availableAfter}" stage is done`);
+      lines.push(`      does       ${branch.summary}`);
+      if (branch.note) lines.push(`      note       ${branch.note}`);
+      lines.push(`      run        ${branch.command}`);
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n').trimEnd();
 }

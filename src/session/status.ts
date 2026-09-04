@@ -33,6 +33,13 @@ export interface EpisodeStatus {
   stage: string;
   /** Literal command to run next, or undefined when the episode is done. */
   nextCommand?: string;
+  /**
+   * Loop mode is a gate-skipping alternate path (see PIPELINE_BRANCHES): the
+   * moment a shot script exists, `venice-video loop` can render + watch/gather
+   * takes without the storyboard/QA gates. `status` surfaces it so an agent
+   * following "next command" learns the branch exists.
+   */
+  loopAvailable: boolean;
 }
 
 export interface ProjectStatus {
@@ -46,6 +53,11 @@ export interface ProjectStatus {
   episodes: EpisodeStatus[];
   /** Command to run next at the project level (aesthetic, cast) if any. */
   nextCommand?: string;
+  /**
+   * The `loop` command for the first episode with a shot script, if any. An
+   * alternate path to the linear `nextCommand`, not a replacement for it.
+   */
+  loopCommand?: string;
 }
 
 function countMatching(dir: string, pattern: RegExp): number {
@@ -92,6 +104,8 @@ function classifyEpisode(
     dialogueCount: countMatching(audioDir, /^dialogue-shot-\d+\.mp3$/),
     hasFinalCut: existsSync(join(episodeDir, `episode-${padded}-final.mp4`)),
     stage: 'not started',
+    // A shot script is loop mode's only precondition (gates are skipped).
+    loopAvailable: (script?.shots?.length ?? 0) > 0,
   };
 
   const ref = `-e ${episode}`;
@@ -185,6 +199,13 @@ export async function collectProjectStatus(projectDir: string): Promise<ProjectS
     status.nextCommand = unfinished?.nextCommand;
   }
 
+  // Surface loop mode (the gate-skipping alternate path) whenever a shot script
+  // exists, pointed at the first episode that has one.
+  const loopable = episodes.find(e => e.loopAvailable);
+  if (loopable) {
+    status.loopCommand = `loop -e ${loopable.episode} --mode <looping|production>`;
+  }
+
   return status;
 }
 
@@ -225,6 +246,10 @@ export function formatProjectStatus(status: ProjectStatus, selectedEpisode?: num
   } else {
     lines.push('');
     lines.push('  next  nothing pending — every episode is assembled.');
+  }
+
+  if (status.loopCommand) {
+    lines.push(`  also  ${status.loopCommand}   # watch/gather takes off the shot script (skips the QA gate)`);
   }
 
   return lines.join('\n');

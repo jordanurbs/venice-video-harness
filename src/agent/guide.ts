@@ -76,6 +76,17 @@ export const AGENT_GUIDE: readonly GuideSection[] = [
     ],
   },
   {
+    title: 'Modes of operation — the linear pipeline is not the only path',
+    points: [
+      'Default path: the gated pipeline (`venice-video pipeline`) — aesthetic → cast → episode → script → approve → storyboard → QA → render → assemble. Use it for a finished, identity-locked cut.',
+      'Loop mode (`venice-video loop -p <project> -e <n> --mode <looping|production>`): once a shot script exists, render the whole plan continuously and watch it as a live browser loop that hot-swaps fresh takes. It SKIPS the storyboard/QA gates and writes only under episodes/episode-NNN/loop/, so it never touches the canonical cut. LOOPING = creative flow, lower quality (Turbo 480P, disposable); PRODUCTION = gather usable, identity-locked takes (Max R2V @768P). --mode is REQUIRED non-interactively; --budget caps spend (default $2). This is not in the `pipeline` stage list — it is under `branches`.',
+      'Loop mode plays AND renders at the same time — it does NOT pre-generate everything. The browser loops the takes that already exist while the worker keeps generating new ones, swapping each shot\'s newer take in on the loop\'s NEXT pass (never mid-clip). Two things make a running loop LOOK pre-generated when it is not: (a) it PAUSES when it hits --budget or you click Pause in the UI, and then just replays what is on disk — raise --budget or pass --unbounded to keep it generating; (b) --max-takes is a per-shot ring buffer (default 3, older takes pruned), not a total, so once every shot has its cap the change per cycle is subtle.',
+      'Which mode evolves while you watch: LOOPING (Turbo, 480P) renders faster than it plays, so the video visibly changes as you watch. PRODUCTION/create renders each shot slowly on Max R2V — it is for GATHERING keeper takes, not a continuously-evolving watch, and on a short or few-shot plan it can look static even while running because one take takes longer to render than a full loop cycle takes to play. If the user wants to "watch it keep changing", pick LOOPING and a higher/unbounded budget.',
+      'Three video lanes, chosen per shot by the router (see the venice-video-model-routing skill): t2v (prompt only), i2v (animate a supplied START image via image_url — establishing/atmosphere shots, or chaining off a previous last frame), R2V (identity anchored to a reference stack — the default for character shots). "i2v" means a supplied first frame; "R2V" means reference_image_urls, not a start frame — do not conflate them.',
+      'To animate a single image you already have (plain i2v, no project), the routing skill\'s bundled `scripts/venice-video.py --image <file> --model <...-image-to-video>` is the standalone path; the project pipeline is for multi-shot, consistency-first work.',
+    ],
+  },
+  {
     title: 'Where the full knowledge lives',
     points: [
       'AGENTS.md — 55 rules and 31 production anti-patterns, shipped in the package.',
