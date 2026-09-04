@@ -37,7 +37,9 @@
   New `i2vRejectsFaceStartFrame()` capability in `models.ts`.
 - **`scripts/probe-minimax-r2v-face.ts`** — one paid 5s probe to settle whether
   MiniMax H3 Max **R2V** accepts face-bearing reference sheets (the open question
-  behind create-mode character loops).
+  behind create-mode character loops). **Verified 2026-09-04: it does** (render
+  succeeded in ~13s) — only i2v *start frames* die on a face, so create-mode
+  character loops are viable.
 - Injectable `errorBackoffMs` on `LoopEngine` (test seam).
 
 See AGENTS.md rule 58 and anti-pattern 31.

@@ -1038,7 +1038,8 @@ character's face**, giving the next clip a clean anchor to continue from
 face-ending frame would kill the next chained render. It activates on any i2v
 model that accepts face start frames. For smooth character-face loops **today**,
 use **production** mode: R2V locks the face from the reference sheets across every
-shot, with no i2v chaining involved.
+shot, with no i2v chaining involved (verified — MiniMax R2V accepts face-bearing
+reference sheets; only i2v *start frames* die).
 
 ### Interrupted renders are resumable
 
