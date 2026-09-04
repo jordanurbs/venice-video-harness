@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Loop watch mode: t2v `aspect_ratio` 400 + chain-frame past stream end (#25).**
+  `renderVideoFile` now sends `aspect_ratio` for every `text-to-video` model
+  (MiniMax H3 / H3 Max t2v **require** it — every opening watch take 400'd
+  without it). `extractLastFrame` now probes the `v:0` **stream** duration (not
+  the container, whose longer audio track pushed the seek past the last
+  decodable frame, making ffmpeg exit 0 with no file) and steps back in widening
+  offsets until the PNG lands, throwing otherwise so callers fall back to an
+  unchained render instead of queueing an `image_url`-less i2v.
+- **Loop money leak: a persistently-failing shot is now given up on.**
+  `LoopEngine` tracks consecutive render failures per shot and, after
+  `MAX_CONSECUTIVE_SHOT_ERRORS` (3), marks the shot `failed`, drops it from the
+  scheduler, and stops re-queueing it. Previously a server-side-doomed shot (a
+  MiniMax i2v start frame with a human face — billed at queue time, then
+  `/video/retrieve` 500s forever) was re-selected fewest-takes-first and
+  re-billed every cycle until the budget paused the loop. A manual `regenerate`
+  revives a given-up-on shot. `failed`/`lastError` are surfaced on the manifest
+  and `loop-updated` events.
+- **Create mode no longer degrades a character shot to a face-killing i2v.**
+  When a create-mode character shot has no R2V references on disk it now degrades
+  to **t2v** rather than i2v-off-a-panel on models that reject face start frames
+  (MiniMax) — a character panel almost always shows a face, which would 500.
+
+### Added
+
+- **`venice-video loop --face-continuity` (on by default).** Prompts each chained
+  character shot to end on the character's face so the next clip's i2v
+  continuation is smoother. **Auto-suppressed** on i2v models that reject face
+  start frames (all MiniMax i2v lanes — a face-ending frame is the next start
+  frame and would trip the server-side death), so it can't break the watch loop;
+  it activates on a face-accepting i2v lane. `--no-face-continuity` to disable.
+  New `i2vRejectsFaceStartFrame()` capability in `models.ts`.
+- **`scripts/probe-minimax-r2v-face.mjs`** — one paid 5s probe to settle whether
+  MiniMax H3 Max **R2V** accepts face-bearing reference sheets (the open question
+  behind create-mode character loops).
+- Injectable `errorBackoffMs` on `LoopEngine` (test seam).
+
+See AGENTS.md rule 58 and anti-pattern 31.
+
 ## 2.19.0 — 2026-09-04
 
 ### Added

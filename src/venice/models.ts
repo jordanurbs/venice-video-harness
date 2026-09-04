@@ -82,6 +82,22 @@ export function modelWantsSimplePrompt(modelId: string): boolean {
   return getVideoModel(modelId)?.promptStyle === 'simple';
 }
 
+/**
+ * MiniMax H3 (all variants) image-to-video renders die server-side when the
+ * START frame (`image_url`) contains a recognizable human face: Venice accepts
+ * and bills the queue, then `/video/retrieve` 500s forever, with no
+ * needs_consent handshake like Seedance. Loop chaining (which feeds each shot's
+ * last frame into the next shot's i2v) and any panel-anchored i2v off a
+ * face-bearing panel hit this. See AGENTS.md anti-pattern 31 (PR #25).
+ *
+ * Callers use this to avoid feeding a face-bearing start frame to these models
+ * (degrade to t2v, skip face-continuity prompting, etc.). It's a per-model
+ * capability so a future Venice fix — or a new i2v family — is a one-line change.
+ */
+export function i2vRejectsFaceStartFrame(modelId: string): boolean {
+  return modelId.startsWith('minimax-h3') && modelId.includes('image-to-video');
+}
+
 // ---- Image generation prompt-length budgets () -----------------------
 
 /**

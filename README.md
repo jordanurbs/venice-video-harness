@@ -1012,6 +1012,7 @@ venice-video loop -p <dir> -e 1 \
   --budget 2 \             # pause after ~$2; Resume/regenerate authorizes another budget
   --max-takes 3 \          # candidate takes kept per shot (ring buffer, not a stop)
   --no-chain \             # render shots independently instead of i2v last-frame chaining
+  --no-face-continuity \   # don't prompt chained shots to end on the character's face (see below)
   --once                   # or: render one take per shot, then stop
 # --unbounded              # remove the budget cap (spends until you Ctrl-C)
 ```
@@ -1019,6 +1020,25 @@ venice-video loop -p <dir> -e 1 \
 The loop is resumable: takes, pins, and spend are recorded in
 `loop/loop-manifest.json`, so re-running `loop` picks up where it left off.
 `Ctrl-C` stops the engine and the server.
+
+**A shot that keeps failing is given up on, not re-billed forever.** After 3
+consecutive render failures the engine marks the shot `failed`, stops scheduling
+it, and moves on — so a server-side-doomed shot (e.g. a MiniMax i2v start frame
+with a human face, which Venice bills at queue time then 500s on retrieve) can't
+burn the whole budget one failed take at a time. A manual **regenerate** in the
+UI revives it.
+
+**Face continuity (on by default, for smoother i2v transitions).** In a chained
+loop each shot's last frame becomes the next shot's i2v start frame, so
+`--face-continuity` (default on) prompts each character shot to **end on the
+character's face**, giving the next clip a clean anchor to continue from
+(`--no-face-continuity` turns it off). One important caveat: MiniMax i2v renders
+**die server-side when the start frame shows a face** (AGENTS.md anti-pattern
+31), so on the MiniMax loop lanes this prompting is **auto-suppressed** — a
+face-ending frame would kill the next chained render. It activates on any i2v
+model that accepts face start frames. For smooth character-face loops **today**,
+use **production** mode: R2V locks the face from the reference sheets across every
+shot, with no i2v chaining involved.
 
 ### Interrupted renders are resumable
 

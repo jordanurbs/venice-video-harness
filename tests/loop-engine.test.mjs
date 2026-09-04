@@ -20,8 +20,8 @@ import {
   CREATE_MODEL_I2V,
   defaultLoopResolution,
 } from '../dist/mini-drama/loop-engine.js';
-import { renderVideoFile } from '../dist/mini-drama/video-generator.js';
-import { getVideoModel, closestValidDuration } from '../dist/venice/models.js';
+import { renderVideoFile, extractLastFrame } from '../dist/mini-drama/video-generator.js';
+import { getVideoModel, closestValidDuration, i2vRejectsFaceStartFrame } from '../dist/venice/models.js';
 
 function makeSeries() {
   return {
@@ -255,4 +255,126 @@ test('renderVideoFile honors a 480P override for Turbo, and ignores an invalid o
   await assert.rejects(renderVideoFile(client, { ...base, outputPath: join(dir, 'c', 'shot.mp4') }));
   assert.equal(capture.body.resolution, '768P');
   assert.ok(existsSync(dir));
+});
+
+// ---- PR #25 regression: t2v aspect_ratio + extractLastFrame past stream end ----
+
+test('t2v models carry aspect_ratio in the queue body (MiniMax H3 t2v 400s without it)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loop-ar-'));
+  const capture = {};
+  const client = {
+    async post(_path, body) { capture.body = JSON.parse(JSON.stringify(body)); throw new Error('captured'); },
+  };
+  await assert.rejects(renderVideoFile(client, {
+    prompt: { prompt: 'a lean t2v prompt', model: 'minimax-h3-max-turbo-text-to-video', duration: '15s', audio: true },
+    outputPath: join(dir, 'a', 'shot.mp4'), aspectRatio: '4:3', forceRequeue: true,
+  }));
+  assert.equal(capture.body.aspect_ratio, '4:3', 'explicit aspect_ratio is sent on a t2v model');
+
+  await assert.rejects(renderVideoFile(client, {
+    prompt: { prompt: 'x', model: 'minimax-h3-max-turbo-text-to-video', duration: '15s', audio: true },
+    outputPath: join(dir, 'b', 'shot.mp4'), forceRequeue: true,
+  }));
+  assert.equal(capture.body.aspect_ratio, '16:9', 't2v defaults aspect_ratio to 16:9 (was missing entirely before)');
+});
+
+test('extractLastFrame lands a frame even when the audio track outlasts the video stream', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loop-lastframe-'));
+  const clip = join(dir, 'clip.mp4');
+  // 1s of video + 3s of audio muxed together: the container end sits ~2s past
+  // the last decodable video frame — the MiniMax case where seeking to
+  // container_end-0.05 made ffmpeg write nothing and exit 0.
+  execFileSync('ffmpeg', [
+    '-y',
+    '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=10',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
+    '-map', '0:v', '-map', '1:a', '-c:a', 'aac',
+    '-pix_fmt', 'yuv420p', clip,
+  ], { stdio: 'ignore' });
+
+  const out = join(dir, 'last.png');
+  extractLastFrame(clip, out);
+  assert.ok(existsSync(out), 'a frame was extracted despite audio duration > video duration');
+});
+
+// ---- Face-frame money-leak guard + create-mode face-safe degrade ----
+
+test('a persistently-failing shot is given up on, not re-queued/billed forever', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loop-giveup-'));
+  const series = makeSeries();
+  series.outputDir = dir;
+  const calls = [];
+  const engine = new LoopEngine({
+    client: {}, series, script: makeScript(1), episode: 1,
+    projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
+    log: () => {}, chain: false, duration: '5s', errorBackoffMs: 0,
+    // Mimics the MiniMax face-frame failure: queued (billed), retrieve 500s.
+    render: async (_c, o) => { calls.push(o.outputPath); throw new Error('retrieve 500: An unknown error occurred'); },
+  });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine, 5000);
+
+  assert.equal(calls.length, 3, 'gives up after 3 consecutive failures instead of re-queueing every cycle');
+  const shot = engine.status().shots[0];
+  assert.equal(shot.failed, true, 'the doomed shot is marked failed and no longer scheduled');
+  assert.equal(engine.status().running, false, 'the loop stops once every shot is failed/pinned');
+});
+
+test('regenerate revives a given-up-on shot', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loop-revive-'));
+  const series = makeSeries();
+  series.outputDir = dir;
+  const calls = [];
+  const engine = new LoopEngine({
+    client: {}, series, script: makeScript(1), episode: 1,
+    projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
+    log: () => {}, chain: false, duration: '5s', errorBackoffMs: 0,
+    render: async (_c, o) => { calls.push(o.outputPath); throw new Error('boom'); },
+  });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine, 5000);
+  assert.equal(engine.status().shots[0].failed, true);
+
+  await engine.regenerate(1);
+  await waitForStop(engine, 5000);
+  assert.ok(calls.length >= 6, 'regenerate cleared failed and let the shot try again');
+});
+
+test('create mode degrades a reference-less character shot to t2v, not a face-killing i2v', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loop-create-face-'));
+  // A panel on disk for the character shot; without the fix this would pick
+  // i2v-off-panel, and MiniMax i2v dies on a face start frame.
+  const sceneDir = join(dir, 'episodes', 'episode-001', 'scene-001');
+  await mkdir(sceneDir, { recursive: true });
+  writeFileSync(join(sceneDir, 'shot-001.png'), 'panel');
+  const script = makeScript(1);
+  script.shots[0].characters = ['Bob'];
+  script.shots[0].videoModel = 'character';
+  const { engine, calls } = makeEngine(dir, script, { mode: 'create', once: true, chain: false });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].model, CREATE_MODEL_T2V, 'character shot with a face panel but no refs degrades to t2v');
+  assert.ok(!calls[0].anchor, 'no face start frame is handed to the face-rejecting i2v model');
+});
+
+// ---- Face-continuity prompting (end on the character's face) ----
+
+test('i2vRejectsFaceStartFrame flags MiniMax i2v but not seedance i2v or any t2v', () => {
+  assert.equal(i2vRejectsFaceStartFrame('minimax-h3-max-turbo-image-to-video'), true);
+  assert.equal(i2vRejectsFaceStartFrame('minimax-h3-max-image-to-video'), true);
+  assert.equal(i2vRejectsFaceStartFrame('minimax-h3-image-to-video'), true);
+  assert.equal(i2vRejectsFaceStartFrame('seedance-2-0-image-to-video'), false);
+  assert.equal(i2vRejectsFaceStartFrame('minimax-h3-max-turbo-text-to-video'), false, 't2v has no start frame');
+});
+
+test('face-continuity is auto-suppressed on MiniMax i2v loops (a face end-frame would kill the next render)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loop-face-'));
+  const { engine } = makeEngine(dir, makeScript(2), { mode: 'watch', chain: true, faceContinuity: true });
+  await engine.init();
+  assert.equal(engine.status().faceContinuity, false, 'requested on, but suppressed because the chain i2v model rejects face start frames');
 });

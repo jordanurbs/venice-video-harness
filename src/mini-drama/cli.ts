@@ -4835,13 +4835,14 @@ program
   .option('--budget <usd>', 'Pause rendering after this much estimated spend (each Start / regenerate authorizes another budget)', '2')
   .option('--max-takes <n>', 'Candidate takes kept per shot (ring buffer; the loop regenerates forever until stopped/budget)', '3')
   .option('--no-chain', 'Render each shot independently instead of chaining i2v off the previous shot\'s last frame')
+  .option('--no-face-continuity', 'Do not prompt chained shots to end on the character\'s face (on by default for smoother i2v transitions; auto-suppressed on MiniMax i2v, which rejects face start frames)')
   .option('--once', 'Render one take per shot, then stop (no regeneration)', false)
   .option('--unbounded', 'Regenerate forever with NO budget cap (spends until stopped)', false)
   .option('--no-open', 'Do not open the browser automatically')
   .action(async (opts: {
     project: string; episode: number; mode: string; port: string; host: string;
     resolution?: string; duration: string; budget: string; maxTakes: string;
-    chain: boolean; once: boolean; unbounded: boolean; open: boolean;
+    chain: boolean; faceContinuity: boolean; once: boolean; unbounded: boolean; open: boolean;
   }) => {
     const json = wantsJson();
     const port = Number.parseInt(opts.port, 10);
@@ -4924,6 +4925,7 @@ program
       slug,
       mode,
       chain,
+      faceContinuity: opts.faceContinuity,
       resolution: opts.resolution,
       duration: opts.duration,
       budgetUsd: Number.isFinite(budgetUsd) ? budgetUsd : undefined,
@@ -4953,6 +4955,7 @@ program
         episode: opts.episode,
         mode: status.mode,
         chain: status.chain,
+        faceContinuity: status.faceContinuity,
         model: status.model,
         resolution: status.resolution,
         duration: status.duration,

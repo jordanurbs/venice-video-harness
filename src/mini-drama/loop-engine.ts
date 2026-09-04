@@ -29,7 +29,7 @@ import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { VeniceClient } from '../venice/client.js';
 import type { EpisodeScript, SeriesState, ShotScript, VideoElement } from '../series/types.js';
-import { getVideoModel, closestValidDuration } from '../venice/models.js';
+import { getVideoModel, closestValidDuration, i2vRejectsFaceStartFrame } from '../venice/models.js';
 import { buildVideoPrompt, type MiniDramaVideoPrompt } from './prompt-builder.js';
 import {
   renderVideoFile,
@@ -84,6 +84,22 @@ const MANIFEST_VERSION = 1;
 const MANIFEST_FILE = 'loop-manifest.json';
 /** Backoff after a failed take so a persistent error can't spin the worker. */
 const ERROR_BACKOFF_MS = 5_000;
+/**
+ * Give up on a shot after this many CONSECUTIVE render failures and stop
+ * re-selecting it, so a server-side-doomed shot (e.g. a MiniMax i2v start frame
+ * with a face — see AGENTS.md anti-pattern 31) can't be re-queued and re-billed
+ * every cycle until the whole budget is burned. A manual `regenerate` clears it.
+ */
+const MAX_CONSECUTIVE_SHOT_ERRORS = 3;
+/**
+ * Appended to a chained shot's prompt so it ENDS on the character's face, which
+ * makes the next clip's i2v continuation smoother. Suppressed automatically when
+ * the chain i2v model rejects face start frames (MiniMax — it would kill the
+ * next render; see `i2vRejectsFaceStartFrame`).
+ */
+const FACE_CONTINUITY_NOTE =
+  'End the shot with the main character\'s face clearly visible and facing camera, '
+  + 'so the next clip can continue smoothly from that frame.';
 
 export interface LoopTake {
   n: number;
@@ -103,6 +119,8 @@ export interface LoopShotState {
   currentTake: number | null;
   pinned: boolean;
   lastError?: string;
+  /** Given up on after MAX_CONSECUTIVE_SHOT_ERRORS failures; no longer scheduled. */
+  failed?: boolean;
   takes: LoopTake[];
 }
 
@@ -111,6 +129,8 @@ export interface LoopManifest {
   episode: number;
   mode: LoopMode;
   chain: boolean;
+  /** Whether shots are prompted to end on the character's face (chained loops). */
+  faceContinuity: boolean;
   model: { t2v: string; i2v: string; r2v?: string };
   resolution: string;
   duration: string;
@@ -158,17 +178,28 @@ export interface LoopEngineOptions {
    * independently (in create mode that keeps per-shot R2V identity locking).
    */
   chain?: boolean;
+  /**
+   * When chaining, prompt each shot to end on the character's face for smoother
+   * i2v continuations (default true). Automatically suppressed when the chain
+   * i2v model rejects face start frames (MiniMax), where a face frame would kill
+   * the next render — see `i2vRejectsFaceStartFrame` / AGENTS.md anti-pattern 31.
+   */
+  faceContinuity?: boolean;
   broadcaster?: LoopBroadcaster;
   /** Optional log sink (defaults to console.log). */
   log?: (line: string) => void;
   /** Override the render primitive (tests). Defaults to renderVideoFile. */
   render?: RenderFn;
+  /** Backoff after a failed take (ms). Injectable for tests; defaults to 5s. */
+  errorBackoffMs?: number;
 }
 
 interface InternalShot extends LoopShotState {
   shot: ShotScript;
   nextTake: number;
   forceNext: boolean;
+  /** Consecutive render failures; resets to 0 on a successful take. */
+  consecutiveErrors: number;
 }
 
 function toPosix(p: string): string {
@@ -195,6 +226,7 @@ export class LoopEngine {
   private readonly slug: string;
   private readonly mode: LoopMode;
   private readonly chain: boolean;
+  private readonly faceContinuity: boolean;
   private readonly usdPerSec: number;
   private readonly initialBudgetUsd: number;
   private readonly sceneDir: string;
@@ -208,6 +240,7 @@ export class LoopEngine {
   private readonly broadcaster?: LoopBroadcaster;
   private readonly log: (line: string) => void;
   private readonly render: RenderFn;
+  private readonly errorBackoffMs: number;
 
   private shots: InternalShot[] = [];
   private spendUsd = 0;
@@ -229,6 +262,7 @@ export class LoopEngine {
     // The fun loop (watch) chains by default; the project loop (create) renders
     // each shot independently on R2V (chaining and R2V can't combine on MiniMax).
     this.chain = options.chain ?? (this.mode !== 'create');
+    this.faceContinuity = options.faceContinuity ?? true;
     this.usdPerSec = this.mode === 'create' ? MAX_USD_PER_SEC : TURBO_USD_PER_SEC;
     this.sceneDir = join(options.episodeDir, 'scene-001');
     this.loopDir = join(options.episodeDir, 'loop');
@@ -244,6 +278,7 @@ export class LoopEngine {
     this.broadcaster = options.broadcaster;
     this.log = options.log ?? ((line: string) => console.log(line));
     this.render = options.render ?? renderVideoFile;
+    this.errorBackoffMs = options.errorBackoffMs ?? ERROR_BACKOFF_MS;
 
     this.shots = (options.script.shots ?? []).map((shot): InternalShot => ({
       shot,
@@ -255,7 +290,18 @@ export class LoopEngine {
       takes: [],
       nextTake: 1,
       forceNext: false,
+      consecutiveErrors: 0,
     }));
+  }
+
+  /**
+   * Whether to append the "end on the character's face" note to chained shot
+   * prompts: requested (faceContinuity) AND chaining AND the chain i2v model
+   * accepts face start frames. On MiniMax i2v a face-bearing start frame kills
+   * the next render, so it is suppressed there (AGENTS.md anti-pattern 31).
+   */
+  private faceContinuityActive(): boolean {
+    return this.faceContinuity && this.chain && !i2vRejectsFaceStartFrame(i2vModelFor(this.mode));
   }
 
   private resolveDuration(requested: string): string {
@@ -283,10 +329,10 @@ export class LoopEngine {
   }
 
   private allSettled(): boolean {
-    // The loop only truly settles when every shot is pinned (nothing left to
-    // regenerate) or, in --once mode, every shot has its single take.
-    if (this.once) return this.shots.every(s => s.pinned || s.takes.length >= 1);
-    return this.shots.every(s => s.pinned);
+    // The loop settles when every shot is pinned or given-up-on (nothing left to
+    // regenerate) or, in --once mode, every shot has its single take (or failed).
+    if (this.once) return this.shots.every(s => s.pinned || s.failed || s.takes.length >= 1);
+    return this.shots.every(s => s.pinned || s.failed);
   }
 
   // ---- Public API (called by the CLI and the web endpoints) ---------------
@@ -317,6 +363,11 @@ export class LoopEngine {
       ? `${CREATE_MODEL_R2V} (identity) / ${CREATE_MODEL_I2V} (chained) / ${CREATE_MODEL_T2V}`
       : `${LOOP_MODEL_T2V}/${LOOP_MODEL_I2V}`;
     this.log(`Loop engine running [${this.mode}${this.chain ? ', chained' : ''}]: model=${models}, ${this.resolution}, ${this.duration}, budget=${this.unbounded ? 'unbounded' : `$${this.budgetUsd.toFixed(2)}`}.`);
+    if (this.chain && this.faceContinuity) {
+      this.log(this.faceContinuityActive()
+        ? '  Face-continuity on: shots are prompted to end on the character\'s face for smoother transitions.'
+        : `  Face-continuity requested but suppressed: ${i2vModelFor(this.mode)} rejects face start frames (a face-ending frame would kill the next chained render — AGENTS.md anti-pattern 31).`);
+    }
     void this.runWorker();
     await this.persist();
     return this.snapshot();
@@ -357,6 +408,9 @@ export class LoopEngine {
     const shot = this.shots.find(s => s.shotNumber === shotNumber);
     if (shot) {
       shot.forceNext = true;
+      // A manual regenerate revives a given-up-on shot and resets its error count.
+      shot.failed = false;
+      shot.consecutiveErrors = 0;
       // A manual regenerate re-authorizes spend if the budget cap was reached.
       if (!this.unbounded && this.spendUsd + this.costPerTake() > this.budgetUsd + 1e-9) {
         this.budgetUsd = this.spendUsd + this.initialBudgetUsd;
@@ -405,7 +459,9 @@ export class LoopEngine {
       forced.forceNext = false;
       return forced;
     }
-    const eligible = this.shots.filter(s => !s.pinned && s.status !== 'rendering');
+    // Skip pinned, in-flight, and given-up-on (failed) shots — a failed shot is
+    // server-side-doomed, and re-selecting it just re-queues and re-bills it.
+    const eligible = this.shots.filter(s => !s.pinned && !s.failed && s.status !== 'rendering');
     if (eligible.length === 0) return undefined;
 
     // Fill the loop first: shots with no take yet, in shot order — this also
@@ -500,6 +556,7 @@ export class LoopEngine {
       shot.takes.push(take);
       shot.status = 'ready';
       shot.lastError = undefined;
+      shot.consecutiveErrors = 0;
       // Non-pinned shots always promote the newest take (hot-swap). A pinned
       // shot keeps its frozen take; new takes stay recorded as candidates.
       if (!shot.pinned) shot.currentTake = takeN;
@@ -509,10 +566,21 @@ export class LoopEngine {
     } catch (err) {
       shot.status = 'error';
       shot.lastError = err instanceof Error ? err.message : String(err);
-      this.log(`  [loop] shot ${shot.key} take ${takeN} failed: ${shot.lastError}`);
+      shot.consecutiveErrors += 1;
+      // Give up on a persistently-failing shot instead of re-queueing (and
+      // re-billing) it every cycle. Venice bills at queue time, so a
+      // server-side-doomed shot (e.g. a MiniMax i2v face start frame) would
+      // otherwise burn the whole budget one failed take at a time. A manual
+      // `regenerate` clears `failed` and lets it try again.
+      if (shot.consecutiveErrors >= MAX_CONSECUTIVE_SHOT_ERRORS) {
+        shot.failed = true;
+        this.log(`  [loop] shot ${shot.key} failed ${shot.consecutiveErrors}x in a row — giving up on it (regenerate to retry). Last error: ${shot.lastError}`);
+      } else {
+        this.log(`  [loop] shot ${shot.key} take ${takeN} failed (${shot.consecutiveErrors}/${MAX_CONSECUTIVE_SHOT_ERRORS}): ${shot.lastError}`);
+      }
       await this.persist();
       this.emit(shot);
-      await new Promise(r => setTimeout(r, ERROR_BACKOFF_MS));
+      await new Promise(r => setTimeout(r, this.errorBackoffMs));
     }
   }
 
@@ -574,11 +642,15 @@ export class LoopEngine {
       vp = buildVideoPrompt(shot, createSeries, undefined, this.script.audioMix);
       vp.duration = durationLabel;
     } catch {
-      const model = panelExists ? CREATE_MODEL_I2V : CREATE_MODEL_T2V;
+      // A character panel likely shows a face, and MiniMax i2v dies server-side
+      // on a face start frame (anti-pattern 31) — so degrade a face-reject i2v
+      // to t2v for character shots rather than queue a doomed render.
+      const canI2v = panelExists && !(i2vRejectsFaceStartFrame(CREATE_MODEL_I2V) && (shot.characters?.length ?? 0) > 0);
+      const model = canI2v ? CREATE_MODEL_I2V : CREATE_MODEL_T2V;
       return {
         prompt: { prompt: this.fallbackPrompt(shot), model, duration: durationLabel, audio: true },
-        lane: panelExists ? 'i2v' : 't2v',
-        anchorImagePath: panelExists ? panelPath : undefined,
+        lane: canI2v ? 'i2v' : 't2v',
+        anchorImagePath: canI2v ? panelPath : undefined,
       };
     }
 
@@ -597,12 +669,16 @@ export class LoopEngine {
         };
       }
       // A character shot with no references on disk can't anchor R2V — degrade
-      // to i2v off a panel, else t2v, so the loop still renders something.
-      const model = panelExists ? CREATE_MODEL_I2V : CREATE_MODEL_T2V;
+      // to i2v off a panel, else t2v, so the loop still renders something. But a
+      // character panel almost certainly shows a face, and MiniMax i2v dies
+      // server-side on a face start frame (anti-pattern 31) — so on a
+      // face-rejecting i2v model, degrade to t2v instead of a doomed i2v.
+      const canI2v = panelExists && !i2vRejectsFaceStartFrame(CREATE_MODEL_I2V);
+      const model = canI2v ? CREATE_MODEL_I2V : CREATE_MODEL_T2V;
       return {
         prompt: { ...vp, model, referenceSlots: undefined },
-        lane: panelExists ? 'i2v' : 't2v',
-        anchorImagePath: panelExists ? panelPath : undefined,
+        lane: canI2v ? 'i2v' : 't2v',
+        anchorImagePath: canI2v ? panelPath : undefined,
       };
     }
 
@@ -637,10 +713,22 @@ export class LoopEngine {
         },
       };
       const vp = buildVideoPrompt(shot, loopSeries);
-      return { prompt: vp.prompt, model, duration: durationLabel, audio: true };
+      return { prompt: this.withFaceContinuity(vp.prompt, shot), model, duration: durationLabel, audio: true };
     } catch {
-      return { prompt: this.fallbackPrompt(shot), model, duration: durationLabel, audio: true };
+      return { prompt: this.withFaceContinuity(this.fallbackPrompt(shot), shot), model, duration: durationLabel, audio: true };
     }
+  }
+
+  /**
+   * Append the face-continuity note so the shot ends on the character's face and
+   * the next chained i2v continues smoothly. Applied only when active for this
+   * loop (see `faceContinuityActive`) AND the shot actually has a character —
+   * telling a pure-atmosphere shot to "end on the character's face" is noise.
+   */
+  private withFaceContinuity(prompt: string, shot: ShotScript): string {
+    if (!this.faceContinuityActive()) return prompt;
+    if ((shot.characters?.length ?? 0) === 0) return prompt;
+    return `${prompt} ${FACE_CONTINUITY_NOTE}`;
   }
 
   /** Series clone whose video lanes target the H3 Max (non-Turbo) family. */
@@ -697,6 +785,7 @@ export class LoopEngine {
       resolution: this.resolution,
       duration: this.duration,
       chain: this.chain,
+      faceContinuity: this.faceContinuityActive(),
       budgetUsd: this.unbounded ? Infinity : this.budgetUsd,
       maxTakes: this.maxTakes,
       unbounded: this.unbounded,
@@ -711,6 +800,7 @@ export class LoopEngine {
         status: s.status,
         currentTake: s.currentTake,
         pinned: s.pinned,
+        failed: s.failed,
         lastError: s.lastError,
         takes: s.takes,
       })),
@@ -770,6 +860,8 @@ export class LoopEngine {
       status: shot.status,
       currentTake: shot.currentTake,
       pinned: shot.pinned,
+      failed: shot.failed,
+      lastError: shot.lastError,
       takeCount: shot.takes.length,
       clip: current?.file,
       spendUsd: Number(this.spendUsd.toFixed(4)),
