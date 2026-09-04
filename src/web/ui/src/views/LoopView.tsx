@@ -243,8 +243,12 @@ export function LoopView({ slug, state }: { slug: string; state: ProjectState; b
                 <span className="shot-num">{s.key}</span>
               </button>
               <span className={`dot ${s.status === 'rendering' ? 'running' : s.status === 'error' ? 'failed' : clip ? 'succeeded' : ''}`} />
-              <span className="dim small" style={{ minWidth: 96 }}>
-                {s.status === 'rendering' ? 'rendering…' : s.status === 'error' ? 'error' : clip ? `take ${s.currentTake} of ${s.takes.length}` : 'queued'}
+              <span
+                className="dim small"
+                style={{ minWidth: 120 }}
+                title={clip ? `Playing render #${s.currentTake} of this shot. ${s.takes.length} take${s.takes.length === 1 ? '' : 's'} kept on disk (ring buffer, --max-takes).` : undefined}
+              >
+                {s.status === 'rendering' ? 'rendering…' : s.status === 'error' ? 'error' : clip ? `take #${s.currentTake} · ${s.takes.length} kept` : 'queued'}
               </span>
               {s.pinned && <span className="badge pass">pinned</span>}
               <span style={{ flex: 1 }} />

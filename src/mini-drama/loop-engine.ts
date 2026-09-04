@@ -474,9 +474,13 @@ export class LoopEngine {
     // One-pass mode never regenerates; it stops once every shot has a take.
     if (this.once) return undefined;
 
-    // Then regenerate forever (until budget/stop): fewest-takes first so every
-    // shot keeps refreshing evenly, then shot order.
-    eligible.sort((a, b) => a.takes.length - b.takes.length || a.shotNumber - b.shotNumber);
+    // Then regenerate forever (until budget/stop): fewest RENDERS first so every
+    // shot keeps refreshing evenly, then shot order. Sort on `nextTake` (the
+    // lifetime render count), NOT `takes.length` — the ring buffer caps every
+    // shot at `maxTakes` files on disk, so once the loop is full every shot ties
+    // on `takes.length` and the shot-number tiebreak re-renders shot 1 forever
+    // while the rest never refresh.
+    eligible.sort((a, b) => a.nextTake - b.nextTake || a.shotNumber - b.shotNumber);
     return eligible[0];
   }
 
