@@ -1108,7 +1108,7 @@ These defaults are overridable per-project via `series.json` → `videoDefaults`
 
 ### Picking a family at project creation
 
-`venice-video new` asks which family to use, and `venice-video new-series` asks too when it's run on a terminal without `--video-family`. Both write the answer to `series.json` → `videoDefaults.videoFamilyPreference` and swap the action / atmosphere / character-consistency models to match. The wizard orders the families as Automatic, Seedance, Wan 3.0, MiniMax H3, HappyHorse, Grok Imagine, then Kling O3.
+`venice-video new` asks which family to use, and `venice-video new-series` asks too when it's run on a terminal without `--video-family`. Both write the answer to `series.json` → `videoDefaults.videoFamilyPreference` and swap the action / atmosphere / character-consistency models to match. The wizard orders the families as Automatic, Seedance, Wan 3.0, MiniMax H3, MiniMax H3 Max, MiniMax H3 Max Turbo, HappyHorse, Grok Imagine, then Kling O3.
 
 ### Choosing dialogue audio
 
