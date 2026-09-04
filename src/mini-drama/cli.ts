@@ -5079,8 +5079,15 @@ program
       stream: { slug, episode: episodeNumber, engine },
     });
 
-    const status = await engine.start();
     const url = `http://${opts.host}:${server.port}/?project=${encodeURIComponent(slug)}&tab=Stream`;
+    // A new session renders the opening beat and then WAITS. The browser opens
+    // with one beat ready and the stream paused; Start in the UI continues the
+    // story. A resumed session (beats on disk) opens at once, also paused.
+    const before = engine.state();
+    if (!json && before.beats.length === 0) {
+      console.log(`Rendering the opening beat before opening the browser (writer ${describeIntelligence(writer)}, ${before.model.t2v} @ ${before.resolution})…`);
+    }
+    const status = await engine.prime();
 
     if (json) {
       emitJson({
@@ -5088,6 +5095,7 @@ program
         url,
         project: slug,
         episode: episodeNumber,
+        paused: true,
         model: status.model,
         resolution: status.resolution,
         duration: status.duration,
@@ -5101,7 +5109,8 @@ program
       console.log(`  video:      ${status.model.t2v} (beat 1) then ${status.model.i2v} chained off each last frame @ ${status.resolution}, ${status.duration}/beat`);
       console.log(`  direction:  ${opts.direction ?? '(none)'}`);
       console.log(`  budget:     ${opts.unbounded ? 'unbounded (streams until you stop it)' : `$${budgetUsd.toFixed(2)} (Start authorizes another budget)`}`);
-      if (status.beats.length > 0) console.log(`  resuming:   ${status.beats.length} beats already on disk`);
+      console.log(`  beats:      ${status.beats.length} on disk`);
+      console.log('  state:      PAUSED — click Start in the browser to continue the story. New beats then render back to back.');
       console.log('  The story never repeats and never re-renders. Every beat is kept under the episode\'s stream/ directory.');
       console.log('  Ctrl-C to stop.');
       if (opts.open) openInDefaultBrowser(url);

@@ -9,11 +9,10 @@ import { DailiesView } from './views/DailiesView';
 import { CastView } from './views/CastView';
 import { PostView } from './views/PostView';
 import { SettingsView } from './views/SettingsView';
-import { LoopView } from './views/LoopView';
 import { StreamView } from './views/StreamView';
 import { LogDrawer } from './views/LogDrawer';
 
-const TABS = ['Treatment', 'Script', 'Shots', 'Dailies', 'Loop', 'Stream', 'Cast & Locations', 'Post', 'Settings'] as const;
+const TABS = ['Treatment', 'Script', 'Shots', 'Dailies', 'Stream', 'Cast & Locations', 'Post', 'Settings'] as const;
 type Tab = (typeof TABS)[number];
 
 /** Deep-link support: `?project=<slug>&tab=Loop` (the `loop` command opens this). */
@@ -146,7 +145,6 @@ export function App() {
               {tab === 'Script' && <ScriptView slug={slug} state={state} busy={busy} />}
               {tab === 'Shots' && <ShotsView slug={slug} state={state} busy={busy} />}
               {tab === 'Dailies' && <DailiesView slug={slug} state={state} busy={busy} />}
-              {tab === 'Loop' && <LoopView slug={slug} state={state} busy={busy} />}
               {tab === 'Stream' && <StreamView slug={slug} state={state} busy={busy} />}
               {tab === 'Cast & Locations' && <CastView slug={slug} state={state} busy={busy} />}
               {tab === 'Post' && <PostView slug={slug} state={state} busy={busy} />}
