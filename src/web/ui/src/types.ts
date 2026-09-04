@@ -106,6 +106,43 @@ export interface LoopManifest {
   shots: LoopShotState[];
 }
 
+export interface StreamBeat {
+  n: number;
+  file: string;
+  beat: {
+    description: string;
+    characters: string[];
+    dialogue: { character: string; line: string; delivery?: string } | null;
+    sfx: string | null;
+    cameraMovement: string;
+    summary: string;
+  };
+  lane: 't2v' | 'i2v';
+  costUsd: number;
+  at: string;
+}
+
+export type StreamStatus = 'idle' | 'writing' | 'rendering' | 'error';
+
+export interface StreamManifest {
+  version: number;
+  episode: number;
+  model: { t2v: string; i2v: string; writer: string };
+  resolution: string;
+  duration: string;
+  budgetUsd: number | null;
+  unbounded: boolean;
+  spendUsd: number;
+  running: boolean;
+  status: StreamStatus;
+  lastError?: string;
+  inFlight?: number;
+  direction?: string;
+  startedAt: string;
+  updatedAt: string;
+  beats: StreamBeat[];
+}
+
 export interface EpisodeState {
   episode: number;
   script: EpisodeScript | null;
@@ -118,6 +155,7 @@ export interface EpisodeState {
   finalCut?: string;
   music?: string;
   loop?: LoopManifest;
+  stream?: StreamManifest;
 }
 
 export interface QaReport {

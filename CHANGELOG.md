@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`venice-video stream` — an infinite, live-authored story.** Not a loop. The
+  intelligence model writes one beat at a time from the series bible plus a
+  rolling `story-so-far.md`; beat 1 renders t2v on MiniMax H3 Max Turbo, every
+  later beat renders i2v off the previous beat's last frame. Nothing repeats,
+  nothing re-renders, no re-anchoring, no ring buffer: every beat stays on disk
+  in order under `episodes/episode-NNN/stream/`. Needs only a project; no
+  script, storyboard, or references. Resumable; stops after 3 consecutive
+  failures rather than skip a beat. `--direction` folds standing direction into
+  every writer prompt. New `src/mini-drama/stream-engine.ts`, `/api/projects/
+  :slug/stream/*` endpoints, `stream-updated` SSE event, and a **Stream** tab.
+
+### Fixed
+
+- **Loop: `pickNext` re-rendered shot 1 forever once the ring buffer was full
+  (#26).** It sorted on `takes.length`, which the ring buffer caps at
+  `--max-takes` for every shot, so every shot tied and the shot-number tiebreak
+  always picked shot 1. Now sorts on `nextTake` (the lifetime render count) for
+  true round-robin.
+- **Loop tab: the `take 20 of 3` label.** The `3` was the ring-buffer size, not
+  a total. Now reads `take #20 · 3 kept`, with a tooltip.
+
 ## 2.20.0 — 2026-09-04
 
 ### Fixed
