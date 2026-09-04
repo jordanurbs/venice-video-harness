@@ -159,6 +159,29 @@ test('max-takes is a ring buffer: old takes are pruned and their files deleted',
   assert.equal(mp4s.length, 2, 'pruned take files were deleted from disk');
 });
 
+test('GH #26: regeneration stays round-robin after the ring buffer fills (no shot is starved)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loop-rr-'));
+  // 3 shots, maxTakes=1 so every shot ties on takes.length immediately after
+  // the first pass — the exact condition that made the old takes.length sort
+  // pick shot 1 forever. 5s take = $0.06 (Turbo); budget $0.57 → exactly 9
+  // takes (0.54 spent, a 10th would be 0.60 > 0.57).
+  const { engine, calls } = makeEngine(dir, makeScript(3), { duration: '5s', budgetUsd: 0.57, maxTakes: 1, chain: false });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  assert.equal(calls.length, 9, 'rendered 9 takes within budget');
+  // Count renders per shot from the output paths.
+  const perShot = { '001': 0, '002': 0, '003': 0 };
+  for (const c of calls) perShot[c.outputPath.match(/shot-(\d+)--take\d+/)[1]] += 1;
+  const counts = Object.values(perShot);
+  assert.deepEqual(counts, [3, 3, 3], 'every shot regenerated the same number of times (was [7,1,1] with the takes.length sort)');
+  // currentTake is the lifetime take number, so it must have advanced for all.
+  for (const s of engine.status().shots) {
+    assert.equal(s.currentTake, 3, `shot ${s.key} refreshed to its 3rd take, not stuck on take 1`);
+  }
+});
+
 test('pinned shots are frozen and keep their current take', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'loop-pin-'));
   const { engine } = makeEngine(dir, makeScript(2), { once: true, chain: false });
