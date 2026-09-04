@@ -106,7 +106,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-export function extractLastFrame(videoPath: string, outputPath: string): void {
+/**
+ * Extract a frame near the end of a clip. `secondsFromEnd` (default 0) moves
+ * the target earlier — stream mode uses it to step back through the previous
+ * beat when the true last frame is rejected server-side as a start frame.
+ */
+export function extractLastFrame(videoPath: string, outputPath: string, secondsFromEnd = 0): void {
   // Probe the VIDEO stream duration, not the container: a longer audio track
   // puts the container end past the last decodable frame, and ffmpeg exits 0
   // having written nothing (loop-mode chaining hit this on MiniMax clips).
@@ -137,7 +142,7 @@ export function extractLastFrame(videoPath: string, outputPath: string): void {
   }
   // Step back in widening offsets until a frame actually lands on disk.
   for (const back of [0.1, 0.3, 0.6, 1.0]) {
-    const seekTo = Math.max(0, duration - back);
+    const seekTo = Math.max(0, duration - secondsFromEnd - back);
     runCommand('ffmpeg', [
       '-y',
       '-ss',
