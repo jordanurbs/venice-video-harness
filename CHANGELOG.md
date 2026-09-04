@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.20.1 — 2026-09-04
+
+### Fixed
+
+- **Loop regeneration re-rendered shot 1 forever once the ring buffer filled (#26).**
+  `LoopEngine.pickNext()` sorted eligible shots by `takes.length` ("fewest takes
+  first"), but `takes` is a ring buffer capped at `--max-takes`. After the first
+  full pass every shot tied on `takes.length === maxTakes`, so the shot-number
+  tiebreak returned shot 1 every cycle — re-rendering (and re-billing) shot 1
+  while shots 2..N never refreshed (observed as `001: currentTake 20` while
+  `002..005` stayed on takes `[1,2,3]`). It now sorts on `nextTake` (the lifetime
+  render counter the ring buffer never touches), giving true round-robin
+  regeneration.
+- **Loop tab take label.** The per-shot status read `take 20 of 3` (the `3` was
+  the ring-buffer count on disk, not a total). It now reads `take #20 · 3 kept`
+  with a tooltip explaining the `--max-takes` ring buffer.
+
 ## 2.20.0 — 2026-09-04
 
 ### Fixed

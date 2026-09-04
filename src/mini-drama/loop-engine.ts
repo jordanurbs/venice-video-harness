@@ -474,9 +474,14 @@ export class LoopEngine {
     // One-pass mode never regenerates; it stops once every shot has a take.
     if (this.once) return undefined;
 
-    // Then regenerate forever (until budget/stop): fewest-takes first so every
-    // shot keeps refreshing evenly, then shot order.
-    eligible.sort((a, b) => a.takes.length - b.takes.length || a.shotNumber - b.shotNumber);
+    // Then regenerate forever (until budget/stop): fewest LIFETIME renders first
+    // so every shot keeps refreshing evenly, then shot order. Sort on `nextTake`
+    // (the lifetime render counter), NOT `takes.length` — `takes` is a ring
+    // buffer capped at maxTakes, so once the loop is full every shot ties on
+    // takes.length === maxTakes and the shot-number tiebreak would pick shot 1
+    // forever, starving the rest (GH #26). `nextTake` keeps climbing past the
+    // cap, so it gives true round-robin regeneration.
+    eligible.sort((a, b) => a.nextTake - b.nextTake || a.shotNumber - b.shotNumber);
     return eligible[0];
   }
 
