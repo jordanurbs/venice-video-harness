@@ -107,28 +107,50 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function extractLastFrame(videoPath: string, outputPath: string): void {
+  // Probe the VIDEO stream duration, not the container: a longer audio track
+  // puts the container end past the last decodable frame, and ffmpeg exits 0
+  // having written nothing (loop-mode chaining hit this on MiniMax clips).
   const durationStr = runCommand('ffprobe', [
     '-v',
     'error',
+    '-select_streams',
+    'v:0',
     '-show_entries',
-    'format=duration',
+    'stream=duration',
     '-of',
     'csv=p=0',
     videoPath,
   ]).trim();
-  const duration = parseFloat(durationStr);
-  const seekTo = Math.max(0, duration - 0.05);
-
-  runCommand('ffmpeg', [
-    '-y',
-    '-ss',
-    String(seekTo),
-    '-i',
-    videoPath,
-    '-frames:v',
-    '1',
-    outputPath,
-  ]);
+  let duration = parseFloat(durationStr);
+  if (!Number.isFinite(duration)) {
+    // Some files carry no per-stream duration; fall back to the container's.
+    const formatStr = runCommand('ffprobe', [
+      '-v',
+      'error',
+      '-show_entries',
+      'format=duration',
+      '-of',
+      'csv=p=0',
+      videoPath,
+    ]).trim();
+    duration = parseFloat(formatStr);
+  }
+  // Step back in widening offsets until a frame actually lands on disk.
+  for (const back of [0.1, 0.3, 0.6, 1.0]) {
+    const seekTo = Math.max(0, duration - back);
+    runCommand('ffmpeg', [
+      '-y',
+      '-ss',
+      String(seekTo),
+      '-i',
+      videoPath,
+      '-frames:v',
+      '1',
+      outputPath,
+    ]);
+    if (existsSync(outputPath)) return;
+  }
+  throw new Error(`ffmpeg could not extract a frame from ${videoPath}`);
 }
 
 function extractFirstFrame(videoPath: string, outputPath: string): void {
@@ -681,11 +703,13 @@ export async function renderVideoFile(
   const bitrateMode = resolveBitrateMode(effectiveModel, options.bitrateMode);
   if (bitrateMode) body.bitrate_mode = bitrateMode;
 
-  // Seedance image-to-video inherits aspect from the start image and
-  // returns HTTP 400 if aspect_ratio is provided. Reference-to-video and
-  // text-to-video Seedance variants do accept aspect_ratio.
+  // Image-to-video inherits aspect from the start image. Reference-to-video
+  // and text-to-video variants take aspect_ratio explicitly — MiniMax H3 / H3
+  // Max t2v go further and return HTTP 400 ("aspect_ratio: Required") without
+  // it, which made loop watch mode's opening t2v take unqueueable.
   if (
     effectiveModel.includes('reference-to-video')
+    || effectiveModel.includes('text-to-video')
     || (effectiveModel.includes('seedance') && !effectiveModel.includes('image-to-video'))
   ) {
     body.aspect_ratio = options.aspectRatio ?? '16:9';
