@@ -153,7 +153,7 @@ export class JobRunner {
     if (!concept || concept.length > 4000) return { error: 'A concept is required.' };
 
     const ROUTES = new Set(['montage', 'standard']);
-    const FAMILIES = new Set(['auto', 'seedance', 'wan-3-0', 'happyhorse', 'minimax-h3', 'grok-imagine', 'kling-o3']);
+    const FAMILIES = new Set(['auto', 'seedance', 'wan-3-0', 'happyhorse', 'minimax-h3', 'minimax-h3-max', 'minimax-h3-max-turbo', 'grok-imagine', 'kling-o3']);
     const AUDIO = new Set(['native', 'lip-sync', 'narrator-vo']);
     if (opts.route && !ROUTES.has(opts.route)) return { error: 'Invalid route.' };
     if (opts.videoFamily && !FAMILIES.has(opts.videoFamily)) return { error: 'Invalid video family.' };

@@ -1,4 +1,5 @@
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
+import { getVideoModel } from '../venice/models.js';
 
 // ---------------------------------------------------------------------------
 // Project / Series State
@@ -268,6 +269,18 @@ export type AudioStrategy = 'native' | 'lip-sync' | 'narrator-vo';
  *                      so every take is a finish-quality spend) and the
  *                      duration ladder starts at 5s, so 3-4s beats have to be
  *                      re-scripted or routed elsewhere.
+ *   - 'minimax-h3-max' / 'minimax-h3-max-turbo'
+ *                    — MiniMax H3 Max. Despite the name, NOT a bigger H3: it
+ *                      renders 768P (not 2K), it is `private` rather than
+ *                      anonymized, and it wants a plain prompt instead of the
+ *                      directorial stack (`promptStyle: 'simple'`). The model
+ *                      composes its own coverage and cutting from a stated
+ *                      intent, which makes it the montage / "let the model tell
+ *                      the beat" family — and at $0.024/s (Turbo $0.012/s,
+ *                      the cheapest lane here) a 15s take is disposable enough
+ *                      to generate several and pick. Duration ladder is 5-15s
+ *                      like H3. Turbo has no R2V lane, so both families anchor
+ *                      identity on `minimax-h3-max-reference-to-video`.
  *   - 'wan-3-0'      — Wan 3.0. The only family that renders past 15s: the
  *                      ladder runs 5/10/15/20/25/30s at 480p/720p/1080p with
  *                      native audio always on. Its R2V lane takes the same
@@ -285,6 +298,8 @@ export type VideoFamilyPreference =
   | 'seedance'
   | 'happyhorse'
   | 'minimax-h3'
+  | 'minimax-h3-max'
+  | 'minimax-h3-max-turbo'
   | 'wan-3-0'
   | 'grok-imagine'
   | 'kling-o3';
@@ -319,6 +334,24 @@ export function resolveVideoFamilyDefaults(
         actionModel: 'minimax-h3-image-to-video',
         atmosphereModel: 'minimax-h3-image-to-video',
         characterConsistencyModel: 'minimax-h3-reference-to-video',
+      };
+    case 'minimax-h3-max':
+      // H3 Max (2026-09-03): 768P, private, simple-prompt. i2v carries
+      // action/atmosphere; R2V carries identity with a 9-image stack.
+      return {
+        actionModel: 'minimax-h3-max-image-to-video',
+        atmosphereModel: 'minimax-h3-max-image-to-video',
+        characterConsistencyModel: 'minimax-h3-max-reference-to-video',
+      };
+    case 'minimax-h3-max-turbo':
+      // Turbo is the same model shape at half the price, but ships NO R2V lane
+      // ("Specified model not found" on -turbo-reference-to-video), so identity
+      // shots cross to the non-turbo R2V. Action/atmosphere stay on turbo,
+      // which is where the volume — and the savings — are.
+      return {
+        actionModel: 'minimax-h3-max-turbo-image-to-video',
+        atmosphereModel: 'minimax-h3-max-turbo-image-to-video',
+        characterConsistencyModel: 'minimax-h3-max-reference-to-video',
       };
     case 'grok-imagine':
       // Grok Imagine now ships its own R2V variant (2026-05+). Stays in-family.
@@ -977,11 +1010,41 @@ export function resolveMontageModel(
   return videoDefaults?.montageModel ?? DEFAULT_MONTAGE_MODEL;
 }
 
+/**
+ * Montage window ceiling, in seconds.
+ *
+ * This used to return a flat 30 — Seedance 2.5's single-pass max — while
+ * accepting `montageModel` and ignoring it. Any montage model with a shorter
+ * ladder (MiniMax H3 Max tops out at 15s) therefore got 30s windows planned
+ * against it, and every one of those units failed `assertShotDurationsValid`
+ * after the plan was already written. The model's own ceiling now bounds the
+ * window, and an explicit `montageMaxDurationSec` is clamped to it rather than
+ * overriding it into an invalid request.
+ */
 export function resolveMontageMaxDurationSec(
   videoDefaults?: Pick<VideoModelDefaults, 'montageMaxDurationSec' | 'montageModel'>,
 ): number {
-  if (videoDefaults?.montageMaxDurationSec) return videoDefaults.montageMaxDurationSec;
-  return DEFAULT_MONTAGE_MAX_DURATION_SEC;
+  const modelCeiling = getVideoModel(resolveMontageModel(videoDefaults))?.maxDurationSec;
+  const requested = videoDefaults?.montageMaxDurationSec ?? modelCeiling ?? DEFAULT_MONTAGE_MAX_DURATION_SEC;
+  return modelCeiling ? Math.min(requested, modelCeiling) : requested;
+}
+
+/**
+ * Shortest montage generation the montage model will actually accept.
+ *
+ * `MONTAGE_MIN_DURATION_SEC` (4s) is the Seedance floor; MiniMax H3 Max starts
+ * at 5s and hard-400s below it. Windows under this go out as plain singles
+ * instead, and unit durations are floored here.
+ */
+export function resolveMontageMinDurationSec(
+  videoDefaults?: Pick<VideoModelDefaults, 'montageModel'>,
+): number {
+  const ladder = getVideoModel(resolveMontageModel(videoDefaults))?.durations ?? [];
+  const floors = ladder
+    .map(d => parseInt(d, 10))
+    .filter(n => Number.isFinite(n));
+  const ladderFloor = floors.length > 0 ? Math.min(...floors) : undefined;
+  return Math.max(MONTAGE_MIN_DURATION_SEC, ladderFloor ?? MONTAGE_MIN_DURATION_SEC);
 }
 
 /**
@@ -1028,6 +1091,11 @@ export function resolveLipSyncModel(family: VideoFamilyPreference): string {
     case 'minimax-h3':
       // The only H3 lane with `audio_input: true` in GET /models.
       return 'minimax-h3-reference-to-video';
+    case 'minimax-h3-max':
+    case 'minimax-h3-max-turbo':
+      // Same split on H3 Max: only the R2V lane reports audio_input:true, and
+      // it is also the only R2V in the pair (Turbo has none).
+      return 'minimax-h3-max-reference-to-video';
     case 'happyhorse':
     case 'wan-3-0':
     case 'grok-imagine':
@@ -1124,6 +1192,9 @@ export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   'happyhorse-1-1-reference-to-video',
   // MiniMax H3 R2V takes a flat reference_image_urls array (9-image budget).
   'minimax-h3-reference-to-video',
+  // MiniMax H3 Max R2V — same flat array. Venice documents a 256px minimum
+  // short side and a 0.4-2.5 aspect window on its reference images.
+  'minimax-h3-max-reference-to-video',
   'pixverse-c1-reference-to-video',
   'grok-imagine-reference-to-video',
   // Wan 2.7 R2V uses per_reference_audio (elements[].audio_url) for lip-sync;
@@ -1181,6 +1252,12 @@ export const MODELS_USING_IMAGE_TAGS = new Set([
   // It honors @ImageN tags — same probe, a paid 5s render placed both tagged
   // characters exactly per their @Image1/@Image2 assignments.
   'minimax-h3-reference-to-video',
+  // MiniMax H3 Max R2V. Unlike base H3 R2V, /video/quote ACCEPTED `image_url`
+  // alongside `reference_image_urls` (probe 2026-09-03) — but quote validates
+  // less than queue, and pure-reference is the right mode regardless: it drops
+  // the start frame so the reference stack keeps compositional authority, and
+  // it is what makes @ImageN tags resolve. Kept in-set for family parity.
+  'minimax-h3-max-reference-to-video',
   // HappyHorse 1.1 R2V honors @ImageN prompt mentions — probed 2026-07-30
   // (quote accepted @ImageN prompt + 9 refs + reference_audio_urls with no
   // image_url; paid 3s render placed both tagged characters correctly per
@@ -1217,6 +1294,8 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   // MiniMax H3 R2V — GET /models reports audio_input:true on the R2V variant
   // only; the t2v/i2v lanes report false and are deliberately left out.
   'minimax-h3-reference-to-video',
+  // MiniMax H3 Max R2V — same audio_input:true split (t2v/i2v report false).
+  'minimax-h3-max-reference-to-video',
 ]);
 
 /**
@@ -1270,6 +1349,7 @@ export const MAX_REFERENCE_IMAGES_BY_MODEL: Record<string, number> = {
   'seedance-2-0-fast-reference-to-video': 9,
   'happyhorse-1-1-reference-to-video': 9,
   'minimax-h3-reference-to-video': 9,
+  'minimax-h3-max-reference-to-video': 9,
   'wan-3-0-reference-to-video': 9,
   'wan-3-0-enhanced-reference-to-video': 9,
 };

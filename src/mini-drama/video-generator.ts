@@ -106,7 +106,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-function extractLastFrame(videoPath: string, outputPath: string): void {
+export function extractLastFrame(videoPath: string, outputPath: string): void {
   const durationStr = runCommand('ffprobe', [
     '-v',
     'error',
@@ -392,7 +392,7 @@ async function persistCharacterJson(series: SeriesState, character: SeriesState[
  * TTS pattern in ensureDialogueAudio) and persists it to character.json so the
  * prompt builder picks it up. Best-effort — a failure just skips the ref.
  */
-async function ensureVoiceReferenceForShot(
+export async function ensureVoiceReferenceForShot(
   client: VeniceClient,
   series: SeriesState,
   shot: ShotScript,
@@ -508,7 +508,7 @@ async function logFailedRequest(
   console.warn(`  Failed request logged to: ${logFile}`);
 }
 
-interface RenderVideoOptions {
+export interface RenderVideoOptions {
   prompt: MiniDramaVideoPrompt;
   /** Start-frame image. Omitted in pure reference mode (slot-plan renders). */
   anchorImagePath?: string;
@@ -556,6 +556,14 @@ interface RenderVideoOptions {
    * Set automatically when a resumed job turns out to be gone on Venice's side.
    */
   forceRequeue?: boolean;
+  /**
+   * Explicit output resolution override. Honored ONLY when the effective model
+   * actually lists it (so a bad value can't 400), otherwise the model-family
+   * default below applies. The loop-preview engine passes `480P` here to render
+   * MiniMax H3 Max Turbo drafts on the cheap tier, which the auto-pin never
+   * selects (it forces `768P` for every `minimax-h3-max*` id).
+   */
+  resolution?: string;
 }
 
 function fileToDataUri(filePath: string, mimeType = 'image/png'): string | undefined {
@@ -564,7 +572,7 @@ function fileToDataUri(filePath: string, mimeType = 'image/png'): string | undef
   return `data:${mimeType};base64,${buffer.toString('base64')}`;
 }
 
-async function renderVideoFile(
+export async function renderVideoFile(
   client: VeniceClient,
   options: RenderVideoOptions,
 ): Promise<string> {
@@ -629,8 +637,28 @@ async function renderVideoFile(
     body.end_image_url = imageToDataUri(endFrameImagePath);
   }
 
-  if (effectiveModel.includes('seedance')) {
+  // Explicit override wins, but only when the model actually lists it —
+  // otherwise a stray value would 400 the render. Falls through to the
+  // family defaults below when absent or unsupported. The loop-preview engine
+  // uses this to pin MiniMax H3 Max Turbo to its 480P draft tier.
+  const resolutionOverride = options.resolution;
+  const overrideSpec = resolutionOverride ? getVideoModel(effectiveModel) : undefined;
+  if (resolutionOverride && overrideSpec?.resolutions.includes(resolutionOverride)) {
+    body.resolution = resolutionOverride;
+  } else if (resolutionOverride) {
+    console.warn(`  ⚠ Resolution override ${resolutionOverride} not valid for ${effectiveModel}; using the model default.`);
+  }
+
+  if (body.resolution !== undefined) {
+    // Already pinned by the override above.
+  } else if (effectiveModel.includes('seedance')) {
     body.resolution = '720p';
+  } else if (effectiveModel.includes('minimax-h3-max')) {
+    // H3 Max / Max Turbo top out at 768P and reject 2K outright. This branch
+    // MUST stay above the `minimax-h3` one — the substring match below would
+    // otherwise pin them to 2K and 400 every render. 480P exists as a draft
+    // tier but is not auto-selected; 768P is the finish resolution.
+    body.resolution = '768P';
   } else if (effectiveModel.includes('minimax-h3')) {
     // 2K is H3's only resolution — anything else is a hard 400.
     body.resolution = '2K';
@@ -1118,6 +1146,60 @@ function resolveCharacterElements(
   return {};
 }
 
+export interface ShotReferenceInputs {
+  elements?: VideoElement[];
+  referenceImagePaths?: string[];
+  sceneImagePaths?: string[];
+  voiceReferencePaths: string[];
+  /** True when an @Image slot plan resolved to ≥1 on-disk reference. */
+  hasSlotPlan: boolean;
+}
+
+/**
+ * Resolve every reference-bearing input for a shot's render — character
+ * elements / `reference_image_urls`, scene images, the location environment
+ * fold, and voice-donor clips — from the already-built video prompt. Extracted
+ * from `renderSingleShotUnit` so other callers (the loop-preview engine's
+ * create mode) resolve the SAME reference stack the real pipeline does, instead
+ * of a divergent copy. Pure w.r.t. Venice (reads disk only); voice-donor
+ * GENERATION stays in `ensureVoiceReferenceForShot`, called before this.
+ */
+export function resolveShotReferenceInputs(
+  series: SeriesState,
+  shot: ShotScript,
+  videoPrompt: MiniDramaVideoPrompt,
+): ShotReferenceInputs {
+  const resolved = resolveCharacterElements(series, shot, videoPrompt);
+  const elements = resolved.elements;
+  let referenceImagePaths = resolved.referenceImagePaths;
+  let sceneImagePaths = shot.sceneImagePaths?.filter(p => existsSync(p));
+  const hasSlotPlan = (videoPrompt.referenceSlots?.length ?? 0) > 0
+    && (referenceImagePaths?.length ?? 0) > 0;
+
+  // Location environment references. The slot plan already interleaves location
+  // angles for @Image-tag models; this legacy fold only runs when no plan
+  // exists. Kling O3 R2V takes environment refs via scene_image_urls; hand-set
+  // sceneImagePaths always win.
+  const locationRefPath = getLocationRefPath(series, shot);
+  if (locationRefPath) {
+    if (MODELS_SUPPORTING_SCENE_IMAGES.has(videoPrompt.model)) {
+      if (!sceneImagePaths || sceneImagePaths.length === 0) {
+        sceneImagePaths = [locationRefPath];
+        console.log(`  Location ref -> scene_image_urls (${shot.location})`);
+      }
+    } else if (!hasSlotPlan && videoPrompt.locationEnvSlot) {
+      referenceImagePaths = foldLocationIntoReferences(
+        series, shot, videoPrompt, locationRefPath, referenceImagePaths,
+      );
+    }
+  }
+
+  // Voice-donor clips in the exact order the prompt's @AudioN slots expect.
+  const voiceReferencePaths = resolveVoiceReferencePaths(series, videoPrompt);
+
+  return { elements, referenceImagePaths, sceneImagePaths, voiceReferencePaths, hasSlotPlan };
+}
+
 function getShotPanelPath(sceneDir: string, shotId: number | string): string {
   return join(sceneDir, `shot-${shotKey(shotId)}.png`);
 }
@@ -1321,10 +1403,8 @@ async function renderSingleShotUnit(
     if (res.autoUseReferenceImages) console.log('  Auto-enabled: reference images');
   }
 
-  let { elements, referenceImagePaths } = resolveCharacterElements(series, shot, videoPrompt);
-  let sceneImagePaths = shot.sceneImagePaths?.filter(p => existsSync(p));
-  const hasSlotPlan = (videoPrompt.referenceSlots?.length ?? 0) > 0
-    && (referenceImagePaths?.length ?? 0) > 0;
+  const { elements, referenceImagePaths, sceneImagePaths, voiceReferencePaths, hasSlotPlan } =
+    resolveShotReferenceInputs(series, shot, videoPrompt);
 
   // Refs-only shots (Seedance R2V slot plan) don't anchor on the panel, so a
   // missing panel is fine there. Everything else still requires it.
@@ -1335,29 +1415,6 @@ async function renderSingleShotUnit(
 
   let anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath, panelPath);
   const endFramePath = chooseEndFrameImagePath(unit, sceneDir, nextShotNumber);
-
-  // --- Location environment references (B5) ---
-  // The slot plan (referenceSlots) already interleaves location angles for
-  // @Image-tag models; this legacy fold only runs when no plan exists.
-  // Kling O3 R2V takes environment refs via scene_image_urls. Hand-set
-  // sceneImagePaths always win as an override.
-  const locationRefPath = getLocationRefPath(series, shot);
-  if (locationRefPath) {
-    if (MODELS_SUPPORTING_SCENE_IMAGES.has(videoPrompt.model)) {
-      if (!sceneImagePaths || sceneImagePaths.length === 0) {
-        sceneImagePaths = [locationRefPath];
-        console.log(`  Location ref -> scene_image_urls (${shot.location})`);
-      }
-    } else if (!hasSlotPlan && videoPrompt.locationEnvSlot) {
-      referenceImagePaths = foldLocationIntoReferences(
-        series, shot, videoPrompt, locationRefPath, referenceImagePaths,
-      );
-    }
-  }
-
-  // Resolve voice-donor clips in the exact order the prompt's @AudioN slots
-  // expect (A3). Only used by reference-audio-capable models with ≥1 ref image.
-  const voiceReferencePaths = resolveVoiceReferencePaths(series, videoPrompt);
 
   // --- AGENTS.md rule 32: Seedance R2V keyframe pipeline ---
   // Only for lip-sync models with no `reference_image_urls` lane (Wan 2.7

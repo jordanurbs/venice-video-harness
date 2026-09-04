@@ -4,6 +4,7 @@
 
 import { createSeries } from '../dist/series/manager.js';
 import { resolveVideoFamilyDefaults } from '../dist/series/types.js';
+import { getVideoModel } from '../dist/venice/models.js';
 
 let failed = 0;
 function ok(label, cond, detail) {
@@ -42,6 +43,31 @@ function ok(label, cond, detail) {
   // H3 R2V is the one H3 lane with audio_input, so lip-sync stays in-family.
   ok('minimax-h3 lipSyncModel stays in-family', s.videoDefaults.lipSyncModel === 'minimax-h3-reference-to-video');
   ok('videoFamilyPreference persisted', s.videoDefaults.videoFamilyPreference === 'minimax-h3');
+}
+
+// Family 'minimax-h3-max' → H3 Max i2v + H3 Max R2V. Must NOT resolve to the
+// base H3 ids: same name, different resolution ladder and prompt style.
+{
+  const s = createSeries('H3 Max Series', 'concept', 'drama', 'somewhere', {
+    videoFamilyPreference: 'minimax-h3-max',
+  });
+  ok('minimax-h3-max actionModel', s.videoDefaults.actionModel === 'minimax-h3-max-image-to-video');
+  ok('minimax-h3-max atmosphereModel', s.videoDefaults.atmosphereModel === 'minimax-h3-max-image-to-video');
+  ok('minimax-h3-max characterConsistencyModel', s.videoDefaults.characterConsistencyModel === 'minimax-h3-max-reference-to-video');
+  ok('minimax-h3-max lipSyncModel stays in-family', s.videoDefaults.lipSyncModel === 'minimax-h3-max-reference-to-video');
+  ok('videoFamilyPreference persisted', s.videoDefaults.videoFamilyPreference === 'minimax-h3-max');
+}
+
+// Family 'minimax-h3-max-turbo' → Turbo carries action/atmosphere, but Turbo
+// ships no R2V lane, so identity crosses to the non-turbo H3 Max R2V.
+{
+  const s = createSeries('H3 Max Turbo Series', 'concept', 'drama', 'somewhere', {
+    videoFamilyPreference: 'minimax-h3-max-turbo',
+  });
+  ok('turbo actionModel', s.videoDefaults.actionModel === 'minimax-h3-max-turbo-image-to-video');
+  ok('turbo atmosphereModel', s.videoDefaults.atmosphereModel === 'minimax-h3-max-turbo-image-to-video');
+  ok('turbo identity crosses to H3 Max R2V', s.videoDefaults.characterConsistencyModel === 'minimax-h3-max-reference-to-video');
+  ok('turbo lipSyncModel is the H3 Max R2V lane', s.videoDefaults.lipSyncModel === 'minimax-h3-max-reference-to-video');
 }
 
 // Family 'wan-3-0' → Wan 3.0 i2v + R2V. No audio input anywhere in the
@@ -112,10 +138,15 @@ for (const strategy of ['native', 'lip-sync', 'narrator-vo']) {
 }
 
 // resolveVideoFamilyDefaults: each family returns a complete triplet.
-for (const family of ['auto', 'seedance', 'wan-3-0', 'happyhorse', 'minimax-h3', 'grok-imagine', 'kling-o3']) {
+for (const family of ['auto', 'seedance', 'wan-3-0', 'happyhorse', 'minimax-h3', 'minimax-h3-max', 'minimax-h3-max-turbo', 'grok-imagine', 'kling-o3']) {
   const d = resolveVideoFamilyDefaults(family);
   ok(`resolveVideoFamilyDefaults(${family}).actionModel`, typeof d.actionModel === 'string' && d.actionModel.length > 0);
   ok(`resolveVideoFamilyDefaults(${family}).characterConsistencyModel`, typeof d.characterConsistencyModel === 'string');
+  // Every routed id must exist in the registry — a family pointing at a
+  // hallucinated slug only surfaces as a 404 mid-render.
+  for (const id of [d.actionModel, d.atmosphereModel, d.characterConsistencyModel]) {
+    ok(`resolveVideoFamilyDefaults(${family}) routes to a real model: ${id}`, getVideoModel(id) !== undefined);
+  }
 }
 
 if (failed > 0) { console.error(`\n${failed} assertion(s) failed.`); process.exit(1); }

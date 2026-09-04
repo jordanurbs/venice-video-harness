@@ -16,6 +16,7 @@ import type { SeriesState, EpisodeScript } from '../series/types.js';
 import { collectProjectStatus, type ProjectStatus } from '../session/status.js';
 import { loadWorkshop, type WorkshopDraft } from '../mini-drama/workshop.js';
 import { shotKey } from '../mini-drama/treatment.js';
+import type { LoopManifest } from '../mini-drama/loop-engine.js';
 
 export interface ProjectListEntry {
   name: string;
@@ -73,6 +74,8 @@ export interface EpisodeState {
   units: UnitMedia[];
   finalCut?: string;
   music?: string;
+  /** Loop-preview state, when `venice-video loop` has run for this episode. */
+  loop?: LoopManifest;
 }
 
 export interface ProjectState {
@@ -236,6 +239,9 @@ async function collectEpisodeState(
   const padded = String(episode).padStart(3, '0');
   const finalCutPath = join(episodeDir, 'episode-' + padded + '-final.mp4');
   const musicPath = join(audioDir, 'music.mp3');
+  const loop = await readJsonIfExists(join(episodeDir, 'loop', 'loop-manifest.json')) as
+    | LoopManifest
+    | null;
 
   return {
     episode,
@@ -248,6 +254,7 @@ async function collectEpisodeState(
     units,
     finalCut: existsSync(finalCutPath) ? rel(finalCutPath) : undefined,
     music: existsSync(musicPath) ? rel(musicPath) : undefined,
+    loop: loop ?? undefined,
   };
 }
 

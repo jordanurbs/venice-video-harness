@@ -49,8 +49,8 @@ import type {
   VideoModelDefaults,
 } from '../series/types.js';
 import {
-  MONTAGE_MIN_DURATION_SEC,
   resolveMontageMaxDurationSec,
+  resolveMontageMinDurationSec,
   resolveMontageModel,
 } from '../series/types.js';
 import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
@@ -194,6 +194,7 @@ export function planMontageUnits(
 ): GenerationPlan {
   const videoDefaults: VideoModelDefaults | undefined = series.videoDefaults;
   const maxSec = resolveMontageMaxDurationSec(videoDefaults);
+  const minSec = resolveMontageMinDurationSec(videoDefaults);
   const model = resolveMontageModel(videoDefaults);
   const units: GenerationUnit[] = [];
   const scenes = groupShotsIntoScenes(script.shots);
@@ -208,7 +209,7 @@ export function planMontageUnits(
       for (const window of splitSceneIntoWindows(run, maxSec)) {
         const beats = layoutMontageBeats(window);
         const totalSec = beats[beats.length - 1].endSec;
-        if (window.length === 1 && totalSec < MONTAGE_MIN_DURATION_SEC) {
+        if (window.length === 1 && totalSec < minSec) {
           // Too short for the montage ladder — plain single.
           const shot = window[0];
           units.push(buildSingleFallback(shot));
@@ -226,7 +227,7 @@ export function planMontageUnits(
           shotNumbers: window.map(s => s.shotNumber),
           outputFile: `montage-s${String(scene.sceneNumber).padStart(2, '0')}-${padShot(first.shotNumber)}-${padShot(last.shotNumber)}.mp4`,
           model,
-          duration: `${Math.max(MONTAGE_MIN_DURATION_SEC, Math.round(clampedSec))}s`,
+          duration: `${Math.max(minSec, Math.round(clampedSec))}s`,
           startFrameStrategy: 'panel',
           endFrameStrategy: 'natural',
           decisionReasons: [

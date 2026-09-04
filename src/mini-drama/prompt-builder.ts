@@ -24,7 +24,7 @@ import {
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { parseShotDuration } from './generation-planner.js';
-import { getMaxPositivePromptChars } from '../venice/models.js';
+import { getMaxPositivePromptChars, modelWantsSimplePrompt } from '../venice/models.js';
 import { getLocation } from '../series/manager.js';
 import { buildReferenceSlotPlan, type ReferenceSlot } from './reference-slots.js';
 
@@ -428,6 +428,33 @@ function summarizeCharacterForMultiShot(
  * directs) rather than decorating it here. Identity is locked downstream by
  * R2V references, so this does not inject exhaustive character descriptions.
  */
+// MiniMax H3 Max (simple-prompt) models perform markedly better IMPROVISING
+// dialogue than reciting an exact script: they carry natural, continuous speech
+// across a whole generation, and a verbatim quote fights that instinct the same
+// way the directorial blocks do. So for these models — in native-dialogue mode
+// — the scripted line is given as INTENT (what to convey, in what tone) rather
+// than a quote to read, and the model is invited to phrase it in character.
+// Directorial models (Seedance, Wan, Kling, ...) still get the exact line in
+// quotes; exact-lip-sync ALWAYS keeps the exact line because the audio_url
+// drives the spoken words. See AGENTS.md.
+const IMPROV_DIALOGUE_NOTE =
+  'Improvise the spoken dialogue naturally and in character — the quoted lines are the '
+  + 'intent and tone to convey, not a script to read word for word. Keep the speech '
+  + 'continuous and let the characters react to each other across the whole shot.';
+
+/** True when this model+strategy should let the model improvise dialogue. */
+function shouldImproviseDialogue(modelId: string, series: SeriesState): boolean {
+  return modelWantsSimplePrompt(modelId) && series.videoDefaults.audioStrategy !== 'lip-sync';
+}
+
+/**
+ * Render one speaker's line. Simple-prompt models get it as intent (`conveys:`)
+ * so they improvise the phrasing; every other model gets the exact quote.
+ */
+function formatDialogueLine(who: string, line: string, improvise: boolean): string {
+  return improvise ? `${who} conveys: "${line}"` : `${who}: "${line}"`;
+}
+
 export function buildVideoPrompt(
   shot: ShotScript,
   series: SeriesState,
@@ -440,6 +467,14 @@ export function buildVideoPrompt(
 
   const resolution = resolveVideoModel(shot, series, previousShot);
   const modelId = resolution.modelId;
+
+  // Simple-prompt models (MiniMax H3 Max family) stage their own coverage and
+  // cutting from a stated intent. The directorial blocks below — spatial
+  // blocking, the locked location description, the geography-hold paragraph,
+  // the full aesthetic string — override that instinct and flatten the result,
+  // so they are skipped here. What survives is only what the model cannot
+  // infer: the action, who @ImageN is, the line, the sound, a compact look.
+  const simplePrompt = modelWantsSimplePrompt(modelId);
 
   const useElements = resolution.autoUseElements
     || (shot.useElements && MODELS_SUPPORTING_ELEMENTS.has(modelId));
@@ -521,7 +556,7 @@ export function buildVideoPrompt(
   // location's fixed anchors, to each other, and to the frame — the same
   // authored geometry the panel and blocking plate used, restated verbatim so
   // every generation of this beat asks for identical placement.
-  if (shot.blocking) {
+  if (shot.blocking && !simplePrompt) {
     parts.push(`Blocking: ${substituteTags(shot.blocking)}`);
   }
 
@@ -575,7 +610,10 @@ export function buildVideoPrompt(
       : shot.dialogue.character;
 
     const voiceParts = [voiceDesc, delivery].filter(Boolean).join(', ');
-    parts.push(`[${charRef}, ${voiceParts}]: "${shot.dialogue.line}"`);
+    const who = `[${charRef}${voiceParts ? `, ${voiceParts}` : ''}]`;
+    const improviseDialogue = shouldImproviseDialogue(modelId, series);
+    parts.push(formatDialogueLine(who, shot.dialogue.line, improviseDialogue));
+    if (improviseDialogue) parts.push(IMPROV_DIALOGUE_NOTE);
 
     // Bind the voice-donor clip. @AudioN carries voice identity ONLY; the
     // model should still render clean studio dialogue for the line above.
@@ -618,7 +656,7 @@ export function buildVideoPrompt(
   // inject its locked description + lighting so consecutive shots in the same
   // place stay consistent (anti-pattern 7).
   let locationEnvSlot: { slug: string; imageIndex: number } | undefined;
-  if (shot.location) {
+  if (shot.location && !simplePrompt) {
     const loc = getLocation(series, shot.location);
     if (loc) {
       const envNote = [
@@ -647,7 +685,11 @@ export function buildVideoPrompt(
     if (firstLocationSlot) {
       locationEnvSlot = { slug: firstLocationSlot.label, imageIndex: firstLocationSlot.imageIndex };
     }
-    const sbSlot = referenceSlots.find(s => s.kind === 'storyboard');
+    // The geography-hold paragraphs below are the heaviest directorial block in
+    // the prompt. Simple-prompt models still get the role clauses above (those
+    // bind what each @ImageN IS, which nothing else states), but not the
+    // lecture about holding screen sides — it costs them their own staging.
+    const sbSlot = simplePrompt ? undefined : referenceSlots.find(s => s.kind === 'storyboard');
     if (sbSlot) {
       parts.push(
         'Every reference must stay consistent across space and time: characters keep their ' +
@@ -657,7 +699,7 @@ export function buildVideoPrompt(
         `relative to the landmarks visible in @Image${sbSlot.imageIndex}; do not mirror, ` +
         'swap, or rearrange who stands where.',
       );
-    } else if (locationEnvSlot) {
+    } else if (locationEnvSlot && !simplePrompt) {
       // No blocking plate — anchor spatial consistency to the location refs.
       parts.push(
         `Keep the geography of @Image${locationEnvSlot.imageIndex} fixed: landmarks stay ` +
@@ -667,7 +709,12 @@ export function buildVideoPrompt(
     }
   }
 
-  let aestheticStr = buildAestheticString(series.aesthetic);
+  // Look: the full aesthetic string on a simple-prompt model is most of the
+  // prompt by volume and reads as a style pile-on, so those get the compact
+  // one-line version (medium, palette, lighting) instead.
+  let aestheticStr = simplePrompt
+    ? buildCompactAestheticString(series.aesthetic)
+    : buildAestheticString(series.aesthetic);
   if (isDaytimeShot(shot)) {
     aestheticStr = stripDarkAesthetic(aestheticStr);
     parts.push('Bright daytime scene, natural light, no rain.');
@@ -773,6 +820,10 @@ export function buildMontagePrompt(
     throw new Error('Series aesthetic must be set before generating videos.');
   }
   const modelId = unit.model;
+  // See buildVideoPrompt: on a simple-prompt model the montage IS the thing
+  // the model is good at, so it gets the beat list and little else — no camera
+  // union, no per-beat blocking, no geography-hold paragraph.
+  const simplePrompt = modelWantsSimplePrompt(modelId);
   const beats = unit.montageBeats ?? [];
   if (beats.length !== shots.length) {
     throw new Error(`Montage unit ${unit.unitId}: beat map (${beats.length}) does not match shots (${shots.length}).`);
@@ -877,17 +928,25 @@ export function buildMontagePrompt(
   const cameraTermsUsed = Array.from(new Set(
     shots.map(s => CAMERA_TERMS[s.cameraMovement.toLowerCase()] ?? s.cameraMovement),
   ));
-  parts.push(`CAMERA: ${cameraTermsUsed.join('; ')}. Hard cuts between beats — never dissolves, never cross-fades, never superimpositions.`);
+  // The hard-cut instruction is functional — the cutter slices this render at
+  // the beat boundaries, and a dissolve straddling one ruins both clips — so it
+  // survives even in simple mode. The camera-term union does not.
+  parts.push(simplePrompt
+    ? 'Hard cuts between beats — never dissolves, never cross-fades, never superimpositions.'
+    : `CAMERA: ${cameraTermsUsed.join('; ')}. Hard cuts between beats — never dissolves, never cross-fades, never superimpositions.`);
 
   // SEQUENCE — the timestamped beat list. Timestamps come from
   // unit.montageBeats, the same list the cutter slices on.
+  const improviseDialogue = shouldImproviseDialogue(modelId, series);
+  let anyDialogue = false;
   parts.push('SEQUENCE:');
   for (let i = 0; i < shots.length; i++) {
     const shot = shots[i];
     const beat = beats[i];
     const beatParts: string[] = [substituteTags(shot.description)];
-    if (shot.blocking) beatParts.push(`Blocking: ${substituteTags(shot.blocking)}`);
+    if (shot.blocking && !simplePrompt) beatParts.push(`Blocking: ${substituteTags(shot.blocking)}`);
     if (shot.dialogue) {
+      anyDialogue = true;
       const speakingChar = series.characters.find(
         c => c.name.toUpperCase() === shot.dialogue!.character.toUpperCase(),
       );
@@ -897,16 +956,20 @@ export function buildMontagePrompt(
         s => s.characterName.toUpperCase() === shot.dialogue!.character.toUpperCase(),
       );
       const charRef = slot ? `@Image${slot.elementIndex}` : shot.dialogue.character;
-      beatParts.push(`[${charRef}${voiceParts ? `, ${voiceParts}` : ''}]: "${shot.dialogue.line}"`);
+      const who = `[${charRef}${voiceParts ? `, ${voiceParts}` : ''}]`;
+      beatParts.push(formatDialogueLine(who, shot.dialogue.line, improviseDialogue));
     }
     // Vault rule 1: diegetic sound only, described per beat.
     if (shot.sfx) beatParts.push(`Sound: ${shot.sfx}.`);
     parts.push(`[${formatBeatTimestamp(beat.startSec)}-${formatBeatTimestamp(beat.endSec)}] ${beatParts.join(' ')}`);
   }
+  // Let a simple-prompt model carry natural, continuous speech across the whole
+  // montage rather than reciting each beat's quote verbatim.
+  if (improviseDialogue && anyDialogue) parts.push(IMPROV_DIALOGUE_NOTE);
 
   // Geography hold, pinned to the plate / first location angle (rule 49).
-  const sbSlot = plan.slots.find(s => s.kind === 'storyboard');
-  const locSlot = plan.slots.find(s => s.kind === 'location');
+  const sbSlot = simplePrompt ? undefined : plan.slots.find(s => s.kind === 'storyboard');
+  const locSlot = simplePrompt ? undefined : plan.slots.find(s => s.kind === 'location');
   if (sbSlot) {
     parts.push(
       `The blocking follows @Image${sbSlot.imageIndex} in every beat: each character stays ` +

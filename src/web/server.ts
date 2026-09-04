@@ -21,6 +21,7 @@ import { WorkspaceWatcher } from './watcher.js';
 import { JobRunner, type JobRequest } from './jobs.js';
 import { collectProjectState, listProjects } from './state.js';
 import { getModelSettings, updateModelSettings, type ModelSettingsPatch } from './settings.js';
+import type { LoopEngine } from '../mini-drama/loop-engine.js';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -137,9 +138,21 @@ export interface WebServerOptions {
   /** Path to the CLI entry the job runner spawns. */
   cliBin?: string;
   cliBaseArgs?: string[];
+  /**
+   * Reuse an existing SSE hub instead of creating one. The `loop` command
+   * passes the hub it already handed to the LoopEngine so engine `loop-updated`
+   * events reach the same browser tabs the watcher pushes to.
+   */
+  hub?: EventHub;
+  /**
+   * Loop-preview engine attached to one project/episode. When present, the
+   * `/api/projects/:slug/loop/*` endpoints drive it (state/start/stop/pin/
+   * regenerate). Only the matching slug is controllable.
+   */
+  loop?: { slug: string; episode: number; engine: LoopEngine };
 }
 
-export async function startWebServer(options: WebServerOptions): Promise<{ close: () => Promise<void>; port: number }> {
+export async function startWebServer(options: WebServerOptions): Promise<{ close: () => Promise<void>; port: number; hub: EventHub }> {
   const host = options.host ?? '127.0.0.1';
   const workspaceDir = resolve(options.workspaceDir);
   // The UI bundle lives in the SOURCE tree (src/web/ui/dist) — tsc does not
@@ -153,7 +166,7 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
   const uiDist = uiCandidates.find(candidate => existsSync(join(candidate, 'index.html')))
     ?? uiCandidates[0];
 
-  const hub = new EventHub();
+  const hub = options.hub ?? new EventHub();
   const watcher = new WorkspaceWatcher(workspaceDir, hub);
   watcher.start();
 
@@ -345,6 +358,71 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
       return;
     }
 
+    // Loop-preview control. The engine (if any) is attached to exactly one
+    // project/episode; only that slug is controllable. `state` is readable even
+    // without an attached engine (the on-disk manifest is served via project
+    // state), so it returns { attached:false } rather than an error.
+    const loopMatch = /^\/api\/projects\/([^/]+)\/loop\/(state|start|stop|pin|regenerate)$/.exec(pathname);
+    if (loopMatch) {
+      const action = loopMatch[2];
+      const project = await resolveProject(loopMatch[1]);
+      if (!project) {
+        sendJson(res, 404, { error: 'Unknown project' });
+        return;
+      }
+      const engine = options.loop && options.loop.slug === project.slug ? options.loop.engine : undefined;
+
+      if (action === 'state') {
+        if (req.method !== 'GET') { sendJson(res, 405, { error: 'Method not allowed' }); return; }
+        sendJson(res, 200, engine ? { attached: true, ...engine.status() } : { attached: false });
+        return;
+      }
+
+      if (!engine) {
+        sendJson(res, 409, { error: 'Loop is not running for this project. Start it with `venice-video loop`.' });
+        return;
+      }
+      if (req.method !== 'POST') { sendJson(res, 405, { error: 'Method not allowed' }); return; }
+
+      let body: { shotNumber?: number; pinned?: boolean; budget?: number; maxTakes?: number; unbounded?: boolean };
+      try {
+        body = await readBody(req) as typeof body;
+      } catch (err) {
+        sendJson(res, 400, { error: err instanceof Error ? err.message : 'Bad request' });
+        return;
+      }
+
+      try {
+        if (action === 'start') {
+          const config: { budgetUsd?: number; maxTakes?: number; unbounded?: boolean } = {};
+          if (typeof body.budget === 'number' && Number.isFinite(body.budget)) config.budgetUsd = body.budget;
+          if (typeof body.maxTakes === 'number' && Number.isFinite(body.maxTakes)) config.maxTakes = body.maxTakes;
+          if (typeof body.unbounded === 'boolean') config.unbounded = body.unbounded;
+          sendJson(res, 200, await engine.start(config));
+          return;
+        }
+        if (action === 'stop') {
+          sendJson(res, 200, await engine.stop());
+          return;
+        }
+        if (typeof body.shotNumber !== 'number' || !Number.isFinite(body.shotNumber)) {
+          sendJson(res, 400, { error: 'shotNumber is required.' });
+          return;
+        }
+        if (action === 'pin') {
+          sendJson(res, 200, body.pinned === false ? await engine.unpin(body.shotNumber) : await engine.pin(body.shotNumber));
+          return;
+        }
+        if (action === 'regenerate') {
+          sendJson(res, 200, await engine.regenerate(body.shotNumber));
+          return;
+        }
+      } catch (err) {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : 'Loop control failed' });
+        return;
+      }
+    }
+
     const runMatch = /^\/api\/projects\/([^/]+)\/run$/.exec(pathname);
     if (runMatch && req.method === 'POST') {
       const project = await resolveProject(runMatch[1]);
@@ -420,6 +498,7 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
 
   return {
     port: options.port,
+    hub,
     close: async () => {
       await watcher.stop();
       await new Promise<void>(resolvePromise => server.close(() => resolvePromise()));

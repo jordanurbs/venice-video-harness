@@ -318,6 +318,64 @@ Generate consistent storyboard panels using two Venice models in sequence:
 
 Construct prompts differently depending on the resolved model's capabilities:
 
+### Simple-Prompt Models (MiniMax H3 Max, H3 Max Turbo)
+
+Read this before anything else in this section: everything below assumes a model that
+renders what it is told and drifts when it is not. The H3 Max pair is the opposite, and
+the registry marks it with `promptStyle: 'simple'` (`modelWantsSimplePrompt(modelId)`).
+These models compose their own coverage — framing, cutting, beat rhythm — from one plain
+statement of intent, and the directorial stack fights the shot the model would otherwise
+have chosen.
+
+`buildVideoPrompt()` and `buildMontagePrompt()` already drop the heavy blocks for them, so
+the adaptation is mostly a matter of not writing them back in by hand:
+
+- **Dropped:** the authored `Blocking:` restatement, the location description and
+  `spatialAnchors` "Fixed layout (never rearrange)" line, the geography-hold /
+  no-mirroring lecture, and the full aesthetic string (the compact one is used instead).
+- **Kept:** `@ImageN` identity declarations and role clauses on the R2V lane, the beat
+  description, dialogue with delivery, and the audio-exclusion suffix. Identity and look
+  still have to be bound; only the staging instructions go.
+- **Dialogue is IMPROVISED, not scripted.** These models carry natural, continuous speech
+  across a whole generation and degrade when handed an exact line to recite. So in
+  native-dialogue mode the prompt gives the scripted line as INTENT — `[@Image1, voice,
+  delivery] conveys: "…"` plus a one-line "improvise naturally in character, keep the intent
+  and tone, don't recite word for word" note — instead of the directorial `[…]: "exact line"`
+  quote. `buildVideoPrompt` / `buildMontagePrompt` do this automatically via
+  `shouldImproviseDialogue(modelId, series)` (gated on `modelWantsSimplePrompt` +
+  `audioStrategy !== 'lip-sync'`). Do NOT hand-write exact quotes for these models expecting
+  them verbatim. The exception is **exact-lip-sync**, where the `audio_url` drives the exact
+  words, so the line stays verbatim. One consequence: captions must come from transcribing
+  the rendered audio, not from `script.json` (the model won't say it word for word).
+- **Don't** add camera terms, shot lists, or `Lens switch.` lines per beat. State the
+  sequence in a sentence or two and let the model cut it — that instinct is why this is
+  the montage family.
+- Resolution is pinned to **768P** by default (2K is a hard 400 — the inverse of plain
+  MiniMax H3, which is 2K-only). **480P is the draft tier** and is only selected via an
+  explicit `resolution` override on `renderVideoFile`. Durations run the 5-15s ladder.
+  `audio` is not configurable, so the field is omitted from the body entirely.
+- Turbo ships **no R2V lane**; identity and lip-sync shots cross to
+  `minimax-h3-max-reference-to-video`.
+
+**Loop mode uses this family, with two modes.** `venice-video loop` renders the whole shot
+script continuously and plays it as a live browser loop that hot-swaps in fresh takes:
+
+- `--mode watch` (default) — `minimax-h3-max-turbo-text-to-video` (or `-image-to-video` off
+  an existing panel) at 480P, ~$0.012/s. The cheapest lane; a disposable draft that does NOT
+  lock identity (Turbo has no R2V lane).
+- `--mode create` — the real reference-first routing on the **non-Turbo** H3 Max family at
+  768P (~$0.024/s): character shots on `minimax-h3-max-reference-to-video` with the full
+  `@Image` reference stack + voice-donor audio (identity locked, takes usable), atmosphere on
+  Max i2v/t2v. Shots with missing references degrade to i2v/t2v.
+
+Both skip the storyboard/QA gates and write only under `loop/`. See `LoopEngine`
+(`src/mini-drama/loop-engine.ts`) and AGENTS.md rule 58. Watch is a preview, not a production
+path; create is the "keep the good takes" path.
+
+The Creator app mirrors this: `VideoModelCapabilities.wantsSimplePrompt(id:)` gates the
+same trimming in `ShotPromptBuilder`, and relaxes the `produce_shots` motion/length gate
+so a correctly short H3 Max prompt isn't rejected as thin.
+
 ### Image-Tag R2V Models (Seedance 2.0 R2V Enhanced — default for all lanes)
 
 - Replace character names in descriptions with `@Image1`, `@Image2` tokens via regex
@@ -454,6 +512,9 @@ Seedance 2.0 (now the default for both atmosphere and character shots) accepts *
 - **Omitting `aspect_ratio` from R2V models:** Both Seedance R2V and Kling O3 R2V require `aspect_ratio`. If omitted, it defaults to `16:9` in code. Always pass `aspect_ratio` explicitly.
 - **Sending `image_references`/`image_1` to `nano-banana-pro`:** Returns 400. The generation model does not accept reference payloads at all.
 - **Sending invalid durations:** Seedance 2.0 accepts 4s/5s/8s/10s/12s/15s. Veo 3.1 accepts 4s/6s/8s. Duration auto-snap corrects this.
+- **Sending `2K` to MiniMax H3 Max, or `768P` to plain MiniMax H3:** The two families share a name and invert on resolution. H3 is 2K-only; H3 Max and H3 Max Turbo top out at 768P and reject 2K. `video-generator.ts` pins each family, and the `-max` branch has to stay above the `minimax-h3` substring match or every H3 Max render 400s.
+- **Reaching for `minimax-h3-max-turbo-reference-to-video`:** It doesn't exist ("Specified model not found"). Turbo has no R2V lane; identity shots route to `minimax-h3-max-reference-to-video`.
+- **Sending `audio` to any MiniMax H3 family model:** `audioConfigurable: false` — audio is always generated and the field must be omitted from the body, not set to `true`.
 - **Reference images below 300x300:** R2V models reject `reference_image_urls` and `elements` images smaller than 300x300 pixels. Never downscale character references below this threshold.
 - **Seedance + non-seedream face images (no longer an issue, 2026-07):** Venice removed the restriction that Seedance 2.0 only accepts face-bearing input images from `seedream-v5-lite` / `seedream-v5-lite-edit`. Any image family now works for face-bearing inputs, so there's nothing to pair, reroute, or launder — the pre-flight gate is a no-op.
 
@@ -470,6 +531,11 @@ Seedance 2.0 (now the default for both atmosphere and character shots) accepts *
 - **Multi-edit with more than 2 character references:** The multi-edit endpoint accepts max 3 images total (base + 2 refs). Exceeding this drops references silently.
 - **Sequential action in image descriptions:** Causes comic-panel layouts instead of single frames. Separate the single-frame panel description from the full video action description.
 - **Vague body orientation:** Produces twisted poses. Always specify full-body direction explicitly (e.g., "seen entirely from behind", "facing camera directly").
+
+### Prompt-Style Mismatches
+
+- **Over-directing a simple-prompt model:** Hand-writing blocking, per-beat camera terms, `Lens switch.` lines, or geography-hold clauses into a MiniMax H3 Max prompt flattens the result — it stages its own coverage and the clauses fight it. The prompt builder strips these automatically; don't re-add them via authored shot fields expecting them to help.
+- **Padding an H3 Max prompt to clear the motion gate:** The Creator's `produce_shots` money gate normally demands 12+ words and motion vocabulary. For simple-prompt models it only asks for a stated subject and setting. Inflating a short, correct prompt to satisfy the old bar is the failure, not the fix.
 
 ### Style Consistency Failures
 

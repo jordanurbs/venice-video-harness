@@ -552,6 +552,8 @@ Live catalog (synced against `GET /api/v1/models?type=video` — 103 entries). F
 | **HappyHorse 1.1** | i2v, R2V (up to 9 refs) | t2v | 15s | Yes (joint single-pass, 7-lang phoneme lip-sync) | **#1 blind-preference T2V + I2V** (Alibaba 15B). 3-15s, 720p/1080p, nine aspect ratios. Best for talking characters + multilingual localization; SFW/commercial-leaning. The `happyhorse` video-family now routes here. |
 | **HappyHorse 1.0** | i2v, R2V | t2v | 15s | Yes | Prior line, kept for back-compat. Livelier hand-camera realism / cinematic grain vs Seedance. |
 | **MiniMax H3** | i2v, R2V (up to 9 refs) | t2v | 15s (**5s floor**) | Yes (native stereo, not toggleable) | Open-weight omni-modal model — one net covers T2V/I2V/reference. **2K is the only resolution** (no draft tier) at ~1/3 the per-second cost of other families; 24fps, 2500-char prompts. The `minimax-h3` video-family routes here. Sub-5s durations are a hard 400. |
+| **MiniMax H3 Max** | i2v, R2V (up to 9 refs) | t2v | 15s (**5s floor**) | Yes (native, not toggleable) | **Simple prompts — the model stages its own coverage.** Registry `promptStyle: 'simple'`, so the prompt builder strips blocking, locked location descriptions, and geography-hold clauses; say the intent in a sentence or two. Best for montages and beats where the model telling its own story is the point. **768P max — 2K is a hard 400**, the inverse of base H3 (480P is the draft tier). `private` tier, uncensored, 10000-char prompts. $0.024/s. The `minimax-h3-max` video-family routes here. |
+| **MiniMax H3 Max Turbo** | i2v | t2v | 15s (**5s floor**) | Yes (native, not toggleable) | Same model and constraints at **$0.012/s — the cheapest lane in the registry**, which makes 15s takes cheap enough to render several and pick. **No R2V lane** (`-turbo-reference-to-video` does not exist), so the `minimax-h3-max-turbo` family routes identity shots to `minimax-h3-max-reference-to-video`. |
 | **Wan 3.0** | i2v, R2V (up to 9 refs), Enhanced | t2v | **30s** | Yes (always on, not toggleable) | **Longest shots on Venice** — 5/10/15/20/25/30s at 480p/720p/1080p, five aspect ratios plus adaptive, 5000-char prompts. The `wan-3-0` video-family routes here. No audio input anywhere in the family, so it can't lip-sync to a supplied recording. `*-enhanced-*` variants are beta. |
 | **Wan 2.7** | i2v, R2V, V2V, Spicy | t2v | 15s | Wan i2v has no audio; lip-syncs via `audio_url` input | **The audio-driven fallback for exact lip-sync.** R2V exposes per-element `audio_url` for multi-speaker. Spicy = uncensored i2v variant. Seedance 2.x R2V and MiniMax H3 R2V also accept a top-level `audio_url`, so those families never route here. |
 | **Wan 2.6** | Standard, Flash, R2V | Standard | 15s | Yes (i2v/t2v); R2V capped at 10s | Now has R2V variant with `audio_url` input. 1080p. |
@@ -929,6 +931,94 @@ Session extras: `Tab` completes commands, flags, and project slugs; `↑`/`↓` 
 a persistent history file; `Ctrl-C` cancels the running command without killing
 the session (`Ctrl-D` or `/exit` leaves); `/help`, `/status`, `/jobs`, `/cd`, and
 `/pwd` are shell meta-commands; `!<cmd>` runs something in your system shell.
+
+### Loop mode — watch the whole plan while it renders, or iterate on real shots
+
+Once a plan exists (an approved shot script), you can play the entire film as a
+live browser loop while the harness renders it, instead of waiting for the full
+gated pipeline:
+
+```bash
+venice-video loop -p ~/VeniceVideos/my-film -e 1                   # asks the purpose
+venice-video loop -p ~/VeniceVideos/my-film -e 1 --mode looping    # or state it
+venice-video loop -p ~/VeniceVideos/my-film -e 1 --mode production
+```
+
+Loop mode starts with one **required, deliberate decision** — **is this for
+LOOPING or for PRODUCTION?** — because it is a real quality-vs-flow tradeoff, not
+a default to fall through. In a terminal it asks; non-interactively you must pass
+`--mode` (it errors otherwise). You can state it in plain words —
+`--mode looping` / `loop` / `fun` / `creative`, or `--mode production` / `prod` /
+`gather`:
+
+- **Looping — creative flow, lower quality.** The first generation is **t2v**,
+  every shot after it **chains i2v off the previous shot's last frame**, and it
+  **never uses R2V** (those renders are too slow for a loop). Turbo, 480P, fast.
+  Not final-quality; it's for watching and riffing.
+- **Production — gather usable shots, higher quality.** **Max R2V + references**
+  at 768P, identity locked, each shot rendered independently. Slower, but the
+  takes you pin are keepers.
+
+Either way it boots the local web UI, opens the browser to a **Loop** tab, and
+**auto-starts** a background engine that renders each shot into the episode's
+`loop/` directory and **keeps regenerating fresh takes continuously** (it does
+not stop after a fixed number of takes — only a Pause or the budget stops it).
+The plan plays on repeat and each shot hot-swaps in as its take finishes;
+because the render outruns playback, the video keeps evolving. Pin the keepers,
+regenerate the ones you don't, and watch a running spend meter. Both modes
+**skip the storyboard/QA gates** and write **only** under `loop/` — canonical
+`scene-001/shot-NNN.mp4` renders and `series.json` are never touched, so a loop
+can run alongside real production.
+
+Two behaviors make the loop play as one continuous piece:
+
+- **Last-frame chaining (default on).** Shot 1 renders normally; **every shot
+  after the first renders i2v using the previous shot's last frame as its first
+  frame**, so the clips flow into each other. Turn it off with `--no-chain` to
+  render each shot independently (in create mode that keeps per-shot R2V identity
+  locking).
+- **Full-length takes.** Every generation renders the model's full length
+  (**15s** by default — MiniMax H3 Max's max), for maximum footage and playback
+  per render. Override with `--duration`.
+
+Because the engine auto-starts, the **Loop** tab shows **Pause** while it's
+running. It regenerates until you Pause or the budget is reached; when the budget
+is reached it pauses and the button becomes **Resume**, which authorizes another
+budget's worth and continues. (`--max-takes` is a ring buffer — the number of
+candidate takes kept per shot — not a stop condition; older takes are pruned so
+an infinite run can't fill the disk.)
+
+The two modes differ in what they render:
+
+| Purpose (`--mode`) | Model | Resolution | Identity | Use it to… |
+|---|---|---|---|---|
+| **looping** | MiniMax H3 Max **Turbo** t2v/i2v (~$0.012/s) | 480P | **not** locked (Turbo has no R2V lane) | keep a fast, continuous loop going for creative flow |
+| **production** | MiniMax H3 Max **R2V** for character shots, i2v/t2v otherwise (~$0.024/s) | 768P | **locked** via the project's reference stack | gather real, usable shots and pin keepers |
+
+Production mode uses the same reference-first routing as the real pipeline:
+character shots render on `minimax-h3-max-reference-to-video` with the full
+`@Image` reference stack (character sheets, location angles, blocking plates)
+plus voice-donor audio, so identity holds. Shots with no references on disk
+degrade to i2v (off a panel) or t2v, so generate your character/location
+references first for the full effect.
+
+Continuous regeneration spends money, so it is capped by default:
+
+```bash
+venice-video loop -p <dir> -e 1 \
+  --mode production \      # looping | production (required; also accepts loop/fun, prod/gather)
+  --resolution 768P \      # defaults: 480P (looping) / 768P (production)
+  --duration 15s \         # per-take length, snapped to the 5-15s ladder (default 15s)
+  --budget 2 \             # pause after ~$2; Resume/regenerate authorizes another budget
+  --max-takes 3 \          # candidate takes kept per shot (ring buffer, not a stop)
+  --no-chain \             # render shots independently instead of i2v last-frame chaining
+  --once                   # or: render one take per shot, then stop
+# --unbounded              # remove the budget cap (spends until you Ctrl-C)
+```
+
+The loop is resumable: takes, pins, and spend are recorded in
+`loop/loop-manifest.json`, so re-running `loop` picks up where it left off.
+`Ctrl-C` stops the engine and the server.
 
 ### Interrupted renders are resumable
 

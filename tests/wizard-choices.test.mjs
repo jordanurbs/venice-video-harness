@@ -5,10 +5,10 @@ import { VIDEO_FAMILY_CHOICES } from '../dist/mini-drama/choices.js';
 test('wizard model families follow the intended order', () => {
   assert.deepEqual(
     VIDEO_FAMILY_CHOICES.map(choice => choice.label),
-    ['Automatic', 'Seedance 2.0', 'Wan 3.0', 'MiniMax H3', 'HappyHorse 1.1', 'Grok Imagine', 'Kling O3'],
+    ['Automatic', 'Seedance 2.0', 'Wan 3.0', 'MiniMax H3', 'MiniMax H3 Max', 'MiniMax H3 Max Turbo', 'HappyHorse 1.1', 'Grok Imagine', 'Kling O3'],
   );
   assert.deepEqual(
     VIDEO_FAMILY_CHOICES.map(choice => choice.value),
-    ['auto', 'seedance', 'wan-3-0', 'minimax-h3', 'happyhorse', 'grok-imagine', 'kling-o3'],
+    ['auto', 'seedance', 'wan-3-0', 'minimax-h3', 'minimax-h3-max', 'minimax-h3-max-turbo', 'happyhorse', 'grok-imagine', 'kling-o3'],
   );
 });

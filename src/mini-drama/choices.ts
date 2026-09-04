@@ -8,6 +8,8 @@ export const VIDEO_FAMILY_CHOICES: ReadonlyArray<{
   { label: 'Seedance 2.0', value: 'seedance', description: 'Reference-first identity anchoring, native dialogue, 720p drafts, 4-15s' },
   { label: 'Wan 3.0', value: 'wan-3-0', description: 'Shots up to 30s, 480p drafts through 1080p, native audio always on' },
   { label: 'MiniMax H3', value: 'minimax-h3', description: 'Open-weight omni-modal, 2K native audio, 5-15s' },
+  { label: 'MiniMax H3 Max', value: 'minimax-h3-max', description: 'Simple prompts, model stages its own coverage; 768P, private, 5-15s' },
+  { label: 'MiniMax H3 Max Turbo', value: 'minimax-h3-max-turbo', description: 'Same at half the price ($0.012/s), no R2V lane — identity crosses to H3 Max R2V' },
   { label: 'HappyHorse 1.1', value: 'happyhorse', description: 'Native multilingual lip-sync, 720p/1080p, 3-15s' },
   { label: 'Grok Imagine', value: 'grok-imagine', description: 'Atmosphere-forward look; R2V durations stepped at 5s/8s/10s' },
   { label: 'Kling O3', value: 'kling-o3', description: 'Stylized and illustrated aesthetics; structured character elements' },

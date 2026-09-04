@@ -279,6 +279,63 @@ ok('MiniMax H3: no scene_image_urls (not scene-capable)',
 ok('MiniMax H3: no elements (not elements-capable)',
   h3Body?.elements === undefined);
 
+// ── Case 5: MiniMax H3 Max R2V → 768P pinned + a LEAN prompt ──────────────
+// The two regressions this guards, both silent until a paid render:
+//   1. `minimax-h3-max` must NOT fall through the `minimax-h3` substring
+//      branch and get pinned to 2K — H3 Max rejects 2K outright.
+//   2. `promptStyle: 'simple'` must actually strip the directorial blocks.
+//      Identity (@ImageN) and the beat survive; blocking, the locked location
+//      description, and the geography-hold lecture do not.
+const h3MaxSeries = {
+  ...baseSeries,
+  videoDefaults: {
+    ...baseSeries.videoDefaults,
+    actionModel: 'minimax-h3-max-image-to-video',
+    atmosphereModel: 'minimax-h3-max-image-to-video',
+    characterConsistencyModel: 'minimax-h3-max-reference-to-video',
+    videoFamilyPreference: 'minimax-h3-max',
+  },
+};
+const h3MaxShot = {
+  ...seedanceShot,
+  shotNumber: 1,
+  duration: '15s',
+  blocking: 'ARIA at the workbench, screen left, facing right toward the door',
+};
+
+const h3MaxBody = await captureBody(h3MaxSeries, h3MaxShot);
+ok('H3 Max: queue body captured', Boolean(h3MaxBody));
+ok('H3 Max: routes to the H3 Max R2V lane',
+  h3MaxBody?.model === 'minimax-h3-max-reference-to-video');
+ok('H3 Max: resolution pinned to 768P, NOT 2K', h3MaxBody?.resolution === '768P');
+ok('H3 Max: `audio` field omitted entirely (not configurable)',
+  !Object.prototype.hasOwnProperty.call(h3MaxBody ?? {}, 'audio'));
+ok('H3 Max: 15s duration survives (top of the ladder)', h3MaxBody?.duration === '15s');
+ok('H3 Max: reference_image_urls carried',
+  Array.isArray(h3MaxBody?.reference_image_urls) && h3MaxBody.reference_image_urls.length > 0);
+ok('H3 Max: NO image_url (pure reference mode)', h3MaxBody?.image_url === undefined);
+// Simple prompt: what stays.
+ok('H3 Max: prompt still binds @Image1 to ARIA',
+  /@Image1 is ARIA/.test(h3MaxBody?.prompt ?? ''));
+ok('H3 Max: prompt still carries the beat',
+  /leans over the workbench/.test(h3MaxBody?.prompt ?? ''));
+ok('H3 Max: prompt still carries the dialogue line',
+  /It finally works\./.test(h3MaxBody?.prompt ?? ''));
+// Simple prompt: what goes.
+ok('H3 Max: prompt drops the Blocking: clause',
+  !/Blocking:/.test(h3MaxBody?.prompt ?? ''));
+ok('H3 Max: prompt drops the locked Location: description',
+  !/Location: a cramped sietch workshop/.test(h3MaxBody?.prompt ?? ''));
+ok('H3 Max: prompt drops the geography-hold lecture',
+  !/do not mirror, swap, or rearrange/.test(h3MaxBody?.prompt ?? '')
+  && !/holds their stated position/.test(h3MaxBody?.prompt ?? ''));
+ok('H3 Max: prompt is materially shorter than the directorial H3 prompt',
+  (h3MaxBody?.prompt?.length ?? 0) < (h3Body?.prompt?.length ?? 0));
+// And the base-H3 prompt must still be the FULL directorial one — the simple
+// branch is opt-in per model, not a global downgrade.
+ok('base H3 keeps the directorial Location: block',
+  /Location: a cramped sietch workshop/.test(h3Body?.prompt ?? ''));
+
 rmSync(dir, { recursive: true, force: true });
 
 if (failed > 0) {

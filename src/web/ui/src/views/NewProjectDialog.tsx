@@ -8,6 +8,8 @@ const FAMILIES = [
   { value: 'wan-3-0', label: 'Wan 3.0' },
   { value: 'happyhorse', label: 'HappyHorse' },
   { value: 'minimax-h3', label: 'MiniMax H3' },
+  { value: 'minimax-h3-max', label: 'MiniMax H3 Max' },
+  { value: 'minimax-h3-max-turbo', label: 'MiniMax H3 Max Turbo' },
   { value: 'grok-imagine', label: 'Grok Imagine' },
   { value: 'kling-o3', label: 'Kling O3' },
 ];

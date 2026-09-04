@@ -53,8 +53,33 @@ export interface VideoModelSpec {
    * helper in `src/venice/audio-preflight.ts` to pad shorter clips.
    */
   minAudioInputSec?: number;
+  /**
+   * How much prompt the model wants.
+   *
+   * `'directorial'` (the default, and every family except MiniMax H3 Max) is
+   * the house style: camera, blocking, location geography, aesthetic, and
+   * reference role clauses all stated per shot, because these models render
+   * what they are told and drift when they are not.
+   *
+   * `'simple'` models degrade with that treatment. They compose their own
+   * coverage — framing, cutting, and beat rhythm — from one plain statement of
+   * intent, and a wall of directorial clauses fights the shot the model would
+   * have chosen. The prompt builder drops the heavy blocks for these (see
+   * `buildVideoPrompt` / `buildMontagePrompt`) and keeps only what binds
+   * identity and look.
+   */
+  promptStyle?: 'simple' | 'directorial';
   privacy: 'private' | 'anonymized';
   offline: boolean;
+}
+
+/**
+ * True when a model wants a short, plain prompt rather than the full
+ * directorial stack. Drives the lean branches in the mini-drama prompt
+ * builder; unknown ids fall through to directorial (the safe default).
+ */
+export function modelWantsSimplePrompt(modelId: string): boolean {
+  return getVideoModel(modelId)?.promptStyle === 'simple';
 }
 
 // ---- Image generation prompt-length budgets () -----------------------
@@ -579,6 +604,83 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     audio: true, audioConfigurable: false, audioInput: true, videoInput: false,
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  // -- MiniMax H3 Max / H3 Max Turbo (live probe 2026-09-03) ------------------
+  // A different product shape from MiniMax H3 above, despite the shared name.
+  // Four things separate them, and all four are load-bearing:
+  //
+  //   1. RESOLUTION IS INVERTED. H3 renders 2K; H3 Max tops out at 768P and
+  //      REJECTS 2K ("Invalid enum value. Expected '480P' | '768P'"). 480P is
+  //      the draft tier. This is why the resolution pin in video-generator.ts
+  //      matches `minimax-h3-max` BEFORE `minimax-h3` — a substring fall-through
+  //      would pin these to 2K and 400 every render.
+  //   2. THEY WANT PLAIN PROMPTS (`promptStyle: 'simple'`). The model composes
+  //      its own coverage and cutting from a stated intent; the full directorial
+  //      stack fights it. Best used for montages and for beats where the model
+  //      telling its own story IS the shot. The API cap is 10000 chars, but the
+  //      useful prompt is a couple of sentences.
+  //   3. PRIVATE, and uncensored. H3 is `anonymized`.
+  //   4. PRICE. At 768P: H3 Max $0.024/s ($0.36 for 15s), Turbo $0.012/s
+  //      ($0.18 for 15s) — against $0.10/s for base H3. Turbo is the cheapest
+  //      lane in this registry, which makes 15s takes disposable enough to
+  //      generate several and pick.
+  //
+  // Shared with H3: the duration ladder starts at 5s (4s is a hard 400) and
+  // tops out at 15s, native audio is on and NOT toggleable (the `audio` field
+  // is omitted for these — see renderVideoFile).
+  //
+  // There is NO Turbo R2V lane: `minimax-h3-max-turbo-reference-to-video` is
+  // "Specified model not found". Identity work has to route to the non-turbo
+  // `minimax-h3-max-reference-to-video`.
+  {
+    id: 'minimax-h3-max-text-to-video', name: 'MiniMax H3 Max', type: 'text-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    // Highest first: `resolutions[0]` is what buildModelParams and the Creator
+    // app's reconcile() fall back to, and 768P is the finish tier. Venice's live
+    // /models reports this pair as ["480P", "768P"]; the app reorders live to
+    // follow this array (preferredResolutionOrder) precisely so that incidental
+    // ordering doesn't quietly default every shot to the draft tier.
+    resolutions: ['768P', '480P'], aspectRatios: ['16:9', '21:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, promptStyle: 'simple', privacy: 'private', offline: false,
+  },
+  {
+    id: 'minimax-h3-max-image-to-video', name: 'MiniMax H3 Max', type: 'image-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    // Aspect is inherited from the start image — the live constraints report an
+    // empty aspect_ratios list, so don't send the field on this variant.
+    resolutions: ['768P', '480P'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, promptStyle: 'simple', privacy: 'private', offline: false,
+  },
+  {
+    id: 'minimax-h3-max-reference-to-video', name: 'MiniMax H3 Max R2V', type: 'image-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['768P', '480P'], aspectRatios: ['16:9', '21:9', '4:3', '1:1', '3:4', '9:16'],
+    // audio_input:true on the R2V lane only, same split as H3 — this is the
+    // lane that takes a top-level `audio_url`, so it's the family's lip-sync
+    // model. Reference images: min short side 256px, aspect 0.4-2.5.
+    audio: true, audioConfigurable: false, audioInput: true, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, promptStyle: 'simple', privacy: 'private', offline: false,
+  },
+  {
+    id: 'minimax-h3-max-turbo-text-to-video', name: 'MiniMax H3 Max Turbo', type: 'text-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['768P', '480P'], aspectRatios: ['16:9', '21:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, promptStyle: 'simple', privacy: 'private', offline: false,
+  },
+  {
+    id: 'minimax-h3-max-turbo-image-to-video', name: 'MiniMax H3 Max Turbo', type: 'image-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['768P', '480P'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, promptStyle: 'simple', privacy: 'private', offline: false,
   },
   // -- Kling V3 --
   {

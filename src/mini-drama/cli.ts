@@ -2,7 +2,7 @@
 
 import 'dotenv/config';
 import { Command } from 'commander';
-import { resolve, join, basename } from 'node:path';
+import { resolve, join, basename, dirname } from 'node:path';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
@@ -581,7 +581,7 @@ program
   .option('-g, --genre <genre>', 'Genre')
   .option('--setting <setting>', 'General setting description')
   .option('--audio-strategy <strategy>', 'native | lip-sync | narrator-vo')
-  .option('--video-family <family>', 'auto | seedance | wan-3-0 | happyhorse | minimax-h3 | grok-imagine | kling-o3')
+  .option('--video-family <family>', 'auto | seedance | wan-3-0 | happyhorse | minimax-h3 | minimax-h3-max | minimax-h3-max-turbo | grok-imagine | kling-o3')
   .option('--intelligence <model>', `Reasoning model for workshop, script, and QA (default: ${DEFAULT_INTELLIGENCE_MODEL})`)
   .action(async (opts: {
     type?: string; route?: string; name?: string; concept?: string; genre?: string; setting?: string;
@@ -842,7 +842,7 @@ program
   .option(
     '--video-family <family>',
     'Preferred video model family: ' +
-    'auto (default Seedance 2.0), seedance, wan-3-0, happyhorse, minimax-h3, grok-imagine, kling-o3. ' +
+    'auto (default Seedance 2.0), seedance, wan-3-0, happyhorse, minimax-h3, minimax-h3-max, minimax-h3-max-turbo, grok-imagine, kling-o3. ' +
     'Swaps actionModel/atmosphereModel/characterConsistencyModel to that family. ' +
     'lipSyncModel is only used for the explicit exact lip-sync strategy. ' +
     'Omit it on an interactive terminal and you will be asked.',
@@ -4803,6 +4803,182 @@ program
     // Keep the process alive until interrupted; close the watcher cleanly.
     await new Promise<void>(resolvePromise => {
       const stop = async () => {
+        await server.close();
+        resolvePromise();
+      };
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+    });
+  });
+
+// The loop's purpose is an explicit, clearly-communicated decision: LOOPING
+// (creative flow, lower quality) vs PRODUCTION (gather usable shots, higher
+// quality). Accept the choice in the user's own words; both `--mode` and the
+// interactive prompt normalize through here.
+function normalizeLoopMode(raw: string): 'watch' | 'create' | undefined {
+  const v = raw.trim().toLowerCase();
+  if (['watch', 'loop', 'looping', 'fun', 'creative', 'flow'].includes(v)) return 'watch';
+  if (['create', 'production', 'prod', 'produce', 'gather', 'project', 'quality'].includes(v)) return 'create';
+  return undefined;
+}
+
+program
+  .command('loop')
+  .description('Loop mode: continuously render the plan and watch it loop in the browser. You choose the purpose up front (a clear, required decision): LOOPING (creative flow, lower quality — Turbo 480P, t2v then i2v chaining, no R2V) or PRODUCTION (gather usable shots, higher quality — Max R2V + references @768P).')
+  .requiredOption('-p, --project <dir>', 'Project output directory')
+  .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
+  .option('--mode <mode>', 'The loop\'s purpose: "looping" (creative flow, lower quality) or "production" (gather usable shots, higher quality). Asked interactively when omitted in a terminal; REQUIRED for non-interactive runs.')
+  .option('--port <port>', 'Port to listen on', '3000')
+  .option('--host <host>', 'Host to bind (localhost only by default)', '127.0.0.1')
+  .option('--resolution <res>', 'Draft resolution (480P or 768P). Defaults to 480P in watch mode, 768P in create mode')
+  .option('--duration <dur>', 'Per-take duration, snapped to the 5-15s ladder (default: the model max, 15s)', '15s')
+  .option('--budget <usd>', 'Pause rendering after this much estimated spend (each Start / regenerate authorizes another budget)', '2')
+  .option('--max-takes <n>', 'Candidate takes kept per shot (ring buffer; the loop regenerates forever until stopped/budget)', '3')
+  .option('--no-chain', 'Render each shot independently instead of chaining i2v off the previous shot\'s last frame')
+  .option('--once', 'Render one take per shot, then stop (no regeneration)', false)
+  .option('--unbounded', 'Regenerate forever with NO budget cap (spends until stopped)', false)
+  .option('--no-open', 'Do not open the browser automatically')
+  .action(async (opts: {
+    project: string; episode: number; mode: string; port: string; host: string;
+    resolution?: string; duration: string; budget: string; maxTakes: string;
+    chain: boolean; once: boolean; unbounded: boolean; open: boolean;
+  }) => {
+    const json = wantsJson();
+    const port = Number.parseInt(opts.port, 10);
+    if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
+      failJson(json, '--port must be a number between 1 and 65535.');
+      process.exit(1);
+    }
+    const requestedMode = opts.mode ? normalizeLoopMode(opts.mode) : undefined;
+    if (opts.mode && !requestedMode) {
+      failJson(json, `--mode must be "looping" (creative flow, lower quality) or "production" (gather usable shots, higher quality). Got "${opts.mode}".`);
+      process.exit(1);
+    }
+
+    const projectDir = resolve(opts.project);
+    const series = await loadSeries(projectDir);
+    if (!series) {
+      failJson(json, `Project not found at ${projectDir}.`);
+      process.exit(1);
+    }
+    // The stored outputDir can be stale after a move; trust the passed dir.
+    series.outputDir = projectDir;
+
+    const script = await loadEpisodeScript(series, opts.episode);
+    if (!script || (script.shots?.length ?? 0) === 0) {
+      failJson(
+        json,
+        `No shot script with shots for episode ${opts.episode}. Make a plan first: workshop -p ${projectDir} then workshop -p ${projectDir} --approve.`,
+      );
+      process.exit(1);
+    }
+
+    // The session's first, required decision: is this LOOPING or PRODUCTION?
+    // Asked interactively in a terminal when --mode was omitted; a
+    // non-interactive run with no --mode is an error, because the choice is a
+    // deliberate quality-vs-flow tradeoff the user must communicate, not a
+    // silent default.
+    let mode: 'watch' | 'create';
+    if (requestedMode) {
+      mode = requestedMode;
+    } else if (!json && stdin.isTTY) {
+      mode = await promptChoice('What is this loop for? (looping trades quality for creative flow)', [
+        { label: 'Looping — creative flow, lower quality', value: 'watch', description: 'A fast continuous loop to watch and riff on: Turbo, 480P, t2v then i2v last-frame chaining, no R2V. Not final-quality; optimized for flow.' },
+        { label: 'Production — gather usable shots, higher quality', value: 'create', description: 'Slower, higher-fidelity renders you can keep: Max R2V + references, 768P, identity locked per shot.' },
+      ]);
+    } else {
+      failJson(json, 'Loop purpose is required: pass --mode looping (creative flow, lower quality) or --mode production (gather usable shots, higher quality).');
+      process.exit(1);
+      return;
+    }
+    // Chaining defaults to the mode: the fun loop chains (t2v then i2v off the
+    // previous last frame); the project loop renders each shot independently on
+    // R2V (chaining and R2V are mutually exclusive on MiniMax). `--no-chain`
+    // forces it off either way.
+    const chain = opts.chain === false ? false : mode !== 'create';
+
+    const budgetUsd = Number.parseFloat(opts.budget);
+    const maxTakes = Number.parseInt(opts.maxTakes, 10);
+    const slug = series.slug;
+    const workspace = dirname(projectDir);
+    if (basename(projectDir) !== slug) {
+      console.warn(`⚠ Project directory basename (${basename(projectDir)}) does not match the series slug (${slug}); browser media/deeplink may not resolve. Consider running from a workspace where the project directory is named "${slug}".`);
+    }
+
+    const apiKey = await getVeniceApiKey();
+    const client = new VeniceClient(apiKey);
+
+    // Lazy imports so one-shot commands never pay for the server/engine.
+    const { startWebServer } = await import('../web/server.js');
+    const { EventHub } = await import('../web/events.js');
+    const { LoopEngine } = await import('./loop-engine.js');
+
+    const hub = new EventHub();
+    const engine = new LoopEngine({
+      client,
+      series,
+      script,
+      episode: opts.episode,
+      projectDir,
+      episodeDir: getEpisodeDir(series, opts.episode),
+      slug,
+      mode,
+      chain,
+      resolution: opts.resolution,
+      duration: opts.duration,
+      budgetUsd: Number.isFinite(budgetUsd) ? budgetUsd : undefined,
+      maxTakes: Number.isFinite(maxTakes) ? maxTakes : undefined,
+      once: opts.once,
+      unbounded: opts.unbounded,
+      broadcaster: hub,
+    });
+    await engine.init();
+
+    const server = await startWebServer({
+      workspaceDir: workspace,
+      port,
+      host: opts.host,
+      hub,
+      loop: { slug, episode: opts.episode, engine },
+    });
+
+    const status = await engine.start();
+    const url = `http://${opts.host}:${server.port}/?project=${encodeURIComponent(slug)}&tab=Loop`;
+
+    if (json) {
+      emitJson({
+        ok: true,
+        url,
+        project: slug,
+        episode: opts.episode,
+        mode: status.mode,
+        chain: status.chain,
+        model: status.model,
+        resolution: status.resolution,
+        duration: status.duration,
+        budget: opts.unbounded ? 'unbounded' : budgetUsd,
+        maxTakes,
+      });
+    } else {
+      console.log(`venice-video loop running at ${url}`);
+      console.log(`  project:    ${slug} (episode ${opts.episode})`);
+      console.log(`  purpose:    ${status.mode === 'create'
+        ? 'PRODUCTION — gather usable shots, higher quality (Max R2V + references, references required for full effect)'
+        : 'LOOPING — creative flow, lower quality (fast Turbo draft, identity NOT locked)'}`);
+      const modelLine = status.mode === 'create'
+        ? `${status.model.r2v} (+ i2v/t2v)`
+        : `${status.model.t2v} / ${status.model.i2v}`;
+      console.log(`  model:      ${modelLine} @ ${status.resolution}, ${status.duration} takes`);
+      console.log(`  chaining:   ${status.chain ? 'on — shot 1 renders normally, every later shot chains i2v off the previous last frame' : 'off — each shot rendered independently'}`);
+      console.log(`  budget:     ${opts.unbounded ? 'unbounded (spends until you stop it)' : `$${budgetUsd.toFixed(2)} (Start/regenerate authorizes another budget)`}, keeping ${maxTakes} takes/shot`);
+      console.log('  It auto-starts and regenerates continuously; Stop/Start in the UI pauses/resumes. Output stays under the episode\'s loop/ directory (gates skipped).');
+      console.log('  Ctrl-C to stop.');
+      if (opts.open) openInDefaultBrowser(url);
+    }
+
+    await new Promise<void>(resolvePromise => {
+      const stop = async () => {
+        await engine.stop();
         await server.close();
         resolvePromise();
       };

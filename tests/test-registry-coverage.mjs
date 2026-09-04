@@ -15,6 +15,7 @@ import {
   MUSIC_MODELS,
   getMusicModel,
   listMusicModels,
+  modelWantsSimplePrompt,
 } from '../dist/venice/models.js';
 import {
   MODELS_SUPPORTING_REFERENCE_IMAGES,
@@ -61,6 +62,12 @@ const REQUIRED_VIDEO_IDS = [
   'minimax-h3-text-to-video',
   'minimax-h3-image-to-video',
   'minimax-h3-reference-to-video',
+  // MiniMax H3 Max + Max Turbo (added 2026-09-03)
+  'minimax-h3-max-text-to-video',
+  'minimax-h3-max-image-to-video',
+  'minimax-h3-max-reference-to-video',
+  'minimax-h3-max-turbo-text-to-video',
+  'minimax-h3-max-turbo-image-to-video',
   // PixVerse C1 (new) + v5.6 (legacy)
   'pixverse-c1-image-to-video',
   'pixverse-c1-reference-to-video',
@@ -118,6 +125,53 @@ ok('minimax-h3 i2v does not accept audio input',
 // i2v inherits aspect from the start image — sending aspect_ratio would 400.
 ok('minimax-h3 i2v exposes no aspect ratios',
   getVideoModel('minimax-h3-image-to-video')?.aspectRatios.length === 0);
+
+// ---- MiniMax H3 Max: inverted resolution + simple prompts (probe 2026-09-03)
+// H3 Max shares the name and the 5-15s ladder with H3 and almost nothing else.
+// The two that cost real money if they drift: 768P (2K is a hard 400 — the
+// OPPOSITE of H3) and promptStyle 'simple', which is what keeps the directorial
+// stack out of these prompts.
+const H3_MAX_IDS = [
+  'minimax-h3-max-text-to-video',
+  'minimax-h3-max-image-to-video',
+  'minimax-h3-max-reference-to-video',
+  'minimax-h3-max-turbo-text-to-video',
+  'minimax-h3-max-turbo-image-to-video',
+];
+for (const id of H3_MAX_IDS) {
+  const m = getVideoModel(id);
+  ok(`${id} offers 768P/480P and NOT 2K`,
+    JSON.stringify(m?.resolutions) === JSON.stringify(['768P', '480P']));
+  ok(`${id} prefers 768P over the 480P draft tier`, m?.resolutions[0] === '768P');
+  ok(`${id} wants simple prompts`, m?.promptStyle === 'simple');
+  ok(`${id} is private`, m?.privacy === 'private');
+  ok(`${id} duration ladder starts at 5s`, m?.durations[0] === '5s');
+  ok(`${id} rejects sub-5s durations`, !m?.durations.includes('3s') && !m?.durations.includes('4s'));
+  ok(`${id} maxDurationSec is 15`, m?.maxDurationSec === 15);
+  ok(`${id} audio is on and not configurable`, m?.audio === true && m?.audioConfigurable === false);
+}
+ok('modelWantsSimplePrompt is true for H3 Max',
+  H3_MAX_IDS.every(id => modelWantsSimplePrompt(id)));
+ok('modelWantsSimplePrompt is false for base H3 and Seedance',
+  !modelWantsSimplePrompt('minimax-h3-text-to-video')
+  && !modelWantsSimplePrompt('seedance-2-5-reference-to-video'));
+ok('base MiniMax H3 stays 2K-only (H3 Max must not leak into it)',
+  JSON.stringify(getVideoModel('minimax-h3-text-to-video')?.resolutions) === JSON.stringify(['2K']));
+// Only the non-turbo R2V lane carries references + audio_url; Turbo ships no
+// R2V at all ("Specified model not found"), so identity work crosses families.
+ok('H3 Max R2V supports reference images',
+  getVideoModel('minimax-h3-max-reference-to-video')?.supportsReferenceImages === true);
+ok('H3 Max R2V accepts audio input',
+  getVideoModel('minimax-h3-max-reference-to-video')?.audioInput === true);
+ok('H3 Max i2v claims neither references nor audio input',
+  getVideoModel('minimax-h3-max-image-to-video')?.supportsReferenceImages === false
+  && getVideoModel('minimax-h3-max-image-to-video')?.audioInput === false);
+ok('H3 Max Turbo has NO R2V lane in the registry',
+  getVideoModel('minimax-h3-max-turbo-reference-to-video') === undefined);
+// i2v inherits aspect from the start image — sending aspect_ratio would 400.
+for (const id of ['minimax-h3-max-image-to-video', 'minimax-h3-max-turbo-image-to-video']) {
+  ok(`${id} exposes no aspect ratios`, getVideoModel(id)?.aspectRatios.length === 0);
+}
 
 // ---- Capability sets are consistent with the registry ----
 // Every registry entry that has supportsReferenceImages: true must be in

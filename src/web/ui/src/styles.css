@@ -387,6 +387,40 @@ button.ghost:hover { border-color: var(--accent-bright); }
 .sp-line { margin-top: 2px; font-style: italic; line-height: 1.6; }
 .sp-sfx { margin-top: 6px; }
 
+/* Loop preview tab */
+.loop-stage { padding: 12px 12px 14px; }
+.loop-placeholder {
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: var(--panel-2);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.loop-meter { font-family: var(--mono); }
+.loop-shot-list { display: flex; flex-direction: column; gap: 2px; }
+.loop-shot-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+.loop-shot-row:hover { background: var(--panel-2); }
+.loop-shot-row.current { border-color: var(--accent); background: var(--panel-2); }
+.loop-shot-open {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.loop-shot-open:disabled { opacity: 0.5; cursor: default; }
+
 .empty {
   padding: 60px 20px;
   text-align: center;

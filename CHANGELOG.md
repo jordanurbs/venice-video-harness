@@ -1,5 +1,111 @@
 # Changelog
 
+## 2.19.0 — 2026-09-04
+
+### Added
+
+- **`venice-video loop` — infinite loop mode (watch + create).** Boots the local
+  web UI (a new **Loop** tab) plus an in-process `LoopEngine`
+  (`src/mini-drama/loop-engine.ts`) that renders the approved shot script
+  continuously and plays the whole plan as a live browser loop, hot-swapping each
+  shot in as its take finishes and regenerating fresh takes while it plays. Two
+  modes, **chosen by a required decision at session start** — "is this for LOOPING
+  (creative flow, lower quality) or PRODUCTION (gather usable shots, higher
+  quality)?" — asked interactively in a terminal and a hard error in a
+  non-interactive run with no `--mode` (never a silent default). `--mode` accepts
+  natural words (`looping`/`loop`/`fun`, `production`/`prod`/`gather`). The modes:
+  **watch** (looping) renders
+  **MiniMax H3 Max Turbo at 480P** — the first generation is t2v, every later shot
+  chains i2v off the previous last frame, and it **never uses R2V** (too slow for
+  a loop); identity is NOT locked. **create** renders the **non-Turbo** H3 Max
+  family at 768P using the real reference-first routing — character shots on
+  `minimax-h3-max-reference-to-video` with the full `@Image` reference stack +
+  voice-donor audio (identity locked, takes usable), each shot rendered
+  independently, degrading to i2v/t2v when references are missing.
+  - **Continuous by default:** the loop regenerates forever (it does not stop
+    after N takes); `--max-takes` is a ring buffer (candidate takes kept per shot,
+    older ones pruned + deleted), not a stop condition. It stops only on Pause,
+    `--once`, or the budget.
+  - **Last-frame chaining** defaults to the mode (on for watch, off for create,
+    since R2V and a start frame can't combine on MiniMax); `--no-chain` forces it
+    off. Shot 1 renders normally, every later chained shot renders i2v off the
+    previous shot's last frame so the loop plays as one continuous piece.
+  - **Full-length takes:** every generation renders the model max (15s default),
+    override with `--duration`.
+  - **Budget as pause, not a hard stop:** `--budget` (default $2) pauses the loop;
+    the UI **Resume** button (and per-shot regenerate) authorizes another budget's
+    worth, so "Start/Resume" always does something. `--unbounded` removes the cap.
+  Both modes skip the storyboard/QA gates, write only under
+  `episodes/episode-NNN/loop/` (per-take mp4s + `loop-manifest.json`), and never
+  touch canonical renders or `series.json`. Resumable across restarts; pins and
+  per-shot regenerate from the UI. New
+  `/api/projects/:slug/loop/{state,start,stop,pin,regenerate}` endpoints, a shared
+  `EventHub` `loop-updated` event, and loop state surfaced through
+  `collectEpisodeState`. See AGENTS.md rule 58.
+- **MiniMax H3 Max (simple-prompt) models now improvise dialogue.** In
+  native-dialogue mode, `buildVideoPrompt` and `buildMontagePrompt` render a
+  speaker's scripted line as INTENT for these models — `[@ImageN, voice,
+  delivery] conveys: "…"` plus a "improvise naturally in character, keep the
+  meaning and tone, don't recite word for word" note — instead of the
+  directorial `[…]: "exact line"` quote. Gated on
+  `shouldImproviseDialogue(modelId, series)` (`modelWantsSimplePrompt` AND
+  `audioStrategy !== 'lip-sync'`). Seedance/Wan/Kling keep the exact quote, and
+  exact-lip-sync keeps the exact line (the `audio_url` drives the words). See
+  AGENTS.md rule 59. Note: captions for these shots should come from
+  transcribing the rendered audio, not `script.json`.
+- **`resolveShotReferenceInputs` / `ensureVoiceReferenceForShot` exported from
+  `video-generator.ts`.** The per-shot reference/scene/voice resolution block was
+  extracted from `renderSingleShotUnit` into a shared `resolveShotReferenceInputs`
+  helper (behavior-identical; `renderSingleShotUnit` now calls it) so loop create
+  mode resolves the exact same reference stack the real pipeline does instead of a
+  divergent copy.
+- **`resolution` override on `renderVideoFile`.** Honored only when the model
+  lists it (validated against the registry, else the family default applies), so
+  loop mode can pin H3 Max Turbo to its 480P draft tier without disturbing the
+  `768P`/`2K`/`720p` auto-pins every other path relies on.
+- **MiniMax H3 Max + H3 Max Turbo** (probe-verified 2026-09-03):
+  `minimax-h3-max-text-to-video` / `-image-to-video` / `-reference-to-video`
+  and `minimax-h3-max-turbo-text-to-video` / `-image-to-video`. 768P/480P,
+  5-15s, native non-toggleable audio, `private`, uncensored. $0.024/s and
+  $0.012/s at 768P (base H3 is $0.10/s). Turbo ships no R2V lane. Two new
+  video families — `minimax-h3-max` and `minimax-h3-max-turbo` — both routing
+  identity to `minimax-h3-max-reference-to-video`, which is the only lane in
+  the pair with `audio_input: true` and therefore also the family lip-sync model.
+- **`promptStyle` on `VideoModelSpec`, and a simple-prompt path in the prompt
+  builder.** H3 Max models are `promptStyle: 'simple'`: they stage their own
+  framing, coverage, and cutting from a plain statement of intent, and the
+  directorial stack flattens that. `buildVideoPrompt` and `buildMontagePrompt`
+  now drop spatial blocking, the locked location description, and the
+  geography-hold paragraphs for these models, and use the compact aesthetic
+  instead of the full one. Identity declarations, reference role clauses, the
+  beat, dialogue, sound, and the hard-cut instruction are kept — those are not
+  inferable. Gate new behavior on `modelWantsSimplePrompt(id)`, not id checks.
+  Every other family is unchanged (`'directorial'` is the default).
+
+### Fixed
+
+- **The resolution pin no longer sends H3 Max to 2K.** `renderVideoFile` matched
+  `minimax-h3` by substring, so every `minimax-h3-max-*` render would have been
+  pinned to `2K` — a hard 400 on those models. The `minimax-h3-max` branch now
+  precedes it and pins `768P`.
+- **Montage windows are bounded by the montage model, not a flat 30s.**
+  `resolveMontageMaxDurationSec` accepted a `montageModel` and ignored it,
+  always returning Seedance 2.5's 30s ceiling. Pointing `montageModel` at any
+  shorter-ladder model (H3 Max tops out at 15s) therefore planned 30s units
+  that all failed `assertShotDurationsValid` *after* the plan was written. The
+  ceiling now comes from the model's `maxDurationSec` and an explicit
+  `montageMaxDurationSec` is clamped to it. New `resolveMontageMinDurationSec`
+  does the same for the floor, so H3 Max montages respect its 5s ladder start
+  instead of Seedance's 4s.
+- **Registry resolution ORDER is now load-bearing, and the Creator app honors
+  it.** The app defaults to the first allowed resolution whenever a plan's own
+  value isn't offered, and Venice's live `/models` lists H3 Max as
+  `["480P", "768P"]` — so the app would have rendered every H3 Max shot at its
+  draft tier. H3 Max entries list `['768P', '480P']` deliberately, and the app
+  reorders the live list to follow the manifest
+  (`VideoModelCapabilities.preferredResolutionOrder`). When editing a
+  `resolutions` array, treat position 0 as the default, not as arbitrary.
+
 ## 2.18.0 — 2026-08-21
 
 ### Added

@@ -66,6 +66,46 @@ export interface EpisodeScript {
   shots: Shot[];
 }
 
+export interface LoopTake {
+  n: number;
+  file: string;
+  costUsd: number;
+  at: string;
+}
+
+export type LoopShotStatus = 'idle' | 'rendering' | 'ready' | 'error';
+
+export interface LoopShotState {
+  shotNumber: number;
+  key: string;
+  status: LoopShotStatus;
+  currentTake: number | null;
+  pinned: boolean;
+  lastError?: string;
+  takes: LoopTake[];
+}
+
+export type LoopMode = 'watch' | 'create';
+
+export interface LoopManifest {
+  version: number;
+  episode: number;
+  mode: LoopMode;
+  chain: boolean;
+  model: { t2v: string; i2v: string; r2v?: string };
+  resolution: string;
+  duration: string;
+  budgetUsd: number | null;
+  maxTakes: number | null;
+  unbounded: boolean;
+  once: boolean;
+  spendUsd: number;
+  running: boolean;
+  startedAt: string;
+  updatedAt: string;
+  shots: LoopShotState[];
+}
+
 export interface EpisodeState {
   episode: number;
   script: EpisodeScript | null;
@@ -77,6 +117,7 @@ export interface EpisodeState {
   units: UnitMedia[];
   finalCut?: string;
   music?: string;
+  loop?: LoopManifest;
 }
 
 export interface QaReport {

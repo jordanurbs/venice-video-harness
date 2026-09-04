@@ -9,17 +9,27 @@ import { DailiesView } from './views/DailiesView';
 import { CastView } from './views/CastView';
 import { PostView } from './views/PostView';
 import { SettingsView } from './views/SettingsView';
+import { LoopView } from './views/LoopView';
 import { LogDrawer } from './views/LogDrawer';
 
-const TABS = ['Treatment', 'Script', 'Shots', 'Dailies', 'Cast & Locations', 'Post', 'Settings'] as const;
+const TABS = ['Treatment', 'Script', 'Shots', 'Dailies', 'Loop', 'Cast & Locations', 'Post', 'Settings'] as const;
 type Tab = (typeof TABS)[number];
+
+/** Deep-link support: `?project=<slug>&tab=Loop` (the `loop` command opens this). */
+function readInitialTab(): Tab | null {
+  const raw = new URLSearchParams(window.location.search).get('tab');
+  if (!raw) return null;
+  const match = TABS.find(name => name.toLowerCase() === raw.toLowerCase());
+  return match ?? null;
+}
+const INITIAL_PROJECT = new URLSearchParams(window.location.search).get('project');
 
 export function App() {
   const [projects, setProjects] = useState<ProjectListEntry[]>([]);
   const [slug, setSlug] = useState<string | null>(null);
   const [state, setState] = useState<ProjectState | null>(null);
   const [jobs, setJobs] = useState<JobRecord[]>([]);
-  const [tab, setTab] = useState<Tab>('Treatment');
+  const [tab, setTab] = useState<Tab>(() => readInitialTab() ?? 'Treatment');
   const [error, setError] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
 
@@ -37,7 +47,11 @@ export function App() {
     fetchProjects()
       .then(res => {
         setProjects(res.projects);
-        setSlug(prev => prev ?? res.projects[0]?.slug ?? null);
+        setSlug(prev => {
+          if (prev) return prev;
+          const deepLinked = INITIAL_PROJECT && res.projects.find(p => p.slug === INITIAL_PROJECT)?.slug;
+          return deepLinked || res.projects[0]?.slug || null;
+        });
       })
       .catch(err => setError(String(err)));
   }, []);
@@ -131,6 +145,7 @@ export function App() {
               {tab === 'Script' && <ScriptView slug={slug} state={state} busy={busy} />}
               {tab === 'Shots' && <ShotsView slug={slug} state={state} busy={busy} />}
               {tab === 'Dailies' && <DailiesView slug={slug} state={state} busy={busy} />}
+              {tab === 'Loop' && <LoopView slug={slug} state={state} busy={busy} />}
               {tab === 'Cast & Locations' && <CastView slug={slug} state={state} busy={busy} />}
               {tab === 'Post' && <PostView slug={slug} state={state} busy={busy} />}
               {tab === 'Settings' && <SettingsView slug={slug} busy={busy} />}
