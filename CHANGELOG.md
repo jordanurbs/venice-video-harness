@@ -35,7 +35,7 @@
   frame and would trip the server-side death), so it can't break the watch loop;
   it activates on a face-accepting i2v lane. `--no-face-continuity` to disable.
   New `i2vRejectsFaceStartFrame()` capability in `models.ts`.
-- **`scripts/probe-minimax-r2v-face.mjs`** — one paid 5s probe to settle whether
+- **`scripts/probe-minimax-r2v-face.ts`** — one paid 5s probe to settle whether
   MiniMax H3 Max **R2V** accepts face-bearing reference sheets (the open question
   behind create-mode character loops).
 - Injectable `errorBackoffMs` on `LoopEngine` (test seam).
