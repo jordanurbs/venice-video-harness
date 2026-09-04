@@ -17,6 +17,7 @@ import { collectProjectStatus, type ProjectStatus } from '../session/status.js';
 import { loadWorkshop, type WorkshopDraft } from '../mini-drama/workshop.js';
 import { shotKey } from '../mini-drama/treatment.js';
 import type { LoopManifest } from '../mini-drama/loop-engine.js';
+import type { StreamManifest } from '../mini-drama/stream-engine.js';
 
 export interface ProjectListEntry {
   name: string;
@@ -76,6 +77,8 @@ export interface EpisodeState {
   music?: string;
   /** Loop-preview state, when `venice-video loop` has run for this episode. */
   loop?: LoopManifest;
+  /** Stream state, when `venice-video stream` has run for this episode. */
+  stream?: StreamManifest;
 }
 
 export interface ProjectState {
@@ -242,6 +245,9 @@ async function collectEpisodeState(
   const loop = await readJsonIfExists(join(episodeDir, 'loop', 'loop-manifest.json')) as
     | LoopManifest
     | null;
+  const stream = await readJsonIfExists(join(episodeDir, 'stream', 'stream-manifest.json')) as
+    | StreamManifest
+    | null;
 
   return {
     episode,
@@ -255,6 +261,7 @@ async function collectEpisodeState(
     finalCut: existsSync(finalCutPath) ? rel(finalCutPath) : undefined,
     music: existsSync(musicPath) ? rel(musicPath) : undefined,
     loop: loop ?? undefined,
+    stream: stream ?? undefined,
   };
 }
 

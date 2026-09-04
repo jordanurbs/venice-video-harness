@@ -4990,6 +4990,134 @@ program
     });
   });
 
+program
+  .command('stream')
+  .description('Stream mode: an infinite, live-authored story. The intelligence model writes one beat at a time; beat 1 renders t2v, every later beat renders i2v off the previous beat\'s last frame. Nothing repeats, nothing re-renders, no re-anchoring. Runs until stopped or the budget is reached. Needs only a project (series.json); no script, no references.')
+  .requiredOption('-p, --project <dir>', 'Project output directory')
+  .option('-e, --episode <number>', 'Episode number the stream lives under', '1')
+  .option('--direction <text>', 'Standing direction folded into every beat (e.g. "live studio audience laugh track after every joke")')
+  .option('--writer <model>', 'Intelligence model that writes beats (default: the project\'s intelligence model)')
+  .option('--port <port>', 'Port to listen on', '3000')
+  .option('--host <host>', 'Host to bind (localhost only by default)', '127.0.0.1')
+  .option('--resolution <res>', 'Render resolution (480P or 768P)', '480P')
+  .option('--duration <dur>', 'Per-beat duration, snapped to the 5-15s ladder', '15s')
+  .option('--budget <usd>', 'Stop after this much estimated spend (each Start authorizes another budget)', '2')
+  .option('--unbounded', 'No budget cap — stream until stopped', false)
+  .option('--no-open', 'Do not open the browser automatically')
+  .action(async (opts: {
+    project: string; episode: string | number; direction?: string; writer?: string; port: string; host: string;
+    resolution: string; duration: string; budget: string; unbounded: boolean; open: boolean;
+  }) => {
+    const json = wantsJson();
+    const port = Number.parseInt(opts.port, 10);
+    if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
+      failJson(json, '--port must be a number between 1 and 65535.');
+      process.exit(1);
+    }
+    const episodeNumber = Number.parseInt(String(opts.episode), 10);
+    if (!Number.isFinite(episodeNumber) || episodeNumber <= 0) {
+      failJson(json, `--episode must be a positive integer. Got "${opts.episode}".`);
+      process.exit(1);
+    }
+    if (!['480P', '768P'].includes(opts.resolution.toUpperCase())) {
+      failJson(json, `--resolution must be 480P or 768P. Got "${opts.resolution}".`);
+      process.exit(1);
+    }
+
+    const projectDir = resolve(opts.project);
+    const series = await loadSeries(projectDir);
+    if (!series) {
+      failJson(json, `Project not found at ${projectDir}.`);
+      process.exit(1);
+    }
+    series.outputDir = projectDir;
+    if (!series.aesthetic) {
+      console.warn('⚠ No locked aesthetic (set-aesthetic). Beats will render with a minimal style line.');
+    }
+    if (series.characters.length === 0) {
+      console.warn('⚠ No cast (add-character). The writer will invent characters; identity will drift more.');
+    }
+
+    const budgetUsd = Number.parseFloat(opts.budget);
+    const slug = series.slug;
+    const workspace = dirname(projectDir);
+    if (basename(projectDir) !== slug) {
+      console.warn(`⚠ Project directory basename (${basename(projectDir)}) does not match the series slug (${slug}); browser media/deeplink may not resolve.`);
+    }
+
+    const apiKey = await getVeniceApiKey();
+    const client = new VeniceClient(apiKey);
+    const writer = intelligenceFor(series, opts.writer).model;
+
+    const { startWebServer } = await import('../web/server.js');
+    const { EventHub } = await import('../web/events.js');
+    const { StreamEngine } = await import('./stream-engine.js');
+
+    const hub = new EventHub();
+    const engine = new StreamEngine({
+      client,
+      series,
+      episode: episodeNumber,
+      projectDir,
+      episodeDir: getEpisodeDir(series, episodeNumber),
+      slug,
+      writerModel: writer,
+      resolution: opts.resolution.toUpperCase(),
+      duration: opts.duration,
+      budgetUsd: Number.isFinite(budgetUsd) ? budgetUsd : undefined,
+      unbounded: opts.unbounded,
+      direction: opts.direction,
+      broadcaster: hub,
+    });
+    await engine.init();
+
+    const server = await startWebServer({
+      workspaceDir: workspace,
+      port,
+      host: opts.host,
+      hub,
+      stream: { slug, episode: episodeNumber, engine },
+    });
+
+    const status = await engine.start();
+    const url = `http://${opts.host}:${server.port}/?project=${encodeURIComponent(slug)}&tab=Stream`;
+
+    if (json) {
+      emitJson({
+        ok: true,
+        url,
+        project: slug,
+        episode: episodeNumber,
+        model: status.model,
+        resolution: status.resolution,
+        duration: status.duration,
+        budget: opts.unbounded ? 'unbounded' : budgetUsd,
+        beats: status.beats.length,
+      });
+    } else {
+      console.log(`venice-video stream running at ${url}`);
+      console.log(`  project:    ${slug} (episode ${episodeNumber})`);
+      console.log(`  writer:     ${describeIntelligence(status.model.writer)}`);
+      console.log(`  video:      ${status.model.t2v} (beat 1) then ${status.model.i2v} chained off each last frame @ ${status.resolution}, ${status.duration}/beat`);
+      console.log(`  direction:  ${opts.direction ?? '(none)'}`);
+      console.log(`  budget:     ${opts.unbounded ? 'unbounded (streams until you stop it)' : `$${budgetUsd.toFixed(2)} (Start authorizes another budget)`}`);
+      if (status.beats.length > 0) console.log(`  resuming:   ${status.beats.length} beats already on disk`);
+      console.log('  The story never repeats and never re-renders. Every beat is kept under the episode\'s stream/ directory.');
+      console.log('  Ctrl-C to stop.');
+      if (opts.open) openInDefaultBrowser(url);
+    }
+
+    await new Promise<void>(resolvePromise => {
+      const stop = async () => {
+        await engine.stop();
+        await server.close();
+        resolvePromise();
+      };
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+    });
+  });
+
 applyContextDefaults(program);
 
 // Only parse when executed directly. The shell imports this module to reuse the

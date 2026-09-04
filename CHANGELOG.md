@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.21.0 — 2026-09-04
+
+### Added
+
+- **`venice-video stream` — an infinite, live-authored story.** Not a loop. The
+  intelligence model writes one beat at a time from the series bible plus a
+  rolling `story-so-far.md`; beat 1 renders t2v on MiniMax H3 Max Turbo, every
+  later beat renders i2v off the previous beat's last frame. Nothing repeats,
+  nothing re-renders, no re-anchoring, no ring buffer: every beat stays on disk
+  in order under `episodes/episode-NNN/stream/`. Needs only a project; no
+  script, storyboard, or references. Resumable; stops after 3 consecutive
+  failures rather than skip a beat. `--direction` folds standing direction into
+  every writer prompt. New `src/mini-drama/stream-engine.ts`, `/api/projects/
+  :slug/stream/*` endpoints, `stream-updated` SSE event, and a **Stream** tab.
+
 ## 2.20.1 — 2026-09-04
 
 ### Fixed

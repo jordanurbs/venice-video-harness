@@ -1041,6 +1041,52 @@ use **production** mode: R2V locks the face from the reference sheets across eve
 shot, with no i2v chaining involved (verified — MiniMax R2V accepts face-bearing
 reference sheets; only i2v *start frames* die).
 
+### Stream mode — an infinite, live-authored story
+
+`loop` cycles a fixed plan. `stream` never repeats. It writes the story forward
+one beat at a time and never renders a beat twice:
+
+```bash
+venice-video stream -p ~/VeniceVideos/my-show \
+  --direction "90s multi-camera sitcom, live studio audience laugh track after every joke"
+```
+
+How it works:
+
+1. The project's intelligence model (`series.intelligence`, or `--writer`)
+   writes beat 1 from the series bible: concept, setting, aesthetic, and cast.
+2. Beat 1 renders text-to-video on MiniMax H3 Max Turbo.
+3. The writer reads `story-so-far.md` (one line per prior beat) plus the last
+   6 beats verbatim, and writes beat 2 so it begins exactly where beat 1 ended.
+4. Beat 2 renders image-to-video off beat 1's last frame.
+5. Repeat forever, until Pause or the budget.
+
+There is no re-anchoring and no ring buffer. Every beat descends from the frame
+before it, and every beat stays on disk in order under
+`episodes/episode-NNN/stream/` as `beat-NNNNN.mp4` + `beat-NNNNN.json`, with
+`story-so-far.md` and `stream-manifest.json` beside them. The browser's
+**Stream** tab plays forward from beat 1; when it reaches the newest beat before
+the next is ready, it holds and then continues. Nothing else is needed: no
+script, no storyboard, no references. A locked aesthetic (`set-aesthetic`) and
+a cast (`add-character`, `--skip-images` is fine) make the writer much better.
+
+```bash
+venice-video stream -p <dir> \
+  -e 1 \                    # episode the stream lives under (default 1)
+  --direction "<text>" \    # standing direction folded into every beat's writer prompt
+  --writer kimi-k3 \        # writer model (default: the project's intelligence model)
+  --resolution 480P \       # 480P or 768P
+  --duration 15s \          # per-beat length, snapped to the 5-15s ladder
+  --budget 2                # stop after ~$2; Continue authorizes another budget
+# --unbounded               # no cap (streams until Ctrl-C)
+```
+
+The stream is resumable: re-running `stream` continues from the last beat on
+disk and chains off it. After 3 consecutive failures (write, chain, or render)
+the engine stops rather than skip a beat — a stream cannot have a hidden cut.
+Identity drifts slowly over many hops, by design; that is the trade for a
+continuous, unbroken picture.
+
 ### Interrupted renders are resumable
 
 The harness records each Venice `queue_id` to disk *before* it starts polling, so

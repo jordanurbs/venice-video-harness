@@ -22,6 +22,7 @@ import { JobRunner, type JobRequest } from './jobs.js';
 import { collectProjectState, listProjects } from './state.js';
 import { getModelSettings, updateModelSettings, type ModelSettingsPatch } from './settings.js';
 import type { LoopEngine } from '../mini-drama/loop-engine.js';
+import type { StreamEngine } from '../mini-drama/stream-engine.js';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -150,6 +151,11 @@ export interface WebServerOptions {
    * regenerate). Only the matching slug is controllable.
    */
   loop?: { slug: string; episode: number; engine: LoopEngine };
+  /**
+   * Stream engine (infinite live-authored story) attached to one
+   * project/episode. Drives `/api/projects/:slug/stream/*` (state/start/stop).
+   */
+  stream?: { slug: string; episode: number; engine: StreamEngine };
 }
 
 export async function startWebServer(options: WebServerOptions): Promise<{ close: () => Promise<void>; port: number; hub: EventHub }> {
@@ -356,6 +362,52 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
       }
       sendJson(res, 200, { jobs: jobs.recentJobs(project.slug) });
       return;
+    }
+
+    // Stream control (infinite live-authored story). Same shape as loop: the
+    // engine is attached to one project; `state` is readable without one.
+    const streamMatch = /^\/api\/projects\/([^/]+)\/stream\/(state|start|stop)$/.exec(pathname);
+    if (streamMatch) {
+      const action = streamMatch[2];
+      const project = await resolveProject(streamMatch[1]);
+      if (!project) {
+        sendJson(res, 404, { error: 'Unknown project' });
+        return;
+      }
+      const engine = options.stream && options.stream.slug === project.slug ? options.stream.engine : undefined;
+
+      if (action === 'state') {
+        if (req.method !== 'GET') { sendJson(res, 405, { error: 'Method not allowed' }); return; }
+        sendJson(res, 200, engine ? { attached: true, ...engine.state() } : { attached: false });
+        return;
+      }
+      if (!engine) {
+        sendJson(res, 409, { error: 'Stream is not running for this project. Start it with `venice-video stream`.' });
+        return;
+      }
+      if (req.method !== 'POST') { sendJson(res, 405, { error: 'Method not allowed' }); return; }
+
+      let body: { budget?: number; unbounded?: boolean };
+      try {
+        body = await readBody(req) as typeof body;
+      } catch (err) {
+        sendJson(res, 400, { error: err instanceof Error ? err.message : 'Bad request' });
+        return;
+      }
+      try {
+        if (action === 'start') {
+          const config: { budgetUsd?: number; unbounded?: boolean } = {};
+          if (typeof body.budget === 'number' && Number.isFinite(body.budget)) config.budgetUsd = body.budget;
+          if (typeof body.unbounded === 'boolean') config.unbounded = body.unbounded;
+          sendJson(res, 200, await engine.start(config));
+          return;
+        }
+        sendJson(res, 200, await engine.stop());
+        return;
+      } catch (err) {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : 'Stream control failed' });
+        return;
+      }
     }
 
     // Loop-preview control. The engine (if any) is attached to exactly one

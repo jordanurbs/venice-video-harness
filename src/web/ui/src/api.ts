@@ -1,4 +1,4 @@
-import type { JobRecord, JobRequest, LoopManifest, ProjectListEntry, ProjectState } from './types';
+import type { JobRecord, JobRequest, LoopManifest, ProjectListEntry, ProjectState, StreamManifest } from './types';
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -63,12 +63,33 @@ export async function loopControl(
   return res.json();
 }
 
+export interface StreamStateResponse extends Partial<StreamManifest> {
+  attached: boolean;
+}
+
+export function fetchStreamState(slug: string): Promise<StreamStateResponse> {
+  return getJson(`/api/projects/${encodeURIComponent(slug)}/stream/state`);
+}
+
+export async function streamControl(
+  slug: string,
+  action: 'start' | 'stop',
+  payload?: { budget?: number; unbounded?: boolean },
+): Promise<StreamManifest | { error: string }> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(slug)}/stream/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload ?? {}),
+  });
+  return res.json();
+}
+
 export type SseHandler = (event: string, data: unknown) => void;
 
 /** Subscribe to server events. Returns an unsubscribe function. */
 export function subscribeEvents(handler: SseHandler): () => void {
   const source = new EventSource('/api/events');
-  const names = ['state-changed', 'job-started', 'job-output', 'job-finished', 'loop-updated'];
+  const names = ['state-changed', 'job-started', 'job-output', 'job-finished', 'loop-updated', 'stream-updated'];
   const listeners = names.map(name => {
     const fn = (ev: MessageEvent) => {
       try {

@@ -245,8 +245,8 @@ export function LoopView({ slug, state }: { slug: string; state: ProjectState; b
               <span className={`dot ${s.status === 'rendering' ? 'running' : s.status === 'error' ? 'failed' : clip ? 'succeeded' : ''}`} />
               <span
                 className="dim small"
-                style={{ minWidth: 96 }}
-                title={clip ? `Playing take #${s.currentTake}. ${s.takes.length} of the latest takes are kept on disk (the --max-takes ring buffer); older ones are pruned as new takes render.` : undefined}
+                style={{ minWidth: 120 }}
+                title={clip ? `Playing render #${s.currentTake} of this shot. ${s.takes.length} take${s.takes.length === 1 ? '' : 's'} kept on disk (ring buffer, --max-takes).` : undefined}
               >
                 {s.status === 'rendering' ? 'rendering…' : s.status === 'error' ? 'error' : clip ? `take #${s.currentTake} · ${s.takes.length} kept` : 'queued'}
               </span>
