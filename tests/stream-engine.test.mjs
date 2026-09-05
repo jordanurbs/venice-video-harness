@@ -20,6 +20,8 @@ import {
   STREAM_CHAIN_FAILURES_BEFORE_RESET,
   STREAM_VIDEO_CHOICES,
   STREAM_DEFAULT_WRITER,
+  exportStreamJson,
+  exportStreamMarkdown,
   buildStreamSystemPrompt,
   buildStreamUserPrompt,
 } from '../dist/mini-drama/stream-engine.js';
@@ -397,4 +399,66 @@ test('configure switches the writer and the video family for the NEXT beat, and 
   assert.equal(resumed.state().videoFamily, 'wan-3-0');
   assert.equal(resumed.state().resolution, '720p');
   assert.ok(resumed.state().choices.writers.length > 3, 'choices ship in the manifest for the UI');
+});
+
+test('every beat records the exact video prompt; export renders it as JSON and Markdown', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-export-'));
+  const { engine, calls } = makeEngine(dir, { budgetUsd: budgetFor(2), direction: 'laugh track' });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  const st = engine.state();
+  assert.equal(st.beats.length, 2);
+  for (const [i, b] of st.beats.entries()) {
+    assert.ok(b.render, `beat ${b.n} carries its render record`);
+    assert.equal(b.render.model, calls[i].model);
+    assert.equal(b.render.prompt, calls[i].prompt, 'the recorded prompt is byte-for-byte what was sent');
+    assert.equal(b.render.duration, '15s');
+  }
+  assert.equal(st.beats[0].render.startFrame, undefined, 't2v has no start frame');
+  assert.match(st.beats[1].render.startFrame, /beat-00002-start\.png$/, 'i2v records its project-relative start frame');
+
+  // The sidecar on disk has it too.
+  const sidecar = JSON.parse(readFileSync(join(dir, 'episodes/episode-001/stream/beat-00002.json'), 'utf-8'));
+  assert.equal(sidecar.render.prompt, calls[1].prompt);
+
+  const series = Object.assign(makeSeries(), { outputDir: dir });
+  const json = JSON.parse(exportStreamJson(st, series));
+  assert.equal(json.beats.length, 2);
+  assert.equal(json.beats[1].render.prompt, calls[1].prompt);
+  assert.equal(json.stream.writer, STREAM_DEFAULT_WRITER);
+  assert.match(json.writerSystemPrompt, /STANDING DIRECTION.*laugh track/);
+
+  const md = exportStreamMarkdown(st, series);
+  assert.match(md, /^# Stream Test — Stream Prompts/);
+  assert.match(md, /### Beat 1 — t2v/);
+  assert.match(md, /### Beat 2 — i2v/);
+  assert.ok(md.includes(calls[1].prompt), 'markdown carries the full prompt verbatim');
+  assert.match(md, /\*\*Full video prompt\*\*/);
+});
+
+test('a resumed stream backfills render prompts from recipe sidecars written before the field existed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-backfill-'));
+  const { engine } = makeEngine(dir, { budgetUsd: budgetFor(1) });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  // Simulate a pre-2.22.1 manifest: strip `render`, and write the recipe the
+  // video generator would have written.
+  const manifestPath = join(dir, 'episodes/episode-001/stream/stream-manifest.json');
+  const m = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+  const original = m.beats[0].render.prompt;
+  delete m.beats[0].render;
+  writeFileSync(manifestPath, JSON.stringify(m));
+  writeFileSync(join(dir, 'episodes/episode-001/stream/beat-00001.recipe.json'), JSON.stringify({
+    asset: 'beat-00001.mp4',
+    passes: [{ kind: 'video-generate', role: 'content', model: 'minimax-h3-max-turbo-text-to-video', prompt: original, resolution: '480P', duration: '15s' }],
+  }));
+
+  const resumed = makeEngine(dir, { budgetUsd: budgetFor(1) }).engine;
+  await resumed.init();
+  assert.equal(resumed.state().beats[0].render?.prompt, original);
+  assert.equal(resumed.state().beats[0].render?.model, 'minimax-h3-max-turbo-text-to-video');
 });

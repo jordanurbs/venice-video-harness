@@ -121,6 +121,17 @@ export interface StreamBeat {
   lane: 't2v' | 'i2v' | 't2v-reset';
   costUsd: number;
   at: string;
+  /**
+   * Exactly what was sent to the video model, so an operator can take the
+   * prompt elsewhere and fine-tune it. `startFrame` is project-relative.
+   */
+  render?: {
+    model: string;
+    prompt: string;
+    resolution?: string;
+    duration: string;
+    startFrame?: string;
+  };
 }
 
 export type StreamStatus = 'idle' | 'writing' | 'rendering' | 'error';
@@ -645,6 +656,13 @@ export class StreamEngine {
       lane,
       costUsd: est,
       at: new Date().toISOString(),
+      render: {
+        model: prompt.model,
+        prompt: prompt.prompt,
+        resolution: this.resolution || undefined,
+        duration: this.duration,
+        startFrame: anchorImagePath ? toPosix(relative(this.projectDir, anchorImagePath)) : undefined,
+      },
     };
     this.beats.push(record);
     this.pendingBeat = undefined;
@@ -809,6 +827,27 @@ export class StreamEngine {
         if (!existsSync(join(this.projectDir, b.file))) break;
         beats.push(b);
       }
+      // Beats rendered before `render` existed: recover the exact prompt from
+      // the recipe sidecar the video generator has always written.
+      for (const b of beats) {
+        if (b.render) continue;
+        const recipePath = join(this.projectDir, b.file.replace(/\.mp4$/, '.recipe.json'));
+        if (!existsSync(recipePath)) continue;
+        try {
+          const recipe = JSON.parse(await readFile(recipePath, 'utf-8')) as { passes?: Array<{ kind?: string; model?: string; prompt?: string; resolution?: string; duration?: string }> };
+          const pass = [...(recipe.passes ?? [])].reverse().find(p => p.kind === 'video-generate' && typeof p.prompt === 'string');
+          if (pass) {
+            const startFrame = join(this.streamDir, `beat-${beatKey(b.n)}-start.png`);
+            b.render = {
+              model: pass.model ?? (b.lane === 'i2v' ? this.video.i2v : this.video.t2v),
+              prompt: pass.prompt!,
+              resolution: pass.resolution,
+              duration: pass.duration ?? this.duration,
+              startFrame: b.lane === 'i2v' && existsSync(startFrame) ? toPosix(relative(this.projectDir, startFrame)) : undefined,
+            };
+          }
+        } catch { /* a missing prompt is shown as such in the UI */ }
+      }
       this.beats = beats;
       this.log(`Resumed stream from ${MANIFEST_FILE}: ${beats.length} beats, spend $${this.spendUsd.toFixed(2)}.`);
     } catch (err) {
@@ -830,3 +869,57 @@ export class StreamEngine {
     });
   }
 }
+
+// ---- Export ---------------------------------------------------------------
+
+/** Everything an operator needs to re-run or fine-tune the beats elsewhere. */
+export function exportStreamJson(manifest: StreamManifest, series: SeriesState): string {
+  return JSON.stringify({
+    series: { name: series.name, slug: series.slug, concept: series.concept, setting: series.setting, aesthetic: series.aesthetic },
+    stream: {
+      episode: manifest.episode,
+      writer: manifest.model.writer,
+      videoFamily: manifest.videoFamily,
+      model: manifest.model,
+      resolution: manifest.resolution,
+      duration: manifest.duration,
+      direction: manifest.direction,
+      exportedAt: new Date().toISOString(),
+    },
+    writerSystemPrompt: buildStreamSystemPrompt(series, manifest.direction),
+    beats: manifest.beats.map(b => ({
+      n: b.n,
+      lane: b.lane,
+      file: b.file,
+      at: b.at,
+      costUsd: b.costUsd,
+      authored: b.beat,
+      render: b.render ?? null,
+    })),
+  }, null, 2);
+}
+
+export function exportStreamMarkdown(manifest: StreamManifest, series: SeriesState): string {
+  const lines: string[] = [];
+  lines.push(`# ${series.name} — Stream Prompts (episode ${manifest.episode})`, '');
+  lines.push(`- Writer: \`${manifest.model.writer}\``);
+  lines.push(`- Video: \`${manifest.model.t2v}\` (beat 1) then \`${manifest.model.i2v}\` chained · ${manifest.resolution || 'default'} · ${manifest.duration}/beat`);
+  if (manifest.direction) lines.push(`- Standing direction: ${manifest.direction}`);
+  lines.push(`- Beats: ${manifest.beats.length} · Spend: $${manifest.spendUsd.toFixed(2)}`, '');
+  lines.push('## Writer System Prompt', '', '```', buildStreamSystemPrompt(series, manifest.direction), '```', '');
+  lines.push('## Beats', '');
+  for (const b of manifest.beats) {
+    lines.push(`### Beat ${b.n} — ${b.lane}${b.render?.model ? ` · \`${b.render.model}\`` : ''}`, '');
+    lines.push(`- File: \`${b.file}\``);
+    if (b.render?.startFrame) lines.push(`- Start frame: \`${b.render.startFrame}\``);
+    lines.push(`- Summary: ${b.beat.summary}`);
+    lines.push(`- Characters: ${b.beat.characters.join(', ') || '(none)'}`);
+    if (b.beat.dialogue) lines.push(`- Dialogue: **${b.beat.dialogue.character}**: "${b.beat.dialogue.line}"${b.beat.dialogue.delivery ? ` _(${b.beat.dialogue.delivery})_` : ''}`);
+    if (b.beat.sfx) lines.push(`- SFX: ${b.beat.sfx}`);
+    lines.push(`- Camera: ${b.beat.cameraMovement}`, '');
+    lines.push('**Authored beat**', '', b.beat.description, '');
+    lines.push('**Full video prompt**', '', '```', b.render?.prompt ?? '(not recorded — rendered before 2.22.1 and no recipe sidecar found)', '```', '');
+  }
+  return lines.join('\n');
+}
+

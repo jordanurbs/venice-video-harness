@@ -25,6 +25,18 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
   // newest beat and the next is not ready yet.
   const [index, setIndex] = useState(0);
   const [waiting, setWaiting] = useState(false);
+  /** Beat number whose full video prompt is expanded in the list, if any. */
+  const [promptOpen, setPromptOpen] = useState<number | null>(null);
+  const [copied, setCopied] = useState<number | null>(null);
+
+  const copyPrompt = async (b: StreamBeat) => {
+    if (!b.render?.prompt) return;
+    try {
+      await navigator.clipboard.writeText(b.render.prompt);
+      setCopied(b.n);
+      setTimeout(() => setCopied(null), 1500);
+    } catch { /* clipboard blocked; the text is on screen to select */ }
+  };
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const beats = useMemo(() => stream?.beats ?? [], [stream]);
@@ -301,13 +313,18 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
         )}
       </div>
 
-      <h2 style={{ marginTop: 0 }}>Story So Far</h2>
-      <div className="loop-shot-list">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <h2 style={{ marginTop: 0, marginBottom: 0, flex: 1 }}>Story So Far</h2>
+        <span className="dim small">Export every beat's authored text and full video prompt:</span>
+        <a className="ghost" style={{ padding: '4px 10px', textDecoration: 'none' }} href={`/api/projects/${encodeURIComponent(slug)}/stream/export.json?episode=${episode.episode}`} download>JSON</a>
+        <a className="ghost" style={{ padding: '4px 10px', textDecoration: 'none' }} href={`/api/projects/${encodeURIComponent(slug)}/stream/export.md?episode=${episode.episode}`} download>Markdown</a>
+      </div>
+      <div className="loop-shot-list" style={{ marginTop: 10 }}>
         {beats.length === 0 && <div className="empty">No beats yet.</div>}
         {[...beats].reverse().map(b => (
+          <div key={b.n}>
           <div
             className={`loop-shot-row${b.n === current?.n ? ' current' : ''}`}
-            key={b.n}
             role="button"
             tabIndex={0}
             title="Play this beat"
@@ -327,6 +344,33 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
               className={b.lane === 't2v-reset' ? 'badge low' : 'dim small'}
               title={b.lane === 't2v' ? 'Opening beat, text-to-video' : b.lane === 't2v-reset' ? 'Chained render failed repeatedly; this beat re-established the picture from text (identity may drift here)' : 'Chained image-to-video off the previous beat'}
             >{b.lane}</span>
+            <button
+              className="ghost"
+              style={{ padding: '2px 8px', fontSize: 12 }}
+              title={b.render?.prompt ? 'Show the exact prompt sent to the video model' : 'Prompt not recorded for this beat'}
+              disabled={!b.render?.prompt}
+              onClick={ev => { ev.stopPropagation(); setPromptOpen(promptOpen === b.n ? null : b.n); }}
+            >
+              {promptOpen === b.n ? 'Hide prompt' : 'Full prompt'}
+            </button>
+          </div>
+          {promptOpen === b.n && b.render && (
+            <div className="card small" style={{ margin: '0 0 8px 34px', display: 'grid', gap: 8 }} onClick={ev => ev.stopPropagation()}>
+              <div className="dim">
+                <strong>Video model</strong> <code>{b.render.model}</code>
+                {b.render.resolution ? <> · {b.render.resolution}</> : null} · {b.render.duration}
+                {b.render.startFrame ? <> · start frame <a href={mediaUrl(slug, b.render.startFrame)} target="_blank" rel="noreferrer">{b.render.startFrame.split('/').pop()}</a></> : <> · no start frame (text-to-video)</>}
+              </div>
+              <div className="dim"><strong>Authored beat</strong> (what the writer produced; the prompt below is built from it)</div>
+              <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12 }}>{JSON.stringify(b.beat, null, 2)}</pre>
+              <div className="dim"><strong>Full video prompt</strong> (exactly what was sent — copy it to fine-tune elsewhere)</div>
+              <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12, userSelect: 'text' }}>{b.render.prompt}</pre>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="ghost" style={{ padding: '4px 10px' }} onClick={() => copyPrompt(b)}>{copied === b.n ? 'Copied' : 'Copy prompt'}</button>
+                <button className="ghost" style={{ padding: '4px 10px' }} onClick={() => { navigator.clipboard?.writeText(JSON.stringify({ beat: b.beat, render: b.render }, null, 2)).catch(() => undefined); }}>Copy as JSON</button>
+              </div>
+            </div>
+          )}
           </div>
         ))}
       </div>
