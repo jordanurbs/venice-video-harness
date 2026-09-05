@@ -1053,13 +1053,18 @@ venice-video stream -p ~/VeniceVideos/my-show \
 
 How it works:
 
-1. The project's intelligence model (`series.intelligence`, or `--writer`)
-   writes beat 1 from the series bible: concept, setting, aesthetic, and cast.
-2. Beat 1 renders text-to-video on MiniMax H3 Max Turbo.
-3. The writer reads `story-so-far.md` (one line per prior beat) plus the last
+1. You pick the writer. A new stream asks which model writes the beats (it is
+   the voice of the whole story). Non-interactive runs must pass `--writer
+   <model>` (or `--writer default` for the project's intelligence model); a
+   resumed stream keeps the project default. The writer and the per-beat cost
+   print before beat 1 bills.
+2. The writer writes beat 1 from the series bible: concept, setting, aesthetic,
+   and cast.
+3. Beat 1 renders text-to-video on MiniMax H3 Max Turbo.
+4. The writer reads `story-so-far.md` (one line per prior beat) plus the last
    6 beats verbatim, and writes beat 2 so it begins exactly where beat 1 ended.
-4. Beat 2 renders image-to-video off beat 1's last frame.
-5. Repeat forever, until Pause or the budget.
+5. Beat 2 renders image-to-video off beat 1's last frame.
+6. Repeat forever, until Pause or the budget.
 
 There is no re-anchoring and no ring buffer. Every beat descends from the frame
 before it, and every beat stays on disk in order under
@@ -1074,7 +1079,7 @@ a cast (`add-character`, `--skip-images` is fine) make the writer much better.
 venice-video stream -p <dir> \
   -e 1 \                    # episode the stream lives under (default 1)
   --direction "<text>" \    # standing direction folded into every beat's writer prompt
-  --writer kimi-k3 \        # writer model (default: the project's intelligence model)
+  --writer kimi-k3 \        # writer model; asked for a new stream, required non-interactively
   --resolution 480P \       # 480P or 768P
   --duration 15s \          # per-beat length, snapped to the 5-15s ladder
   --budget 2                # stop after ~$2; Continue authorizes another budget
@@ -1086,6 +1091,22 @@ disk and chains off it. After 3 consecutive failures (write, chain, or render)
 the engine stops rather than skip a beat — a stream cannot have a hidden cut.
 Identity drifts slowly over many hops, by design; that is the trade for a
 continuous, unbroken picture.
+
+**Faces and the chain.** MiniMax i2v accepts a start frame that is filled by a
+human face, bills it, and then fails server-side (anti-pattern 31). Because
+every beat chains off the previous last frame, one face-ending beat could stall
+the whole stream. Three things keep it alive: the writer is told to end every
+beat on a wide shot with no face close-up; a failed chained render first steps
+the start frame back into the previous clip (0.5s, then 1.5s); and after
+`STREAM_CHAIN_FAILURES_BEFORE_RESET` (2) chained failures on one beat, that beat
+renders text-to-video as a **soft reset** (`lane: "t2v-reset"`) — the prompt
+restates the scene from the previous beat's summary, identity drifts for one
+beat, and the story keeps going. The Stream tab shows the retry error while it
+happens and marks reset beats in the story list.
+
+The `stream` command registers its episode in `series.json` if it is missing, so
+the Stream tab always has an episode to show. (Before 2.21.1 a stream under an
+unregistered episode rendered beats the browser could not display.)
 
 ### Interrupted renders are resumable
 

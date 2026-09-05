@@ -17,6 +17,7 @@ import {
   STREAM_MODEL_T2V,
   STREAM_MODEL_I2V,
   STREAM_CHAIN_STEP_BACK_SEC,
+  STREAM_CHAIN_FAILURES_BEFORE_RESET,
   buildStreamSystemPrompt,
   buildStreamUserPrompt,
 } from '../dist/mini-drama/stream-engine.js';
@@ -266,8 +267,8 @@ test('a failed chained render keeps the written beat and steps back through the 
     renderCount += 1;
     // Snapshot the start frame now: every retry overwrites the same path.
     calls.push({ model: options.prompt.model, outputPath: options.outputPath, frame: options.anchorImagePath ? readFileSync(options.anchorImagePath) : null });
-    // Beat 2's first two attempts die "server-side"; the third succeeds.
-    if (options.prompt.model === STREAM_MODEL_I2V && renderCount <= 3) throw new Error('An unknown error occurred');
+    // Beat 2's first attempt dies "server-side"; the stepped-back retry succeeds.
+    if (options.prompt.model === STREAM_MODEL_I2V && renderCount <= 2) throw new Error('An unknown error occurred');
     await mkdir(join(options.outputPath, '..'), { recursive: true });
     execFileSync('cp', [fixture, options.outputPath]);
     return options.outputPath;
@@ -276,24 +277,67 @@ test('a failed chained render keeps the written beat and steps back through the 
   series.outputDir = dir;
   const engine = new StreamEngine({
     client: {}, series, episode: 1, projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
-    // 4 render attempts x $0.18 (failed queues are billed too) = $0.72.
-    log: () => {}, errorBackoffMs: 1, budgetUsd: 0.72,
+    // 3 render attempts x $0.18 (failed queues are billed too) = $0.54.
+    log: () => {}, errorBackoffMs: 1, budgetUsd: 0.54,
     render: flakyRender, author: scriptedAuthor(inputs),
   });
   await engine.init();
   await engine.start();
   await waitForStop(engine);
 
-  // 1 t2v + 2 failed i2v + 1 successful i2v = 4 render calls, 2 beats on disk.
-  assert.equal(calls.length, 4);
-  assert.equal(engine.state().beats.length, 2, 'beat 2 landed on the third try');
-  assert.equal(inputs.length, 2, 'the writer was NOT asked again for the retries — the text was kept');
+  // 1 t2v + 1 failed i2v + 1 successful i2v = 3 render calls, 2 beats on disk.
+  assert.equal(calls.length, 3);
+  assert.equal(engine.state().beats.length, 2, 'beat 2 landed on the second try');
+  assert.equal(inputs.length, 2, 'the writer was NOT asked again for the retry — the text was kept');
   assert.equal(engine.state().lastError, undefined, 'a recovered stream carries no error');
+  assert.equal(engine.state().beats[1].lane, 'i2v', 'a step-back that works is still a chained beat');
 
-  // Each retry used a different start frame (stepped back into beat 1).
+  // The retry used a different start frame (stepped back into beat 1).
   const frames = calls.slice(1).map(c => c.frame);
   assert.ok(frames.every(Boolean), 'every chained attempt had a start frame');
-  assert.ok(!frames[0].equals(frames[1]), 'retry 1 stepped back to a different frame than the first attempt');
-  assert.ok(!frames[1].equals(frames[2]), 'retry 2 stepped back further still');
+  assert.ok(!frames[0].equals(frames[1]), 'the retry stepped back to a different frame than the first attempt');
   assert.deepEqual(STREAM_CHAIN_STEP_BACK_SEC, [0, 0.5, 1.5, 3.0]);
+});
+
+test('when the chain keeps failing, the beat renders t2v as a soft reset instead of killing the stream', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-reset-'));
+  const fixture = realMp4Long();
+  const calls = [];
+  const inputs = [];
+  // Every i2v attempt dies (a face-filled start frame, anti-pattern 31). t2v works.
+  const faceDeathRender = async (_client, options) => {
+    calls.push({ model: options.prompt.model, prompt: options.prompt.prompt, anchor: options.anchorImagePath });
+    if (options.prompt.model === STREAM_MODEL_I2V) throw new Error('An unknown error occurred');
+    await mkdir(join(options.outputPath, '..'), { recursive: true });
+    execFileSync('cp', [fixture, options.outputPath]);
+    return options.outputPath;
+  };
+  const series = makeSeries();
+  series.outputDir = dir;
+  const engine = new StreamEngine({
+    client: {}, series, episode: 1, projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
+    // beat 1 t2v + 2 failed i2v + 1 t2v-reset = 4 x $0.18 = $0.72
+    log: () => {}, errorBackoffMs: 1, budgetUsd: 0.72,
+    render: faceDeathRender, author: scriptedAuthor(inputs),
+  });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  assert.equal(STREAM_CHAIN_FAILURES_BEFORE_RESET, 2);
+  assert.deepEqual(calls.map(c => c.model), [STREAM_MODEL_T2V, STREAM_MODEL_I2V, STREAM_MODEL_I2V, STREAM_MODEL_T2V]);
+  assert.equal(calls[3].anchor, undefined, 'the reset has no start frame');
+  assert.match(calls[3].prompt, /same scene, same place, same people.*Summary 1\./, 'the reset restates the scene from the previous beat');
+
+  const st = engine.state();
+  assert.equal(st.beats.length, 2, 'the stream did not die and did not skip a beat');
+  assert.deepEqual(st.beats.map(b => b.lane), ['t2v', 't2v-reset']);
+  assert.equal(st.lastError, undefined);
+  assert.equal(inputs.length, 2, 'the writer was not asked again for the reset');
+});
+
+test('the writer is told to end every beat wide, never on a human face', () => {
+  const sys = buildStreamSystemPrompt(makeSeries());
+  assert.match(sys, /Never end on a close-up of a human face/);
+  assert.match(sys, /ENDS on a wide or medium-wide shot/);
 });

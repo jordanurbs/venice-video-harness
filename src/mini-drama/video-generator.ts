@@ -652,7 +652,7 @@ export async function renderVideoFile(
     console.log('  Start frame: none (pure reference mode — refs carry consistency)');
   } else if (anchorImagePath && existsSync(anchorImagePath)) {
     body.image_url = imageToDataUri(anchorImagePath);
-  } else {
+  } else if (!effectiveModel.includes('text-to-video')) {
     console.warn(`  ⚠ No start image available (${anchorImagePath ?? 'none'}) and not in reference mode — request may fail on i2v models.`);
   }
 

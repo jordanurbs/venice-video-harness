@@ -117,7 +117,7 @@ export interface StreamBeat {
     cameraMovement: string;
     summary: string;
   };
-  lane: 't2v' | 'i2v';
+  lane: 't2v' | 'i2v' | 't2v-reset';
   costUsd: number;
   at: string;
 }

@@ -116,6 +116,7 @@ import {
 import {
   DEFAULT_INTELLIGENCE_MODEL,
   describeIntelligence,
+  selectableTextModels,
   resolveIntelligence,
 } from '../venice/text-models.js';
 import { getProjectLanguage } from '../series/project-language.js';
@@ -4996,7 +4997,7 @@ program
   .requiredOption('-p, --project <dir>', 'Project output directory')
   .option('-e, --episode <number>', 'Episode number the stream lives under', '1')
   .option('--direction <text>', 'Standing direction folded into every beat (e.g. "live studio audience laugh track after every joke")')
-  .option('--writer <model>', 'Intelligence model that writes beats (default: the project\'s intelligence model)')
+  .option('--writer <model>', 'Intelligence model that writes beats. Asked interactively for a new stream; required (or "default") in a non-interactive run. A resumed stream keeps the project default.')
   .option('--port <port>', 'Port to listen on', '3000')
   .option('--host <host>', 'Host to bind (localhost only by default)', '127.0.0.1')
   .option('--resolution <res>', 'Render resolution (480P or 768P)', '480P')
@@ -5045,9 +5046,48 @@ program
       console.warn(`⚠ Project directory basename (${basename(projectDir)}) does not match the series slug (${slug}); browser media/deeplink may not resolve.`);
     }
 
+    // The writer is the session's first decision, like `loop --mode`: it is
+    // the voice of the whole story and it costs money from beat 1. Ask in a
+    // terminal; in a non-interactive run, print what will be used and require
+    // --writer to confirm it, so no agent silently commits the operator to a
+    // model they did not choose.
+    const resumed = existsSync(join(getEpisodeDir(series, episodeNumber), 'stream', 'stream-manifest.json'));
+    let writerId: string;
+    if (opts.writer) {
+      writerId = opts.writer === 'default' ? intelligenceFor(series).model : opts.writer;
+    } else if (resumed) {
+      writerId = intelligenceFor(series).model;
+    } else if (!json && stdin.isTTY) {
+      const projectDefault = intelligenceFor(series).model;
+      const choices = selectableTextModels().map(m => ({
+        label: `${m.label} (${m.privacy})${m.id === projectDefault ? ' — project default' : ''}`,
+        value: m.id,
+        description: m.note,
+      }));
+      const defaultIndex = Math.max(0, choices.findIndex(c => c.value === projectDefault));
+      writerId = await promptChoice('Which model writes the beats? (it is the voice of the whole story)', choices, defaultIndex);
+    } else {
+      const projectDefault = intelligenceFor(series).model;
+      failJson(json, `A writer is required for a new stream: pass --writer <model> (project default is ${projectDefault}; pass --writer default to use it). Models: ${selectableTextModels().map(m => m.id).join(', ')}.`);
+      process.exit(1);
+      return;
+    }
+    const writer = intelligenceFor(series, writerId).model;
+
+    // The stream needs only series.json, but the browser builds its episode
+    // list FROM series.json. A stream under an unregistered episode rendered
+    // beats the Stream tab could not show (it fell through to "No episodes
+    // yet." with no Start button). Register the episode before anything bills.
+    if (!series.episodes.some(ep => ep.number === episodeNumber)) {
+      while (series.episodes.length < episodeNumber) {
+        addEpisode(series, series.episodes.length + 1 === episodeNumber ? 'Stream' : `Episode ${series.episodes.length + 1}`);
+      }
+      await saveSeries(series);
+      if (!json) console.log(`Registered episode ${episodeNumber} in series.json so the browser can show the stream.`);
+    }
+
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
-    const writer = intelligenceFor(series, opts.writer).model;
 
     const { startWebServer } = await import('../web/server.js');
     const { EventHub } = await import('../web/events.js');
@@ -5085,7 +5125,9 @@ program
     // story. A resumed session (beats on disk) opens at once, also paused.
     const before = engine.state();
     if (!json && before.beats.length === 0) {
-      console.log(`Rendering the opening beat before opening the browser (writer ${describeIntelligence(writer)}, ${before.model.t2v} @ ${before.resolution})…`);
+      const perBeat = 0.012 * Number.parseInt(before.duration, 10);
+      console.log(`Writer: ${describeIntelligence(writer)}. Video: ${before.model.t2v} @ ${before.resolution}, ${before.duration}/beat, about $${perBeat.toFixed(2)} per beat (billed at queue time).`);
+      console.log('Rendering the opening beat before opening the browser…');
     }
     const status = await engine.prime();
 

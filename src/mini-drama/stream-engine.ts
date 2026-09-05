@@ -64,6 +64,17 @@ const MAX_CONSECUTIVE_ERRORS = 3;
  * invisible in the story; a skipped beat is not.
  */
 export const STREAM_CHAIN_STEP_BACK_SEC = [0, 0.5, 1.5, 3.0];
+/**
+ * How many chained (i2v) render failures on one beat before the engine gives
+ * up on the chain for that beat and renders it t2v instead. A t2v beat is a
+ * soft reset: the picture re-establishes from the beat text and the scene
+ * memory, identity drifts for one beat, and the story keeps going. Without it a
+ * single face-ending beat kills the whole stream (anti-pattern 31: MiniMax i2v
+ * dies server-side on a face-bearing start frame, after billing). Two chained
+ * attempts cover the 0s and 0.5s step-backs; a face that fills the frame for
+ * the whole tail of a 15s clip does not leave in 3s either.
+ */
+export const STREAM_CHAIN_FAILURES_BEFORE_RESET = 2;
 
 /** What the writer produces for one beat. A subset of ShotScript, plus memory. */
 export interface AuthoredBeat {
@@ -96,7 +107,8 @@ export interface StreamBeat {
   /** Project-relative path to the beat mp4 (for /media URLs). */
   file: string;
   beat: AuthoredBeat;
-  lane: 't2v' | 'i2v';
+  /** t2v-reset: a chained render failed repeatedly, so this beat re-established the picture from text. */
+  lane: 't2v' | 'i2v' | 't2v-reset';
   costUsd: number;
   at: string;
 }
@@ -198,6 +210,7 @@ export function buildStreamSystemPrompt(series: SeriesState, direction?: string)
     '',
     direction ? `STANDING DIRECTION (applies to every beat): ${direction}\n` : '',
     'RULES',
+    '- CAMERA, MANDATORY: every beat ENDS on a wide or medium-wide shot of the whole set. Never end on a close-up of a human face. If a human is the last thing on screen, they are small in frame or turned away. (The next beat starts from this frame, and the video model rejects a start frame filled by a human face.) State this ending in `cameraMovement`.',
     '- Each beat is one continuous shot of about 15 seconds. It begins EXACTLY where the previous beat ended: same place, same people in frame, same moment. The camera does not cut. Never restart the scene, never jump in time or place unless a character physically walks somewhere within the shot.',
     '- Move the story forward every beat. Something new happens. Callbacks to earlier beats are good. Repeating a beat is not.',
     '- Describe what happens on screen in present tense, in one or two sentences. Direct the action, the performance, and the sound. Do NOT re-describe what the characters look like — identity is locked elsewhere.',
@@ -510,9 +523,17 @@ export class StreamEngine {
     const outputPath = join(this.streamDir, `beat-${key}.mp4`);
     await mkdir(this.streamDir, { recursive: true });
 
-    let lane: 't2v' | 'i2v' = 't2v';
+    let lane: StreamBeat['lane'] = 't2v';
     let anchorImagePath: string | undefined;
-    if (previous) {
+    const resetChain = Boolean(previous) && this.consecutiveErrors >= STREAM_CHAIN_FAILURES_BEFORE_RESET;
+    if (previous && resetChain) {
+      // The chain has failed repeatedly on this beat. The start frame is the
+      // usual cause (anti-pattern 31), and stepping back has not found a frame
+      // the model accepts. Re-establish the picture from text instead of
+      // stopping the stream: a one-beat identity drift beats a dead stream.
+      lane = 't2v-reset';
+      this.log(`  [stream] beat ${n} reset: ${this.consecutiveErrors} chained renders failed; rendering t2v from the beat text (identity may drift this beat).`);
+    } else if (previous) {
       const prevPath = join(this.projectDir, previous.file);
       const startFrame = join(this.streamDir, `beat-${key}-start.png`);
       // Retry N steps back N-th offset into the previous clip.
@@ -528,7 +549,7 @@ export class StreamEngine {
       }
     }
 
-    const shot = this.toShot(n, beat);
+    const shot = this.toShot(n, beat, lane === 't2v-reset' ? previous : undefined);
     const prompt = this.buildPrompt(shot, lane === 'i2v' ? STREAM_MODEL_I2V : STREAM_MODEL_T2V);
     this.spendUsd += est;
     this.log(`  [stream] beat ${n} rendering: ${lane} ${prompt.model} @ ${this.resolution}, ${this.duration}`);
@@ -588,13 +609,18 @@ export class StreamEngine {
 
   // ---- Prompt -------------------------------------------------------------
 
-  private toShot(n: number, beat: AuthoredBeat): ShotScript {
+  private toShot(n: number, beat: AuthoredBeat, restateFrom?: StreamBeat): ShotScript {
+    // A t2v reset has no start frame, so the prompt must carry the scene the
+    // chain was holding: where we are and who is there, from the previous beat.
+    const restatement = restateFrom
+      ? `Continuing the same scene, same place, same people as before (${restateFrom.beat.summary}). `
+      : '';
     return {
       shotNumber: n,
       type: beat.dialogue ? 'dialogue' : 'action',
       duration: this.duration,
       videoModel: 'action',
-      description: beat.description,
+      description: `${restatement}${beat.description}`,
       characters: beat.characters,
       dialogue: beat.dialogue,
       sfx: beat.sfx,
