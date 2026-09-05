@@ -111,10 +111,10 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
             ))}
           </select>
         )}
-        <span className={`badge ${running ? 'pass' : 'none'}`}>{running ? 'streaming' : attached ? 'paused' : 'not started'}</span>
-        {running && status !== 'idle' && (
+        <span className={`badge ${running ? 'pass' : 'none'}`}>{running ? 'streaming' : attached ? (beats.length > 0 ? 'paused — ready to continue' : 'preparing opening beat') : 'not attached'}</span>
+        {running && (status === 'writing' || status === 'rendering') && (
           <span className="badge low">
-            {status === 'writing' ? `writing beat ${stream?.inFlight ?? beats.length + 1}` : status === 'rendering' ? `rendering beat ${stream?.inFlight ?? beats.length + 1}` : 'error'}
+            {status === 'writing' ? `writing beat ${stream?.inFlight ?? beats.length + 1}` : `rendering beat ${stream?.inFlight ?? beats.length + 1}`}
           </span>
         )}
         <span className="dim small">{beats.length} beat{beats.length === 1 ? '' : 's'} so far</span>
@@ -127,7 +127,6 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
       </div>
 
       {error && <div className="error-banner">{error}</div>}
-      {stream?.lastError && <div className="error-banner">Last error: {stream.lastError}</div>}
 
       <div className="card dim small">
         An infinite story. The writer ({stream?.model.writer ?? 'intelligence model'}) authors one beat at a time.
@@ -180,7 +179,7 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
             disabled={!attached}
             title={attached ? 'Continue the story (authorizes another budget if the cap was reached)' : 'Run `venice-video stream` first'}
           >
-            {budgetReached ? 'Continue (authorize more budget)' : beats.length > 0 ? 'Continue stream' : 'Start stream'}
+            {budgetReached ? 'Continue (authorize more budget)' : beats.length > 1 ? 'Continue stream' : 'Start stream'}
           </button>
         )}
         {budgetReached && (
@@ -192,14 +191,26 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
           <button className="ghost" onClick={() => { setIndex(beats.length - 1); setWaiting(false); }}>Jump to newest</button>
         )}
         {running && <span className="dim small">Streaming — Pause to stop spending. The beat in flight will finish.</span>}
+        {!running && attached && beats.length > 0 && !budgetReached && (
+          <span className="dim small">Paused. Start renders the next beat immediately and keeps going.</span>
+        )}
       </div>
 
       <h2 style={{ marginTop: 0 }}>Story So Far</h2>
       <div className="loop-shot-list">
         {beats.length === 0 && <div className="empty">No beats yet.</div>}
         {[...beats].reverse().map(b => (
-          <div className={`loop-shot-row${b.n === current?.n ? ' current' : ''}`} key={b.n}>
-            <button className="loop-shot-open" onClick={() => { setIndex(b.n - 1); setWaiting(false); }} title="Play from here">
+          <div
+            className={`loop-shot-row${b.n === current?.n ? ' current' : ''}`}
+            key={b.n}
+            role="button"
+            tabIndex={0}
+            title="Play this beat"
+            style={{ cursor: 'pointer' }}
+            onClick={() => { setIndex(b.n - 1); setWaiting(false); }}
+            onKeyDown={ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setIndex(b.n - 1); setWaiting(false); } }}
+          >
+            <button className="loop-shot-open" onClick={ev => { ev.stopPropagation(); setIndex(b.n - 1); setWaiting(false); }} title="Play this beat">
               <span className="shot-num">{b.n}</span>
             </button>
             <span className="dot succeeded" />

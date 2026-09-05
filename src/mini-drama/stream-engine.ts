@@ -55,6 +55,15 @@ const STORY_FILE = 'story-so-far.md';
 const ERROR_BACKOFF_MS = 5_000;
 /** Stop after this many consecutive failures — a stream cannot skip a beat. */
 const MAX_CONSECUTIVE_ERRORS = 3;
+/**
+ * When a chained render dies server-side, the START FRAME is the usual cause
+ * (MiniMax i2v rejects some frames after billing — AGENTS.md anti-pattern 31).
+ * Retrying the same frame is a guaranteed repeat. So each retry steps back
+ * through the previous beat's clip by these offsets (seconds from the end) and
+ * keeps the beat that was already written. A step of a second or two is
+ * invisible in the story; a skipped beat is not.
+ */
+export const STREAM_CHAIN_STEP_BACK_SEC = [0, 0.5, 1.5, 3.0];
 
 /** What the writer produces for one beat. A subset of ShotScript, plus memory. */
 export interface AuthoredBeat {
@@ -305,6 +314,12 @@ export class StreamEngine {
   private lastError?: string;
   private inFlight?: number;
   private consecutiveErrors = 0;
+  /** The beat written for the in-flight number, kept across render retries. */
+  private pendingBeat?: { n: number; beat: AuthoredBeat };
+  /** Resolves the worker's paused wait when Start is clicked. */
+  private wake?: () => void;
+  /** True while prime() renders beat 1 with the worker otherwise paused. */
+  private priming = false;
 
   constructor(options: StreamEngineOptions) {
     this.client = options.client;
@@ -353,6 +368,35 @@ export class StreamEngine {
     await this.loadManifest();
   }
 
+  /**
+   * Render the opening beat, then wait. Nothing else is queued until start()
+   * is called (the operator clicks Start in the UI). Resolves once beat 1 is on
+   * disk, or immediately if a beat already exists on disk. A new session
+   * therefore opens the browser with one beat ready and the stream paused.
+   */
+  async prime(): Promise<StreamManifest> {
+    if (this.beats.length > 0 || this.running || this.priming) return this.snapshot();
+    this.priming = true;
+    this.log(`Priming: writing and rendering the opening beat, then waiting for Start. writer=${this.writerModel}, video=${STREAM_MODEL_T2V}, ${this.resolution}, ${this.duration}.`);
+    try {
+      let ok = false;
+      while (!ok && this.consecutiveErrors < MAX_CONSECUTIVE_ERRORS) {
+        ok = await this.nextBeat();
+      }
+      if (!ok) this.log(`Priming failed after ${this.consecutiveErrors} attempts. Last error: ${this.lastError}`);
+      else this.log('Opening beat ready. The stream is paused — click Start in the browser to continue the story.');
+    } finally {
+      this.priming = false;
+      this.status = 'idle';
+      this.inFlight = undefined;
+      await this.persist();
+      this.emit();
+      // Start was clicked while priming: carry straight on.
+      if (this.running && this.consecutiveErrors < MAX_CONSECUTIVE_ERRORS) void this.runWorker();
+    }
+    return this.snapshot();
+  }
+
   async start(config?: { budgetUsd?: number; unbounded?: boolean }): Promise<StreamManifest> {
     if (config?.unbounded !== undefined) this.unbounded = config.unbounded;
     if (config?.budgetUsd !== undefined) this.budgetUsd = config.budgetUsd;
@@ -365,15 +409,19 @@ export class StreamEngine {
     if (this.running) return this.snapshot();
     this.running = true;
     this.consecutiveErrors = 0;
+    this.lastError = undefined;
     this.log(`Stream engine running: writer=${this.writerModel}, video=${STREAM_MODEL_T2V} then ${STREAM_MODEL_I2V} chained, ${this.resolution}, ${this.duration}/beat, budget=${this.unbounded ? 'unbounded' : `$${this.budgetUsd.toFixed(2)}`}.`);
     if (this.beats.length > 0) this.log(`  Continuing from beat ${this.beats.length}.`);
-    void this.runWorker();
+    // If prime() is still rendering beat 1, the worker starts when it finishes.
+    if (!this.priming) void this.runWorker();
     await this.persist();
+    this.emit();
     return this.snapshot();
   }
 
   async stop(): Promise<StreamManifest> {
     this.running = false;
+    this.wake?.();
     await this.persist();
     this.log('Stream engine stopped. The beat in flight will finish; no new beats will start.');
     return this.snapshot();
@@ -419,26 +467,33 @@ export class StreamEngine {
     const previous = this.beats[this.beats.length - 1];
     this.inFlight = n;
 
-    // 1. Write.
-    this.status = 'writing';
-    this.emit();
+    // 1. Write — unless this is a retry of a beat that was already written.
+    //    A render failure is (almost always) the start frame, not the text, so
+    //    the text is kept and only the frame changes below.
     let beat: AuthoredBeat;
-    try {
-      if (n === 1 && this.openingBeat) {
-        beat = this.openingBeat;
-      } else {
-        beat = normalizeBeat(await this.author({
-          series: this.series,
-          beatNumber: n,
-          storySoFar: await this.readStory(),
-          recentBeats: this.beats.slice(-STREAM_RECENT_BEATS),
-          direction: this.direction,
-        }), this.series);
+    if (this.pendingBeat && this.pendingBeat.n === n) {
+      beat = this.pendingBeat.beat;
+    } else {
+      this.status = 'writing';
+      this.emit();
+      try {
+        if (n === 1 && this.openingBeat) {
+          beat = this.openingBeat;
+        } else {
+          beat = normalizeBeat(await this.author({
+            series: this.series,
+            beatNumber: n,
+            storySoFar: await this.readStory(),
+            recentBeats: this.beats.slice(-STREAM_RECENT_BEATS),
+            direction: this.direction,
+          }), this.series);
+        }
+      } catch (err) {
+        return this.fail(n, 'write', err);
       }
-    } catch (err) {
-      return this.fail(n, 'write', err);
+      this.pendingBeat = { n, beat };
+      this.log(`  [stream] beat ${n} written: ${beat.description.slice(0, 110)}${beat.description.length > 110 ? '…' : ''}`);
     }
-    this.log(`  [stream] beat ${n} written: ${beat.description.slice(0, 110)}${beat.description.length > 110 ? '…' : ''}`);
 
     // 2. Budget check with this beat's real cost. Venice bills at queue time.
     const est = this.costPerBeat();
@@ -460,10 +515,13 @@ export class StreamEngine {
     if (previous) {
       const prevPath = join(this.projectDir, previous.file);
       const startFrame = join(this.streamDir, `beat-${key}-start.png`);
+      // Retry N steps back N-th offset into the previous clip.
+      const stepBack = STREAM_CHAIN_STEP_BACK_SEC[Math.min(this.consecutiveErrors, STREAM_CHAIN_STEP_BACK_SEC.length - 1)];
       try {
-        extractLastFrame(prevPath, startFrame);
+        extractLastFrame(prevPath, startFrame, stepBack);
         lane = 'i2v';
         anchorImagePath = startFrame;
+        if (stepBack > 0) this.log(`  [stream] beat ${n} retry: start frame stepped back ${stepBack}s into beat ${previous.n}.`);
       } catch (err) {
         // A stream cannot break its chain silently — that would be a hidden cut.
         return this.fail(n, 'chain', err);
@@ -500,6 +558,7 @@ export class StreamEngine {
       at: new Date().toISOString(),
     };
     this.beats.push(record);
+    this.pendingBeat = undefined;
     this.consecutiveErrors = 0;
     this.lastError = undefined;
     this.status = 'idle';

@@ -16,6 +16,7 @@ import {
   StreamEngine,
   STREAM_MODEL_T2V,
   STREAM_MODEL_I2V,
+  STREAM_CHAIN_STEP_BACK_SEC,
   buildStreamSystemPrompt,
   buildStreamUserPrompt,
 } from '../dist/mini-drama/stream-engine.js';
@@ -72,6 +73,16 @@ function realMp4() {
   fixture = join(dir, 'clip.mp4');
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=64x64:d=1', '-pix_fmt', 'yuv420p', fixture]);
   return fixture;
+}
+
+let longFixture;
+function realMp4Long() {
+  if (longFixture) return longFixture;
+  const dir = mkdtempSync(join(tmpdir(), 'stream-fixture-long-'));
+  longFixture = join(dir, 'clip.mp4');
+  // 5s test pattern: frames differ over time, so stepped-back frames differ.
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=s=64x64:d=5:r=10', '-pix_fmt', 'yuv420p', longFixture]);
+  return longFixture;
 }
 
 function makeEngine(dir, extra = {}, useFixture = true) {
@@ -216,4 +227,73 @@ test('prompts name the cast, the standing direction, and the continuity rule', (
   const user = buildStreamUserPrompt({ series, beatNumber: 1, storySoFar: '', recentBeats: [] });
   assert.match(user, /opening beat/);
   assert.match(user, /Write beat 1\./);
+});
+
+test('prime renders the opening beat and then waits paused; start continues at once', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-prime-'));
+  const { engine, calls, inputs } = makeEngine(dir, { budgetUsd: 0.54 });
+  await engine.init();
+  const primed = await engine.prime();
+
+  assert.equal(calls.length, 1, 'prime renders exactly one beat');
+  assert.equal(calls[0].model, STREAM_MODEL_T2V);
+  assert.equal(primed.beats.length, 1);
+  assert.equal(primed.running, false, 'the stream is paused after priming');
+  assert.equal(primed.status, 'idle');
+
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(calls.length, 1, 'nothing else renders while paused');
+
+  await engine.start();
+  await waitForStop(engine);
+  assert.equal(calls.length, 3, 'start renders the rest of the budget back to back');
+  assert.equal(calls[1].model, STREAM_MODEL_I2V, 'the first started beat chains off the primed one');
+  assert.equal(inputs[1].beatNumber, 2);
+
+  // Priming again with beats on disk is a no-op.
+  const again = await engine.prime();
+  assert.equal(again.beats.length, 3);
+  assert.equal(calls.length, 3);
+});
+
+test('a failed chained render keeps the written beat and steps back through the previous clip', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-stepback-'));
+  const fixture = realMp4Long();
+  const calls = [];
+  const inputs = [];
+  let renderCount = 0;
+  const flakyRender = async (_client, options) => {
+    renderCount += 1;
+    // Snapshot the start frame now: every retry overwrites the same path.
+    calls.push({ model: options.prompt.model, outputPath: options.outputPath, frame: options.anchorImagePath ? readFileSync(options.anchorImagePath) : null });
+    // Beat 2's first two attempts die "server-side"; the third succeeds.
+    if (options.prompt.model === STREAM_MODEL_I2V && renderCount <= 3) throw new Error('An unknown error occurred');
+    await mkdir(join(options.outputPath, '..'), { recursive: true });
+    execFileSync('cp', [fixture, options.outputPath]);
+    return options.outputPath;
+  };
+  const series = makeSeries();
+  series.outputDir = dir;
+  const engine = new StreamEngine({
+    client: {}, series, episode: 1, projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
+    // 4 render attempts x $0.18 (failed queues are billed too) = $0.72.
+    log: () => {}, errorBackoffMs: 1, budgetUsd: 0.72,
+    render: flakyRender, author: scriptedAuthor(inputs),
+  });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  // 1 t2v + 2 failed i2v + 1 successful i2v = 4 render calls, 2 beats on disk.
+  assert.equal(calls.length, 4);
+  assert.equal(engine.state().beats.length, 2, 'beat 2 landed on the third try');
+  assert.equal(inputs.length, 2, 'the writer was NOT asked again for the retries — the text was kept');
+  assert.equal(engine.state().lastError, undefined, 'a recovered stream carries no error');
+
+  // Each retry used a different start frame (stepped back into beat 1).
+  const frames = calls.slice(1).map(c => c.frame);
+  assert.ok(frames.every(Boolean), 'every chained attempt had a start frame');
+  assert.ok(!frames[0].equals(frames[1]), 'retry 1 stepped back to a different frame than the first attempt');
+  assert.ok(!frames[1].equals(frames[2]), 'retry 2 stepped back further still');
+  assert.deepEqual(STREAM_CHAIN_STEP_BACK_SEC, [0, 0.5, 1.5, 3.0]);
 });
