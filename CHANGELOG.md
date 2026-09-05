@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.22.1 — 2026-09-05
+
+### Added
+
+- **Full prompt per beat, and export.** Each stream beat now records `render`
+  — the exact model, prompt, resolution, duration, and start frame sent to the
+  video model — in `beat-NNNNN.json` and the manifest. The Stream tab's Story
+  So Far list has a **Full prompt** toggle per beat (authored beat + verbatim
+  video prompt, Copy prompt / Copy as JSON) and **JSON** / **Markdown** export
+  links for every beat plus the writer's system prompt
+  (`GET /api/projects/:slug/stream/export.json|md?episode=N`, engine attached
+  or not). Beats from before this field existed are backfilled on resume from
+  their `.recipe.json` sidecars. `exportStreamJson` / `exportStreamMarkdown`
+  are exported from `stream-engine.ts`.
+
 ## 2.22.0 — 2026-09-05
 
 ### Added

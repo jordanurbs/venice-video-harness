@@ -13,7 +13,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { rename } from 'node:fs/promises';
+import { readFile, rename } from 'node:fs/promises';
 import { basename, dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventHub } from './events.js';
@@ -366,6 +366,43 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
 
     // Stream control (infinite live-authored story). Same shape as loop: the
     // engine is attached to one project; `state` is readable without one.
+    // Export every beat's authored text + the exact video prompt as JSON or
+    // Markdown. Works with or without an attached engine (reads the manifest
+    // from disk), so a finished stream can still be exported.
+    const streamExport = /^\/api\/projects\/([^/]+)\/stream\/export\.(json|md)$/.exec(pathname);
+    if (streamExport && req.method === 'GET') {
+      const project = await resolveProject(streamExport[1]);
+      if (!project) { sendJson(res, 404, { error: 'Unknown project' }); return; }
+      const format = streamExport[2];
+      const episodeParam = Number.parseInt(new URL(req.url ?? '/', 'http://localhost').searchParams.get('episode') ?? '', 10);
+      try {
+        const { exportStreamJson, exportStreamMarkdown } = await import('../mini-drama/stream-engine.js');
+        const { loadSeries, getEpisodeDir } = await import('../series/manager.js');
+        const series = await loadSeries(project.dir);
+        if (!series) { sendJson(res, 404, { error: 'Project has no series.json' }); return; }
+        series.outputDir = project.dir;
+        const engine = options.stream && options.stream.slug === project.slug ? options.stream.engine : undefined;
+        const episode = Number.isFinite(episodeParam) && episodeParam > 0 ? episodeParam : (options.stream?.episode ?? 1);
+        let manifest = engine && options.stream?.episode === episode ? engine.state() : undefined;
+        if (!manifest) {
+          const path = join(getEpisodeDir(series, episode), 'stream', 'stream-manifest.json');
+          if (!existsSync(path)) { sendJson(res, 404, { error: `No stream manifest for episode ${episode}` }); return; }
+          manifest = JSON.parse(await readFile(path, 'utf-8'));
+        }
+        const body = format === 'json' ? exportStreamJson(manifest!, series) : exportStreamMarkdown(manifest!, series);
+        const filename = `${project.slug}-stream-ep${episode}-prompts.${format}`;
+        res.writeHead(200, {
+          'Content-Type': format === 'json' ? 'application/json; charset=utf-8' : 'text/markdown; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Content-Length': Buffer.byteLength(body),
+        });
+        res.end(body);
+      } catch (err) {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : 'Export failed' });
+      }
+      return;
+    }
+
     const streamMatch = /^\/api\/projects\/([^/]+)\/stream\/(state|start|stop|config)$/.exec(pathname);
     if (streamMatch) {
       const action = streamMatch[2];

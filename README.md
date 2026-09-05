@@ -1214,6 +1214,16 @@ Rules of thumb:
   15 s. The old `TURBO_USD_PER_SEC` constant assumed $0.18; budgets now buy
   more beats than they used to.
 
+**Take the prompts elsewhere.** Every beat records exactly what was sent to the
+video model (`render` in `beat-NNNNN.json` and the manifest: model, prompt,
+resolution, duration, start frame). In the Stream tab, **Full prompt** on any
+beat in the Story So Far list expands the authored beat and the verbatim video
+prompt with Copy buttons. **JSON** and **Markdown** at the top of the list
+download every beat's authored text and full prompt plus the writer's system
+prompt (`GET /api/projects/:slug/stream/export.json|md?episode=N`; works
+after the engine has stopped, too). Beats rendered before this field existed
+are backfilled on resume from their `.recipe.json` sidecars.
+
 The `stream` command registers its episode in `series.json` if it is missing, so
 the Stream tab always has an episode to show. (Before 2.21.1 a stream under an
 unregistered episode rendered beats the browser could not display.)

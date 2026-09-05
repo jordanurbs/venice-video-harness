@@ -118,6 +118,7 @@ export interface StreamBeat {
     summary: string;
   };
   lane: 't2v' | 'i2v' | 't2v-reset';
+  render?: { model: string; prompt: string; resolution?: string; duration: string; startFrame?: string };
   costUsd: number;
   at: string;
 }
