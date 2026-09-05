@@ -24,7 +24,7 @@
 // ---------------------------------------------------------------------------
 
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, appendFile, rename } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { VeniceClient } from '../venice/client.js';
 import type { SeriesState, ShotScript } from '../series/types.js';
@@ -772,7 +772,13 @@ export class StreamEngine {
     try {
       await mkdir(this.streamDir, { recursive: true });
       const json = JSON.stringify(this.snapshot(), (_k, v) => (v === Infinity ? null : v), 2);
-      await writeFile(this.manifestPath(), json, 'utf-8');
+      // Atomic write: a concurrent reader (a resuming engine, the web server)
+      // must never see a torn manifest. Write a temp file, then rename it over
+      // the real path — rename is atomic on the same filesystem, so a reader
+      // gets either the old complete file or the new one, never a partial parse.
+      const tmp = `${this.manifestPath()}.tmp`;
+      await writeFile(tmp, json, 'utf-8');
+      await rename(tmp, this.manifestPath());
     } catch (err) {
       this.log(`  ⚠ Could not write stream manifest: ${(err as Error).message}`);
     }
