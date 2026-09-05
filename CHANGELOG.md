@@ -17,6 +17,10 @@
   beat parses. Results are in `src/mini-drama/stream-choices.ts` and the README.
 - `VeniceClient.chatJson` takes `disableThinking`, which sends
   `venice_parameters.disable_thinking`. The stream writer sets it per choice.
+- README "Choosing Stream Models": why the stream has its own writer default,
+  why thinking is off, how the numbers were measured, and two decision
+  matrices (writer, video family) scored on privacy, speed, cost, and quality,
+  plus a pick-by-goal table.
 
 ### Changed
 

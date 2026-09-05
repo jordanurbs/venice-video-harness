@@ -1106,39 +1106,113 @@ restates the scene from the previous beat's summary, identity drifts for one
 beat, and the story keeps going. The Stream tab shows the retry error while it
 happens and marks reset beats in the story list.
 
-**Speed is the constraint.** A beat's wall time is writer latency + render
-latency, and the viewer watches 15 s of video per beat. Nothing on Venice
-renders 15 s of video in under 15 s, so every stream eventually catches up to
-its newest beat and holds. The two model choices decide how bad the lag is, and
-both are dropdowns in the **Stream** tab (a change applies to the next beat):
+#### Choosing Stream Models
 
-| Writer (thinking off) | Median per beat | Valid beats | Tier |
+A stream is a live broadcast whose producer must keep pace with the viewer.
+Each beat costs two latencies: the **writer** authors the beat, then the
+**video model** renders it. The viewer watches 15 s of video per beat. Nothing
+on Venice renders 15 s of video in under 15 s, so every stream eventually
+catches up to its newest beat and holds on the last frame. The two model
+choices decide how long that hold is. Both are dropdowns in the **Stream** tab;
+a change applies to the next beat, and the i2v chain survives a switch.
+
+**Why the stream does not use the project's intelligence model.** The
+intelligence model (`series.intelligence`, default `kimi-k3`) is picked for the
+workshop, the shot script, and vision QA. Those tasks reward depth and reading
+panels; a 35 s think is fine. A stream beat is a 100-word paragraph in
+character, once every 30 s, forever. Latency is the whole game, so the stream
+has its own default and its own list.
+
+**Why thinking is off.** The harness never sent `disable_thinking`. On the same
+model that flag is the difference between 35 s and 4 s per beat, and reasoning-
+only models spend the entire token budget thinking and return nothing.
+`chatJson` now takes `disableThinking`; the stream sets it per writer.
+
+**How the numbers were measured.** `scripts/bakeoff-stream-writer.ts` sends the
+real stream prompt (system + user, from `stream-engine.ts`) for a real project
+at beat ~28, 3-6 rounds per model, and checks that the reply parses and
+normalizes to a beat. Video prices are `POST /video/quote` for a 15 s render at
+the family's draft resolution. Render times are observed on drop-the-beat
+(MiniMax) or vendor-typical (others). All measured 2026-09-05. Re-run:
+
+```bash
+npx tsx scripts/bakeoff-stream-writer.ts -p <project> --no-thinking [--rounds 6] [--show]
+```
+
+##### Writer Matrix
+
+Scores: ●●● best, ●●○ fine, ●○○ weak, ○○○ not usable. Speed is the bakeoff
+median per beat with thinking off (unless noted). Cost is USD per million
+input / output tokens; a beat is ~1.5 k in, ~0.4 k out, so even the priciest
+writer here is under a cent per beat. Quality is a judgment from reading the
+beats: does it follow the camera rule, keep one joke per beat, stay in voice.
+
+| Writer | Privacy | Speed | Cost | Quality | Valid | Verdict |
+|---|---|---|---|---|---|---|
+| `deepseek-v4-flash-0731-fast` **(default)** | ●●● private | ●●● 3.8 s | ●●● $0.35 / $0.70 | ●●○ tight, follows rules, drier humor | 9/9 | Use this unless you have a reason not to. |
+| `mistral-small-2603` | ●●● private | ●●● 5.2 s | ●●● $0.19 / $0.75 | ●●● warmest, most physical comedy | 9/9 | Best prose of the fast tier. Sometimes puts the robot's display name in `characters` (normalized away). |
+| `seed-2-1-turbo` | ●○○ anonymized | ●●○ 9.2 s | ●●○ $0.63 / $3.13 | ●●○ | 9/9 | Reliable, but slower and not private. Pick only if the first two misbehave on your bible. |
+| `kimi-k3` | ●●● private | ●●○ 9.8 s (35 s thinking on) | ●○○ $3.75 / $18.75 | ●●● richest callbacks and structure | 8/9 | The intelligence default. Best writer; too slow and 1 in 9 beats fails. Use for a stream you will curate, not one you watch live. |
+| `deepseek-v4-flash` | ●●● private | ●○○ 11.0 s | ●●● $0.14 / $0.28 | ●●○ | 6/6 | Cheapest. 3x slower than its `-fast` sibling for no quality gain. |
+| `minimax-m27` | ●●● private | ●○○ 10.1 s (thinking on) | ●●● $0.38 / $1.50 | ●●○ | 5/6 | Needs thinking on to be reliable, which caps its speed. |
+| `gemini-3-8-flash` | ●○○ anonymized | ○○○ 19.1 s (thinking on) | ●●○ $0.94 / $4.69 | ●●● vivid prose | 4/6 | Good writer, wrong tool: slow, breaks JSON with thinking off, not private. |
+
+Not offered, with the reason:
+
+| Model | Why not |
+|---|---|
+| `z-ai-glm-5-3` | Thinking-only (400 on `disable_thinking`). With thinking on, 0/3 valid: it spent the whole 1500-token budget reasoning. |
+| `z-ai-glm-5-3-flash` | 2/3 at 21 s with thinking; 0/3 without: answers with prose ("Let me look..."), not JSON. |
+| `grok-4-6` | 3/3 valid but 67 s median. |
+| `qwen3-235b-a22b-instruct-2507` | 3/3 valid but 39 s median. |
+| `qwen3-6-35b-a3b` | 2 s, but truncates the JSON 1 in 3. |
+| `kimi-k3-fast` | HTTP 500 "Inference processing failed" on every call. |
+
+##### Video Family Matrix
+
+Speed is the wall time to render one 15 s beat. "Lag" is what the viewer
+feels: with the default writer (~4 s) added, Turbo makes a 15 s beat in ~35 s,
+so the player holds ~20 s between beats once it has caught up. Every other
+family holds for a minute or more. Cost is the quote for 15 s at the family's
+draft resolution. Quality is relative to what the harness knows about each
+family (see the model registry and AGENTS.md).
+
+| Family | Privacy | Speed (15 s beat) | Cost / 15 s | Quality | Faces on start frame | Verdict |
+|---|---|---|---|---|---|---|
+| `minimax-h3-max-turbo` **(default)** | ●●● private | ●●● ~30 s | ●●● $0.11 | ●●○ good motion, native audio, improvises dialogue | ✗ dies after billing; engine soft-resets | The only lane that nearly keeps pace. Draft look at 480P; 768P selectable. |
+| `minimax-h3-max` | ●●● private | ●●○ ~60 s | ●●● $0.22 | ●●● sharper than Turbo, same model family | ✗ same limit | Pick when you want the Turbo look at finish quality and will accept a 1-minute hold. |
+| `wan-3-0` | ●○○ anonymized | ●○○ ~120 s | ●●○ $0.68 | ●●● strong, up to 1080p, 30 s ladder | ✓ accepts faces | Best choice if the show is face-heavy and the camera rule is not enough. Slow. |
+| `grok-imagine` | ●○○ anonymized | ●○○ ~90 s | ●○○ $0.95 | ●●○ | ✓ | Faster than Wan, pricier, lower ceiling. |
+| `seedance-2-0` | ●○○ anonymized | ○○○ ~180 s | ●○○ $1.32 | ●●● the harness production look, native lip-synced dialogue | ✓ | Production fidelity. The viewer waits ~3 min per beat. Use for a stream you export, not one you watch. |
+| `seedance-2-5` | ●○○ anonymized | ○○○ ~180 s | ○○○ $1.93 | ●●● newest Seedance, up to 30 s beats | ✓ | Same trade as 2.0 at a higher price. |
+| `kling-o3-standard` | ●○○ anonymized | ○○○ ~150 s | ○○○ $1.84 | ●●● | ✓ | No resolution parameter. Expensive for a chain that re-renders forever. |
+
+##### Pick By Goal
+
+| You want | Writer | Video | Expect |
 |---|---|---|---|
-| `deepseek-v4-flash-0731-fast` (default) | 3.8 s | 9/9 | private |
-| `mistral-small-2603` | 5.2 s | 9/9 | private |
-| `seed-2-1-turbo` | 9.2 s | 9/9 | anonymized |
-| `kimi-k3` (harness intelligence default) | 9.8 s (35 s with thinking) | 8/9 | private |
-| `deepseek-v4-flash` | 11.0 s | 6/6 | private |
-| `minimax-m27` (thinking on) | 10.1 s | 5/6 | private |
-| `gemini-3-8-flash` (thinking on) | 19.1 s | 4/6 | anonymized |
+| Watch it live, cheapest, private | `deepseek-v4-flash-0731-fast` | `minimax-h3-max-turbo` @ 480P | ~35 s per beat, ~20 s hold, ~$0.11/beat, ~$13/hour of story |
+| Watch it live, best sitcom writing | `mistral-small-2603` | `minimax-h3-max-turbo` | Same lag, warmer beats |
+| Sharper picture, still private | `deepseek-v4-flash-0731-fast` | `minimax-h3-max` @ 768P | ~65 s per beat, ~50 s hold, $0.22/beat |
+| Human faces fill the frame often | any fast writer | `wan-3-0` | Faces never kill the chain; ~2 min per beat |
+| Production look to export later | `kimi-k3` | `seedance-2-0` or `-2-5` | ~3.5 min per beat, $1.32-1.93/beat; run it overnight, do not watch it live |
+| Strict privacy for both text and pixels | `deepseek-v4-flash-0731-fast` or `mistral-small-2603` | `minimax-h3-max-turbo` or `minimax-h3-max` | The only fully private pairing; MiniMax is the sole private video family here |
 
-Rejected: `z-ai-glm-5-3` (thinking-only, 0/3 valid), `z-ai-glm-5-3-flash`
-(prose instead of JSON without thinking), `grok-4-6` (67 s), `qwen3-6-35b-a3b`
-(truncates JSON 1 in 3), `kimi-k3-fast` (HTTP 500 every call). Re-run the
-numbers with `npx tsx scripts/bakeoff-stream-writer.ts -p <project> --no-thinking`.
+Rules of thumb:
 
-| Video family | ~Render per 15 s beat | $/15 s (quote) | Keeps up? |
-|---|---|---|---|
-| `minimax-h3-max-turbo` (default) | 30 s | $0.11 | nearly |
-| `minimax-h3-max` | 60 s | $0.22 | no |
-| `wan-3-0` | 120 s | $0.68 | no |
-| `grok-imagine` | 90 s | $0.95 | no |
-| `seedance-2-0` | 180 s | $1.32 | no |
-| `seedance-2-5` | 180 s | $1.93 | no |
-| `kling-o3-standard` | 150 s | $1.84 | no |
-
-Pick Seedance for the production look and accept that the viewer waits
-between beats. The tab says so next to the dropdown.
+- The render is the floor. A faster writer cannot make the stream faster than
+  the video model. Below ~5 s of writer time, nothing more is gained.
+- Switching the video family mid-stream is safe. The start frame is a PNG; any
+  i2v lane can continue from it. Identity will shift a little across the
+  switch, as it does across every hop.
+- Switching the writer mid-stream is free and instant. The new writer reads the
+  same `story-so-far.md` and the same last six beats.
+- Do not chase 768P on Turbo for a live watch. It roughly doubles the render
+  time for the same model; pick `minimax-h3-max` at 768P instead if fidelity
+  is the goal, since you are paying the time either way.
+- Budget arithmetic is per beat, from the quote. Turbo at 480P is $0.11 for
+  15 s. The old `TURBO_USD_PER_SEC` constant assumed $0.18; budgets now buy
+  more beats than they used to.
 
 The `stream` command registers its episode in `series.json` if it is missing, so
 the Stream tab always has an episode to show. (Before 2.21.1 a stream under an
