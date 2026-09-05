@@ -1054,10 +1054,11 @@ venice-video stream -p ~/VeniceVideos/my-show \
 How it works:
 
 1. You pick the writer. A new stream asks which model writes the beats (it is
-   the voice of the whole story). Non-interactive runs must pass `--writer
-   <model>` (or `--writer default` for the project's intelligence model); a
-   resumed stream keeps the project default. The writer and the per-beat cost
-   print before beat 1 bills.
+   the voice of the whole story, and its speed sets how far the stream lags
+   playback). Non-interactive runs must pass `--writer <model>` (or `--writer
+   default` = `deepseek-v4-flash-0731-fast`, the fastest reliable writer in
+   the bakeoff); a resumed stream keeps the writer it last ran with. The
+   writer and the per-beat cost print before beat 1 bills.
 2. The writer writes beat 1 from the series bible: concept, setting, aesthetic,
    and cast.
 3. Beat 1 renders text-to-video on MiniMax H3 Max Turbo.
@@ -1079,8 +1080,9 @@ a cast (`add-character`, `--skip-images` is fine) make the writer much better.
 venice-video stream -p <dir> \
   -e 1 \                    # episode the stream lives under (default 1)
   --direction "<text>" \    # standing direction folded into every beat's writer prompt
-  --writer kimi-k3 \        # writer model; asked for a new stream, required non-interactively
-  --resolution 480P \       # 480P or 768P
+  --writer <model> \        # writer; asked for a new stream, required non-interactively (see the bakeoff table)
+  --video-family <family> \ # minimax-h3-max-turbo (default) | minimax-h3-max | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard
+  --resolution 480P \       # default: the family's draft tier
   --duration 15s \          # per-beat length, snapped to the 5-15s ladder
   --budget 2                # stop after ~$2; Continue authorizes another budget
 # --unbounded               # no cap (streams until Ctrl-C)
@@ -1103,6 +1105,40 @@ renders text-to-video as a **soft reset** (`lane: "t2v-reset"`) — the prompt
 restates the scene from the previous beat's summary, identity drifts for one
 beat, and the story keeps going. The Stream tab shows the retry error while it
 happens and marks reset beats in the story list.
+
+**Speed is the constraint.** A beat's wall time is writer latency + render
+latency, and the viewer watches 15 s of video per beat. Nothing on Venice
+renders 15 s of video in under 15 s, so every stream eventually catches up to
+its newest beat and holds. The two model choices decide how bad the lag is, and
+both are dropdowns in the **Stream** tab (a change applies to the next beat):
+
+| Writer (thinking off) | Median per beat | Valid beats | Tier |
+|---|---|---|---|
+| `deepseek-v4-flash-0731-fast` (default) | 3.8 s | 9/9 | private |
+| `mistral-small-2603` | 5.2 s | 9/9 | private |
+| `seed-2-1-turbo` | 9.2 s | 9/9 | anonymized |
+| `kimi-k3` (harness intelligence default) | 9.8 s (35 s with thinking) | 8/9 | private |
+| `deepseek-v4-flash` | 11.0 s | 6/6 | private |
+| `minimax-m27` (thinking on) | 10.1 s | 5/6 | private |
+| `gemini-3-8-flash` (thinking on) | 19.1 s | 4/6 | anonymized |
+
+Rejected: `z-ai-glm-5-3` (thinking-only, 0/3 valid), `z-ai-glm-5-3-flash`
+(prose instead of JSON without thinking), `grok-4-6` (67 s), `qwen3-6-35b-a3b`
+(truncates JSON 1 in 3), `kimi-k3-fast` (HTTP 500 every call). Re-run the
+numbers with `npx tsx scripts/bakeoff-stream-writer.ts -p <project> --no-thinking`.
+
+| Video family | ~Render per 15 s beat | $/15 s (quote) | Keeps up? |
+|---|---|---|---|
+| `minimax-h3-max-turbo` (default) | 30 s | $0.11 | nearly |
+| `minimax-h3-max` | 60 s | $0.22 | no |
+| `wan-3-0` | 120 s | $0.68 | no |
+| `grok-imagine` | 90 s | $0.95 | no |
+| `seedance-2-0` | 180 s | $1.32 | no |
+| `seedance-2-5` | 180 s | $1.93 | no |
+| `kling-o3-standard` | 150 s | $1.84 | no |
+
+Pick Seedance for the production look and accept that the viewer waits
+between beats. The tab says so next to the dropdown.
 
 The `stream` command registers its episode in `series.json` if it is missing, so
 the Stream tab always has an episode to show. (Before 2.21.1 a stream under an

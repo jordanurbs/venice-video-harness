@@ -116,7 +116,7 @@ import {
 import {
   DEFAULT_INTELLIGENCE_MODEL,
   describeIntelligence,
-  selectableTextModels,
+  getTextModel,
   resolveIntelligence,
 } from '../venice/text-models.js';
 import { getProjectLanguage } from '../series/project-language.js';
@@ -185,6 +185,11 @@ function montageModeForRoute(route: RenderRoute | undefined): boolean | undefine
  * then the harness default. Projects created before 2.9.0 have no saved
  * choice and land on the default.
  */
+function describeStreamWriter(id: string): string {
+  const spec = getTextModel(id);
+  return spec ? `${spec.label} (${spec.privacy})` : id;
+}
+
 function intelligenceFor(series: SeriesState, override?: string) {
   if (override) return resolveIntelligence(override);
   const saved = series.intelligence;
@@ -4997,17 +5002,18 @@ program
   .requiredOption('-p, --project <dir>', 'Project output directory')
   .option('-e, --episode <number>', 'Episode number the stream lives under', '1')
   .option('--direction <text>', 'Standing direction folded into every beat (e.g. "live studio audience laugh track after every joke")')
-  .option('--writer <model>', 'Intelligence model that writes beats. Asked interactively for a new stream; required (or "default") in a non-interactive run. A resumed stream keeps the project default.')
+  .option('--writer <model>', 'Model that writes beats. Asked interactively for a new stream; required (or "default" = deepseek-v4-flash-0731-fast, the fastest reliable writer in the bakeoff) in a non-interactive run. A resumed stream keeps the writer it last ran with. Switchable from the Stream tab.')
+  .option('--video-family <family>', 'Video family for the beats: minimax-h3-max-turbo (default; the only one that keeps pace with playback) | minimax-h3-max | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard. Switchable from the Stream tab.')
   .option('--port <port>', 'Port to listen on', '3000')
   .option('--host <host>', 'Host to bind (localhost only by default)', '127.0.0.1')
-  .option('--resolution <res>', 'Render resolution (480P or 768P)', '480P')
+  .option('--resolution <res>', 'Render resolution (default: the video family\'s draft tier, 480P on MiniMax)')
   .option('--duration <dur>', 'Per-beat duration, snapped to the 5-15s ladder', '15s')
   .option('--budget <usd>', 'Stop after this much estimated spend (each Start authorizes another budget)', '2')
   .option('--unbounded', 'No budget cap — stream until stopped', false)
   .option('--no-open', 'Do not open the browser automatically')
   .action(async (opts: {
-    project: string; episode: string | number; direction?: string; writer?: string; port: string; host: string;
-    resolution: string; duration: string; budget: string; unbounded: boolean; open: boolean;
+    project: string; episode: string | number; direction?: string; writer?: string; videoFamily?: string; port: string; host: string;
+    resolution?: string; duration: string; budget: string; unbounded: boolean; open: boolean;
   }) => {
     const json = wantsJson();
     const port = Number.parseInt(opts.port, 10);
@@ -5018,10 +5024,6 @@ program
     const episodeNumber = Number.parseInt(String(opts.episode), 10);
     if (!Number.isFinite(episodeNumber) || episodeNumber <= 0) {
       failJson(json, `--episode must be a positive integer. Got "${opts.episode}".`);
-      process.exit(1);
-    }
-    if (!['480P', '768P'].includes(opts.resolution.toUpperCase())) {
-      failJson(json, `--resolution must be 480P or 768P. Got "${opts.resolution}".`);
       process.exit(1);
     }
 
@@ -5047,32 +5049,35 @@ program
     }
 
     // The writer is the session's first decision, like `loop --mode`: it is
-    // the voice of the whole story and it costs money from beat 1. Ask in a
-    // terminal; in a non-interactive run, print what will be used and require
-    // --writer to confirm it, so no agent silently commits the operator to a
-    // model they did not choose.
+    // the voice of the whole story, it costs money from beat 1, and its speed
+    // sets how far the stream falls behind playback. Ask in a terminal; in a
+    // non-interactive run require --writer so no agent silently commits the
+    // operator to a model they did not choose. The list is the bakeoff list
+    // (stream-choices.ts), fastest reliable first — NOT the project's
+    // intelligence model, which is tuned for QA and scripting, not latency.
+    const { STREAM_WRITER_CHOICES, STREAM_DEFAULT_WRITER, STREAM_VIDEO_CHOICES, getStreamVideoChoice } = await import('./stream-choices.js');
     const resumed = existsSync(join(getEpisodeDir(series, episodeNumber), 'stream', 'stream-manifest.json'));
-    let writerId: string;
+    let writer: string | undefined;
     if (opts.writer) {
-      writerId = opts.writer === 'default' ? intelligenceFor(series).model : opts.writer;
+      writer = opts.writer === 'default' ? STREAM_DEFAULT_WRITER : opts.writer;
     } else if (resumed) {
-      writerId = intelligenceFor(series).model;
+      writer = undefined; // the engine keeps the manifest's writer
     } else if (!json && stdin.isTTY) {
-      const projectDefault = intelligenceFor(series).model;
-      const choices = selectableTextModels().map(m => ({
-        label: `${m.label} (${m.privacy})${m.id === projectDefault ? ' — project default' : ''}`,
-        value: m.id,
-        description: m.note,
-      }));
-      const defaultIndex = Math.max(0, choices.findIndex(c => c.value === projectDefault));
-      writerId = await promptChoice('Which model writes the beats? (it is the voice of the whole story)', choices, defaultIndex);
+      writer = await promptChoice('Which model writes the beats? (its speed sets how far the stream lags playback)', STREAM_WRITER_CHOICES.map(w => ({
+        label: `${w.label} — ~${w.medianSec}s/beat, ${w.reliability} valid, ${w.privacy}${w.id === STREAM_DEFAULT_WRITER ? ' (default)' : ''}`,
+        value: w.id,
+        description: w.note,
+      })), 0);
     } else {
-      const projectDefault = intelligenceFor(series).model;
-      failJson(json, `A writer is required for a new stream: pass --writer <model> (project default is ${projectDefault}; pass --writer default to use it). Models: ${selectableTextModels().map(m => m.id).join(', ')}.`);
+      failJson(json, `A writer is required for a new stream: pass --writer <model>, or --writer default (${STREAM_DEFAULT_WRITER}). Tested writers, fastest first: ${STREAM_WRITER_CHOICES.map(w => `${w.id} (~${w.medianSec}s)`).join(', ')}.`);
       process.exit(1);
       return;
     }
-    const writer = intelligenceFor(series, writerId).model;
+    if (opts.videoFamily && !getStreamVideoChoice(opts.videoFamily)) {
+      failJson(json, `Unknown --video-family "${opts.videoFamily}". Choices: ${STREAM_VIDEO_CHOICES.map(v => v.id).join(', ')}.`);
+      process.exit(1);
+      return;
+    }
 
     // The stream needs only series.json, but the browser builds its episode
     // list FROM series.json. A stream under an unregistered episode rendered
@@ -5102,7 +5107,8 @@ program
       episodeDir: getEpisodeDir(series, episodeNumber),
       slug,
       writerModel: writer,
-      resolution: opts.resolution.toUpperCase(),
+      videoFamily: opts.videoFamily,
+      resolution: opts.resolution,
       duration: opts.duration,
       budgetUsd: Number.isFinite(budgetUsd) ? budgetUsd : undefined,
       unbounded: opts.unbounded,
@@ -5125,8 +5131,9 @@ program
     // story. A resumed session (beats on disk) opens at once, also paused.
     const before = engine.state();
     if (!json && before.beats.length === 0) {
-      const perBeat = 0.012 * Number.parseInt(before.duration, 10);
-      console.log(`Writer: ${describeIntelligence(writer)}. Video: ${before.model.t2v} @ ${before.resolution}, ${before.duration}/beat, about $${perBeat.toFixed(2)} per beat (billed at queue time).`);
+      const perBeat = (getStreamVideoChoice(before.videoFamily)?.usdPer15s ?? 0.11) * (Number.parseInt(before.duration, 10) / 15);
+      const fam = getStreamVideoChoice(before.videoFamily);
+      console.log(`Writer: ${describeStreamWriter(before.model.writer)}. Video: ${before.model.t2v} @ ${before.resolution || 'default'}, ${before.duration}/beat, about $${perBeat.toFixed(2)} per beat (billed at queue time)${fam && fam.speed !== 'keeps up' ? ` — ${fam.label} renders slower than playback (~${fam.renderSecApprox}s per beat)` : ''}.`);
       console.log('Rendering the opening beat before opening the browser…');
     }
     const status = await engine.prime();
@@ -5147,8 +5154,9 @@ program
     } else {
       console.log(`venice-video stream running at ${url}`);
       console.log(`  project:    ${slug} (episode ${episodeNumber})`);
-      console.log(`  writer:     ${describeIntelligence(status.model.writer)}`);
-      console.log(`  video:      ${status.model.t2v} (beat 1) then ${status.model.i2v} chained off each last frame @ ${status.resolution}, ${status.duration}/beat`);
+      console.log(`  writer:     ${describeStreamWriter(status.model.writer)}`);
+      console.log(`  video:      ${status.model.t2v} (beat 1) then ${status.model.i2v} chained off each last frame @ ${status.resolution || 'default'}, ${status.duration}/beat`);
+      console.log('  models:     switch the writer or the video model any time from the Stream tab; changes apply to the next beat.');
       console.log(`  direction:  ${opts.direction ?? '(none)'}`);
       console.log(`  budget:     ${opts.unbounded ? 'unbounded (streams until you stop it)' : `$${budgetUsd.toFixed(2)} (Start authorizes another budget)`}`);
       console.log(`  beats:      ${status.beats.length} on disk`);

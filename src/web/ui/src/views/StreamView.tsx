@@ -125,6 +125,16 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
     else { setStream(res); setAttached(true); }
   };
 
+  // Model switches apply to the NEXT beat. The engine keeps the manifest's
+  // `model`/`videoFamily` as the source of truth; the selects are controlled
+  // by it so a reload or an SSE snapshot never disagrees with the dropdowns.
+  const configure = async (payload: { writer?: string; videoFamily?: string; resolution?: string }) => {
+    setError(null);
+    const res = await streamControl(slug, 'config', payload);
+    if ('error' in res) setError(res.error);
+    else setStream(prev => prev ? { ...prev, ...res, beats: prev.beats.length >= res.beats.length ? prev.beats : res.beats } : res);
+  };
+
   if (!episode) return <div className="empty">No episodes yet.</div>;
 
   const running = Boolean(stream?.running);
@@ -154,7 +164,7 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
         <span style={{ flex: 1 }} />
         {stream && (
           <span className="dim small loop-meter">
-            {stream.resolution} · {stream.duration}/beat · spend ${spend.toFixed(2)}{budget != null && Number.isFinite(budget) ? ` / $${budget.toFixed(2)}` : ' (unbounded)'}
+            {stream.model.i2v.replace(/-image-to-video$/, '')} · {stream.resolution || 'default'} · {stream.duration}/beat · spend ${spend.toFixed(2)}{budget != null && Number.isFinite(budget) ? ` / $${budget.toFixed(2)}` : ' (unbounded)'}
           </span>
         )}
       </div>
@@ -168,11 +178,67 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
       )}
 
       <div className="card dim small">
-        An infinite story. The writer ({stream?.model.writer ?? 'intelligence model'}) authors one beat at a time.
+        An infinite story. The writer ({stream?.model.writer ?? 'writer model'}) authors one beat at a time.
         Beat 1 renders text-to-video; every later beat renders image-to-video from the previous beat's last frame.
         Nothing repeats, nothing re-renders, no re-anchoring — the picture evolves the way one very long take would.
         {stream?.direction ? <> Standing direction: <em>{stream.direction}</em>.</> : null}
       </div>
+
+      {stream?.choices && (
+        <div className="card" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+          <label className="small" style={{ display: 'grid', gap: 6 }}>
+            <span><strong>Writer</strong> <span className="dim">— authors each beat. Changes apply to the next beat.</span></span>
+            <select
+              value={stream.model.writer}
+              disabled={!attached}
+              onChange={ev => configure({ writer: ev.target.value })}
+            >
+              {stream.choices.writers.map(w => (
+                <option key={w.id} value={w.id}>
+                  {w.label} — ~{w.medianSec}s/beat, {w.reliability} valid, {w.privacy}
+                </option>
+              ))}
+              {!stream.choices.writers.some(w => w.id === stream.model.writer) && (
+                <option value={stream.model.writer}>{stream.model.writer} (current, not in the tested list)</option>
+              )}
+            </select>
+            <span className="dim">{stream.choices.writers.find(w => w.id === stream.model.writer)?.note ?? 'Untested writer. Speed and JSON reliability unknown.'}</span>
+          </label>
+
+          <label className="small" style={{ display: 'grid', gap: 6 }}>
+            <span><strong>Video model</strong> <span className="dim">— renders each beat. Anything slower than Turbo falls behind playback.</span></span>
+            <select
+              value={stream.videoFamily ?? 'minimax-h3-max-turbo'}
+              disabled={!attached}
+              onChange={ev => configure({ videoFamily: ev.target.value })}
+            >
+              {stream.choices.video.map(v => (
+                <option key={v.id} value={v.id}>
+                  {v.label} — ~{v.renderSecApprox}s render, ${v.usdPer15s.toFixed(2)}/15s, {v.speed}
+                </option>
+              ))}
+            </select>
+            {(() => {
+              const v = stream.choices!.video.find(x => x.id === (stream.videoFamily ?? 'minimax-h3-max-turbo'));
+              if (!v) return null;
+              const slow = v.speed !== 'keeps up';
+              return (
+                <span className="dim" style={slow ? { color: '#e5b567' } : undefined}>
+                  {slow ? '⚠ ' : ''}{v.note}
+                  {v.resolutions.length > 1 && (
+                    <>
+                      {' '}Resolution:{' '}
+                      <select value={stream.resolution} disabled={!attached} onChange={ev => configure({ resolution: ev.target.value })} style={{ marginLeft: 4 }}>
+                        {v.resolutions.map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    </>
+                  )}
+                </span>
+              );
+            })()}
+          </label>
+        </div>
+      )}
 
       {!attached && (
         <div className="card dim small">

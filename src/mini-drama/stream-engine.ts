@@ -29,9 +29,17 @@ import { join, relative } from 'node:path';
 import type { VeniceClient } from '../venice/client.js';
 import type { SeriesState, ShotScript } from '../series/types.js';
 import { closestValidDuration } from '../venice/models.js';
-import { DEFAULT_INTELLIGENCE_MODEL } from '../venice/text-models.js';
 import { buildVideoPrompt, type MiniDramaVideoPrompt } from './prompt-builder.js';
 import { renderVideoFile, extractLastFrame, type RenderVideoOptions } from './video-generator.js';
+import {
+  STREAM_DEFAULT_WRITER,
+  STREAM_VIDEO_CHOICES,
+  STREAM_WRITER_CHOICES,
+  getStreamVideoChoice,
+  resolveStreamVideoFamily,
+  writerDisablesThinking,
+  type StreamVideoChoice,
+} from './stream-choices.js';
 
 /** The render primitive, injectable so tests can drive the engine offline. */
 export type RenderFn = (client: VeniceClient, options: RenderVideoOptions) => Promise<string>;
@@ -39,16 +47,18 @@ export type RenderFn = (client: VeniceClient, options: RenderVideoOptions) => Pr
 /** The writer primitive, injectable so tests can author beats offline. */
 export type AuthorFn = (input: AuthorInput) => Promise<AuthoredBeat>;
 
-// MiniMax H3 Max Turbo lanes: the cheapest, fastest i2v chain in the registry.
+// Default lanes: MiniMax H3 Max Turbo, the cheapest and fastest i2v chain in
+// the registry. Other families are selectable (see stream-choices.ts); every
+// one of them is slower than playback.
 export const STREAM_MODEL_T2V = 'minimax-h3-max-turbo-text-to-video';
 export const STREAM_MODEL_I2V = 'minimax-h3-max-turbo-image-to-video';
+export { STREAM_WRITER_CHOICES, STREAM_VIDEO_CHOICES, STREAM_DEFAULT_WRITER } from './stream-choices.js';
 export const STREAM_DEFAULT_DURATION = '15s';
 export const STREAM_DEFAULT_BUDGET_USD = 2.0;
 export const STREAM_DEFAULT_RESOLUTION = '480P';
 /** How many recent beats the writer sees verbatim; older ones live in the summary. */
 export const STREAM_RECENT_BEATS = 6;
 
-const TURBO_USD_PER_SEC = 0.012;
 const MANIFEST_VERSION = 1;
 const MANIFEST_FILE = 'stream-manifest.json';
 const STORY_FILE = 'story-so-far.md';
@@ -119,6 +129,8 @@ export interface StreamManifest {
   version: number;
   episode: number;
   model: { t2v: string; i2v: string; writer: string };
+  /** Family key for the current video lanes (stream-choices.ts). */
+  videoFamily: string;
   resolution: string;
   duration: string;
   budgetUsd: number;
@@ -133,6 +145,11 @@ export interface StreamManifest {
   startedAt: string;
   updatedAt: string;
   beats: StreamBeat[];
+  /** Selectable writers and video families, so the UI can offer them with speed/cost hints. */
+  choices?: {
+    writers: ReadonlyArray<{ id: string; label: string; medianSec: number; reliability: string; privacy: string; note: string }>;
+    video: ReadonlyArray<{ id: string; label: string; usdPer15s: number; renderSecApprox: number; speed: string; resolutions: string[]; note: string }>;
+  };
 }
 
 /** Structural subset of the web EventHub — avoids a mini-drama → web import. */
@@ -150,8 +167,10 @@ export interface StreamEngineOptions {
   episodeDir: string;
   /** Project slug used in SSE payloads / media URLs. Defaults to series.slug. */
   slug?: string;
-  /** Intelligence model that writes beats. Defaults to series.intelligence or the harness default. */
+  /** Model that writes beats. Defaults to STREAM_DEFAULT_WRITER (fast), not the project's intelligence model. */
   writerModel?: string;
+  /** Video family key or lane model id (stream-choices.ts). Defaults to MiniMax H3 Max Turbo. */
+  videoFamily?: string;
   resolution?: string;
   duration?: string;
   budgetUsd?: number;
@@ -285,6 +304,9 @@ export function makeChatAuthor(client: VeniceClient, model: string): AuthorFn {
       maxTokens: 1500,
       temperature: 0.8,
       label: `stream beat ${input.beatNumber}`,
+      // A beat is a quick, in-character paragraph, not a reasoning task. With
+      // thinking on the same model takes 3-10x longer (bakeoff, 2026-09-05).
+      disableThinking: writerDisablesThinking(model),
     });
     return raw as AuthoredBeat;
   };
@@ -303,17 +325,21 @@ export class StreamEngine {
   private readonly projectDir: string;
   private readonly episodeDir: string;
   private readonly slug: string;
-  private readonly writerModel: string;
+  private writerModel: string;
   private readonly streamDir: string;
-  private readonly resolution: string;
-  private readonly duration: string;
+  private video: StreamVideoChoice;
+  private resolution: string;
+  private duration: string;
   private readonly initialBudgetUsd: number;
   private readonly direction?: string;
   private readonly openingBeat?: AuthoredBeat;
   private readonly broadcaster?: StreamBroadcaster;
   private readonly log: (line: string) => void;
   private readonly render: RenderFn;
-  private readonly author: AuthorFn;
+  private author: AuthorFn;
+  private readonly authorOverride?: AuthorFn;
+  private readonly explicitWriter: boolean;
+  private readonly explicitVideo: boolean;
   private readonly errorBackoffMs: number;
 
   private unbounded: boolean;
@@ -341,9 +367,12 @@ export class StreamEngine {
     this.projectDir = options.projectDir;
     this.episodeDir = options.episodeDir;
     this.slug = options.slug ?? options.series.slug;
-    this.writerModel = options.writerModel ?? options.series.intelligence?.model ?? DEFAULT_INTELLIGENCE_MODEL;
+    this.explicitWriter = options.writerModel !== undefined;
+    this.explicitVideo = options.videoFamily !== undefined;
+    this.writerModel = options.writerModel ?? STREAM_DEFAULT_WRITER;
     this.streamDir = join(options.episodeDir, 'stream');
-    this.resolution = options.resolution ?? STREAM_DEFAULT_RESOLUTION;
+    this.video = resolveStreamVideoFamily(options.videoFamily);
+    this.resolution = options.resolution ?? this.video.resolution;
     this.duration = this.resolveDuration(options.duration ?? STREAM_DEFAULT_DURATION);
     this.unbounded = options.unbounded ?? false;
     this.initialBudgetUsd = options.budgetUsd ?? STREAM_DEFAULT_BUDGET_USD;
@@ -353,13 +382,14 @@ export class StreamEngine {
     this.broadcaster = options.broadcaster;
     this.log = options.log ?? ((line: string) => console.log(line));
     this.render = options.render ?? renderVideoFile;
+    this.authorOverride = options.author;
     this.author = options.author ?? makeChatAuthor(this.client, this.writerModel);
     this.errorBackoffMs = options.errorBackoffMs ?? ERROR_BACKOFF_MS;
   }
 
   private resolveDuration(requested: string): string {
     const sec = durationSeconds(requested);
-    const snapped = closestValidDuration(STREAM_MODEL_T2V, sec);
+    const snapped = closestValidDuration(this.video.t2v, sec);
     if (snapped && snapped !== `${sec}s`) {
       this.log(`  Stream duration ${requested} snapped to ${snapped} (H3 Max 5-15s ladder).`);
     }
@@ -367,7 +397,45 @@ export class StreamEngine {
   }
 
   private costPerBeat(): number {
-    return TURBO_USD_PER_SEC * durationSeconds(this.duration);
+    // Quote-derived per-15s price for the family, scaled to the beat length.
+    return this.video.usdPer15s * (durationSeconds(this.duration) / 15);
+  }
+
+  /**
+   * Switch the writer and/or the video family. Applies to the NEXT beat; the
+   * beat in flight finishes on the models it started with. The i2v chain is
+   * unaffected by a family change — the start frame is a PNG, so any i2v lane
+   * can pick it up. Resolution snaps to the new family's draft tier unless the
+   * caller passes one that the family supports.
+   */
+  async configure(config: { writer?: string; videoFamily?: string; resolution?: string }): Promise<StreamManifest> {
+    const changes: string[] = [];
+    if (config.writer && config.writer !== this.writerModel) {
+      this.writerModel = config.writer;
+      if (!this.authorOverride) this.author = makeChatAuthor(this.client, this.writerModel);
+      changes.push(`writer -> ${this.writerModel}`);
+    }
+    if (config.videoFamily && config.videoFamily !== this.video.id) {
+      const next = resolveStreamVideoFamily(config.videoFamily);
+      this.video = next;
+      this.resolution = next.resolution;
+      this.duration = this.resolveDuration(this.duration);
+      changes.push(`video -> ${next.id} (${next.t2v} / ${next.i2v}) @ ${next.resolution || 'model default'}, ~$${this.costPerBeat().toFixed(2)}/beat`);
+    }
+    if (config.resolution) {
+      const r = config.resolution;
+      if (this.video.resolutions.length === 0 || this.video.resolutions.includes(r)) {
+        if (r !== this.resolution) { this.resolution = r; changes.push(`resolution -> ${r}`); }
+      } else {
+        this.log(`  ⚠ ${this.video.id} does not support ${r}; keeping ${this.resolution}.`);
+      }
+    }
+    if (changes.length > 0) {
+      this.log(`Stream reconfigured (applies from beat ${this.beats.length + 1}${this.inFlight ? `, after beat ${this.inFlight} finishes` : ''}): ${changes.join('; ')}.`);
+      await this.persist();
+      this.emit();
+    }
+    return this.snapshot();
   }
 
   private budgetExhausted(): boolean {
@@ -390,7 +458,7 @@ export class StreamEngine {
   async prime(): Promise<StreamManifest> {
     if (this.beats.length > 0 || this.running || this.priming) return this.snapshot();
     this.priming = true;
-    this.log(`Priming: writing and rendering the opening beat, then waiting for Start. writer=${this.writerModel}, video=${STREAM_MODEL_T2V}, ${this.resolution}, ${this.duration}.`);
+    this.log(`Priming: writing and rendering the opening beat, then waiting for Start. writer=${this.writerModel}, video=${this.video.t2v}, ${this.resolution}, ${this.duration}.`);
     try {
       let ok = false;
       while (!ok && this.consecutiveErrors < MAX_CONSECUTIVE_ERRORS) {
@@ -423,7 +491,7 @@ export class StreamEngine {
     this.running = true;
     this.consecutiveErrors = 0;
     this.lastError = undefined;
-    this.log(`Stream engine running: writer=${this.writerModel}, video=${STREAM_MODEL_T2V} then ${STREAM_MODEL_I2V} chained, ${this.resolution}, ${this.duration}/beat, budget=${this.unbounded ? 'unbounded' : `$${this.budgetUsd.toFixed(2)}`}.`);
+    this.log(`Stream engine running: writer=${this.writerModel}, video=${this.video.t2v} then ${this.video.i2v} chained, ${this.resolution}, ${this.duration}/beat, budget=${this.unbounded ? 'unbounded' : `$${this.budgetUsd.toFixed(2)}`}.`);
     if (this.beats.length > 0) this.log(`  Continuing from beat ${this.beats.length}.`);
     // If prime() is still rendering beat 1, the worker starts when it finishes.
     if (!this.priming) void this.runWorker();
@@ -550,7 +618,7 @@ export class StreamEngine {
     }
 
     const shot = this.toShot(n, beat, lane === 't2v-reset' ? previous : undefined);
-    const prompt = this.buildPrompt(shot, lane === 'i2v' ? STREAM_MODEL_I2V : STREAM_MODEL_T2V);
+    const prompt = this.buildPrompt(shot, lane === 'i2v' ? this.video.i2v : this.video.t2v);
     this.spendUsd += est;
     this.log(`  [stream] beat ${n} rendering: ${lane} ${prompt.model} @ ${this.resolution}, ${this.duration}`);
 
@@ -559,7 +627,7 @@ export class StreamEngine {
         prompt,
         outputPath,
         anchorImagePath,
-        resolution: this.resolution,
+        resolution: this.resolution || undefined,
         aspectRatio: this.series.storyboardAspectRatio,
         project: this.projectDir,
         episode: this.episode,
@@ -643,9 +711,9 @@ export class StreamEngine {
         ...this.series,
         videoDefaults: {
           ...this.series.videoDefaults,
-          actionModel: STREAM_MODEL_T2V,
-          atmosphereModel: STREAM_MODEL_T2V,
-          characterConsistencyModel: STREAM_MODEL_T2V,
+          actionModel: this.video.t2v,
+          atmosphereModel: this.video.t2v,
+          characterConsistencyModel: this.video.t2v,
           lipSyncModel: undefined,
           audioStrategy: 'native',
           voiceReferenceForDialogue: false,
@@ -678,7 +746,8 @@ export class StreamEngine {
     return {
       version: MANIFEST_VERSION,
       episode: this.episode,
-      model: { t2v: STREAM_MODEL_T2V, i2v: STREAM_MODEL_I2V, writer: this.writerModel },
+      model: { t2v: this.video.t2v, i2v: this.video.i2v, writer: this.writerModel },
+      videoFamily: this.video.id,
       resolution: this.resolution,
       duration: this.duration,
       budgetUsd: this.unbounded ? Infinity : this.budgetUsd,
@@ -692,6 +761,10 @@ export class StreamEngine {
       startedAt: this.startedAt,
       updatedAt: new Date().toISOString(),
       beats: this.beats,
+      choices: {
+        writers: STREAM_WRITER_CHOICES.map(w => ({ id: w.id, label: w.label, medianSec: w.medianSec, reliability: w.reliability, privacy: w.privacy, note: w.note })),
+        video: STREAM_VIDEO_CHOICES.map(v => ({ id: v.id, label: v.label, usdPer15s: v.usdPer15s, renderSecApprox: v.renderSecApprox, speed: v.speed, resolutions: v.resolutions, note: v.note })),
+      },
     };
   }
 
@@ -712,6 +785,16 @@ export class StreamEngine {
       const prior = JSON.parse(await readFile(path, 'utf-8')) as Partial<StreamManifest>;
       this.spendUsd = typeof prior.spendUsd === 'number' ? prior.spendUsd : 0;
       if (prior.startedAt) this.startedAt = prior.startedAt;
+      // A resumed stream keeps the models it was last running with, unless the
+      // caller set them explicitly on this run.
+      if (!this.explicitWriter && prior.model?.writer) {
+        this.writerModel = prior.model.writer;
+        if (!this.authorOverride) this.author = makeChatAuthor(this.client, this.writerModel);
+      }
+      if (!this.explicitVideo && prior.videoFamily && getStreamVideoChoice(prior.videoFamily)) {
+        this.video = getStreamVideoChoice(prior.videoFamily)!;
+        this.resolution = prior.resolution || this.video.resolution;
+      }
       // Trust only beats whose files exist, and only an unbroken prefix — the
       // chain cannot continue from a beat whose predecessor is gone.
       const beats: StreamBeat[] = [];

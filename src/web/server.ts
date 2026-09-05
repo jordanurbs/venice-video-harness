@@ -366,7 +366,7 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
 
     // Stream control (infinite live-authored story). Same shape as loop: the
     // engine is attached to one project; `state` is readable without one.
-    const streamMatch = /^\/api\/projects\/([^/]+)\/stream\/(state|start|stop)$/.exec(pathname);
+    const streamMatch = /^\/api\/projects\/([^/]+)\/stream\/(state|start|stop|config)$/.exec(pathname);
     if (streamMatch) {
       const action = streamMatch[2];
       const project = await resolveProject(streamMatch[1]);
@@ -387,7 +387,7 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
       }
       if (req.method !== 'POST') { sendJson(res, 405, { error: 'Method not allowed' }); return; }
 
-      let body: { budget?: number; unbounded?: boolean };
+      let body: { budget?: number; unbounded?: boolean; writer?: string; videoFamily?: string; resolution?: string };
       try {
         body = await readBody(req) as typeof body;
       } catch (err) {
@@ -395,6 +395,15 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
         return;
       }
       try {
+        if (action === 'config') {
+          // Model switch from the Stream tab. Applies to the next beat.
+          const config: { writer?: string; videoFamily?: string; resolution?: string } = {};
+          if (typeof body.writer === 'string' && body.writer.trim()) config.writer = body.writer.trim();
+          if (typeof body.videoFamily === 'string' && body.videoFamily.trim()) config.videoFamily = body.videoFamily.trim();
+          if (typeof body.resolution === 'string' && body.resolution.trim()) config.resolution = body.resolution.trim();
+          sendJson(res, 200, await engine.configure(config));
+          return;
+        }
         if (action === 'start') {
           const config: { budgetUsd?: number; unbounded?: boolean } = {};
           if (typeof body.budget === 'number' && Number.isFinite(body.budget)) config.budgetUsd = body.budget;

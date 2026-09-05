@@ -73,8 +73,8 @@ export function fetchStreamState(slug: string): Promise<StreamStateResponse> {
 
 export async function streamControl(
   slug: string,
-  action: 'start' | 'stop',
-  payload?: { budget?: number; unbounded?: boolean },
+  action: 'start' | 'stop' | 'config',
+  payload?: { budget?: number; unbounded?: boolean; writer?: string; videoFamily?: string; resolution?: string },
 ): Promise<StreamManifest | { error: string }> {
   const res = await fetch(`/api/projects/${encodeURIComponent(slug)}/stream/${action}`, {
     method: 'POST',

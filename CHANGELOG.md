@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.22.0 — 2026-09-05
+
+### Added
+
+- **Stream model selectors.** The Stream tab has two dropdowns: the writer
+  (which model authors each beat) and the video model family (which t2v/i2v
+  pair renders it), each with speed and cost in the label and a plain verdict
+  beside it ("keeps up" / "falls behind" / "much slower"). A change applies to
+  the next beat; the beat in flight finishes on the models it started with.
+  `POST /api/projects/:slug/stream/config`, `StreamEngine.configure()`,
+  `--video-family` on the CLI, and `choices` in the manifest. The i2v chain
+  survives a family switch. A resumed stream keeps the models in its manifest.
+- **Stream writer bakeoff** (`scripts/bakeoff-stream-writer.ts`): times each
+  candidate on the real stream prompt against a real project and checks the
+  beat parses. Results are in `src/mini-drama/stream-choices.ts` and the README.
+- `VeniceClient.chatJson` takes `disableThinking`, which sends
+  `venice_parameters.disable_thinking`. The stream writer sets it per choice.
+
+### Changed
+
+- **Default stream writer is `deepseek-v4-flash-0731-fast`** (3.8 s median,
+  9/9 valid beats, private), not the project's intelligence model. Kimi K3
+  took 35 s per beat with thinking on and ~10 s without, dropping 1 in 9. With
+  Turbo's ~30 s render, the fast writer brings a beat to ~35 s wall time for
+  15 s of video. `--writer default` means this model now.
+- **Per-beat cost is quote-derived.** Turbo at 480P is $0.11 per 15 s
+  (`POST /video/quote`), not the $0.18 the old `TURBO_USD_PER_SEC` constant
+  assumed. Budgets buy more beats than before.
+- `--resolution` on `stream` defaults to the family's draft tier instead of a
+  hardcoded `480P`; values are validated against the family.
+
 ## 2.21.1 — 2026-09-05
 
 ### Fixed
