@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.21.1 — 2026-09-04
+
+### Changed
+
+- **`stream` starts paused after the opening beat.** `prime()` writes and renders
+  beat 1, then the engine waits — the browser opens with one beat ready and the
+  stream paused. Start in the UI renders the next beat immediately and keeps
+  going. A resumed session (beats already on disk) opens paused at once.
+- **Stream tab UI.** The Loop tab is hidden (the `loop` command still exists),
+  beat rows are clickable and load that beat, and the error banner is replaced
+  with a `paused — ready to continue` badge.
+
+### Fixed
+
+- **Chained render failure now steps the start frame back through the previous
+  clip instead of retrying the doomed frame.** A chained render that dies
+  server-side is almost always the start frame (MiniMax i2v rejects some frames
+  after billing — anti-pattern 31); retrying the same frame is a guaranteed
+  repeat and re-writing the text is wasted. Each retry keeps the written beat and
+  steps the start frame back through the previous clip (0, 0.5, 1.5, 3.0s from
+  the end). `extractLastFrame` gains an optional `secondsFromEnd` (default 0 — no
+  behavior change for existing callers). Verified live: a beat that died twice on
+  the true last frame landed 1.5s back, and the next beat chained off it normally.
+
 ## 2.21.0 — 2026-09-04
 
 ### Added
