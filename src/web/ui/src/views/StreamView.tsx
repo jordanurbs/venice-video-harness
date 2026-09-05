@@ -10,7 +10,12 @@ import type { ProjectState, StreamBeat, StreamManifest, StreamStatus } from '../
  */
 export function StreamView({ slug, state }: { slug: string; state: ProjectState; busy: boolean }) {
   const [episodeNumber, setEpisodeNumber] = useState(state.episodes[0]?.episode ?? 1);
-  const episode = state.episodes.find(ep => ep.episode === episodeNumber) ?? state.episodes[0];
+  // A stream may run under an episode that is not registered in series.json yet
+  // (the `stream` command needs only series.json). Fall back to a synthetic
+  // episode so the view — and the Start button — render regardless.
+  const episode = state.episodes.find(ep => ep.episode === episodeNumber)
+    ?? state.episodes[0]
+    ?? ({ episode: episodeNumber } as unknown as ProjectState['episodes'][number]);
 
   const [stream, setStream] = useState<StreamManifest | null>(episode?.stream ?? null);
   const [attached, setAttached] = useState(false);
@@ -23,6 +28,7 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const beats = useMemo(() => stream?.beats ?? [], [stream]);
+  const current = beats[index];
 
   useEffect(() => {
     let cancelled = false;
@@ -36,8 +42,21 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
     return () => { cancelled = true; };
   }, [slug, episodeNumber]);
 
+  // The disk manifest (re-read on every `state-changed`) is a FALLBACK, not the
+  // truth. The engine's `stream-updated` events are the truth. Merging by beat
+  // number means a stale on-disk snapshot can never remove a beat the SSE
+  // already delivered — the race that made new beats vanish until a reload.
   useEffect(() => {
-    if (episode?.stream) setStream(episode.stream);
+    const disk = episode?.stream;
+    if (!disk) return;
+    setStream(prev => {
+      if (!prev) return disk;
+      const byN = new Map<number, StreamBeat>();
+      for (const b of prev.beats) byN.set(b.n, b);
+      for (const b of disk.beats) if (!byN.has(b.n)) byN.set(b.n, b);
+      const beats = [...byN.values()].sort((a, b) => a.n - b.n);
+      return { ...disk, ...prev, beats, spendUsd: Math.max(prev.spendUsd ?? 0, disk.spendUsd ?? 0) };
+    });
   }, [episode?.stream]);
 
   useEffect(() => {
@@ -50,7 +69,12 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
       if (d.project !== slug || (d.episode !== undefined && d.episode !== episodeNumber)) return;
       setAttached(true);
       setStream(prev => {
-        if (!prev) return prev;
+        // First event before the initial fetch resolved: pull the full state
+        // once instead of dropping the beat on the floor.
+        if (!prev) {
+          fetchStreamState(slug).then(res => { if (res.beats) setStream(res as StreamManifest); }).catch(() => undefined);
+          return prev;
+        }
         const nextBeats = d.beat && !prev.beats.some(b => b.n === d.beat!.n)
           ? [...prev.beats, d.beat].sort((a, b) => a.n - b.n)
           : prev.beats;
@@ -75,6 +99,16 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
     }
   }, [beats.length, waiting, index]);
 
+  // Only the <video> element swaps source (keyed by file); the page never
+  // reloads. Kick playback explicitly after a swap — `autoPlay` alone is
+  // ignored by some browsers once the previous clip has ended.
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    const p = el.play();
+    if (p && typeof p.catch === 'function') p.catch(() => undefined);
+  }, [current?.file]);
+
   const advance = useCallback(() => {
     if (index + 1 < beats.length) {
       setIndex(index + 1);
@@ -91,6 +125,16 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
     else { setStream(res); setAttached(true); }
   };
 
+  // Model switches apply to the NEXT beat. The engine keeps the manifest's
+  // `model`/`videoFamily` as the source of truth; the selects are controlled
+  // by it so a reload or an SSE snapshot never disagrees with the dropdowns.
+  const configure = async (payload: { writer?: string; videoFamily?: string; resolution?: string }) => {
+    setError(null);
+    const res = await streamControl(slug, 'config', payload);
+    if ('error' in res) setError(res.error);
+    else setStream(prev => prev ? { ...prev, ...res, beats: prev.beats.length >= res.beats.length ? prev.beats : res.beats } : res);
+  };
+
   if (!episode) return <div className="empty">No episodes yet.</div>;
 
   const running = Boolean(stream?.running);
@@ -98,7 +142,6 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
   const spend = stream?.spendUsd ?? 0;
   const budget = stream?.budgetUsd;
   const budgetReached = Boolean(stream) && !running && budget != null && Number.isFinite(budget) && spend + 0.01 >= budget;
-  const current = beats[index];
   const newest = beats[beats.length - 1];
 
   return (
@@ -121,19 +164,81 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
         <span style={{ flex: 1 }} />
         {stream && (
           <span className="dim small loop-meter">
-            {stream.resolution} · {stream.duration}/beat · spend ${spend.toFixed(2)}{budget != null && Number.isFinite(budget) ? ` / $${budget.toFixed(2)}` : ' (unbounded)'}
+            {stream.model.i2v.replace(/-image-to-video$/, '')} · {stream.resolution || 'default'} · {stream.duration}/beat · spend ${spend.toFixed(2)}{budget != null && Number.isFinite(budget) ? ` / $${budget.toFixed(2)}` : ' (unbounded)'}
           </span>
         )}
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {stream?.lastError && (
+        <div className="error-banner">
+          Beat {stream.inFlight ?? beats.length + 1} failed and is retrying: {stream.lastError}
+          {' '}(the engine steps the start frame back, then falls back to a text-to-video reset; it stops after 3 failures in a row).
+        </div>
+      )}
 
       <div className="card dim small">
-        An infinite story. The writer ({stream?.model.writer ?? 'intelligence model'}) authors one beat at a time.
+        An infinite story. The writer ({stream?.model.writer ?? 'writer model'}) authors one beat at a time.
         Beat 1 renders text-to-video; every later beat renders image-to-video from the previous beat's last frame.
         Nothing repeats, nothing re-renders, no re-anchoring — the picture evolves the way one very long take would.
         {stream?.direction ? <> Standing direction: <em>{stream.direction}</em>.</> : null}
       </div>
+
+      {stream?.choices && (
+        <div className="card" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+          <label className="small" style={{ display: 'grid', gap: 6 }}>
+            <span><strong>Writer</strong> <span className="dim">— authors each beat. Changes apply to the next beat.</span></span>
+            <select
+              value={stream.model.writer}
+              disabled={!attached}
+              onChange={ev => configure({ writer: ev.target.value })}
+            >
+              {stream.choices.writers.map(w => (
+                <option key={w.id} value={w.id}>
+                  {w.label} — ~{w.medianSec}s/beat, {w.reliability} valid, {w.privacy}
+                </option>
+              ))}
+              {!stream.choices.writers.some(w => w.id === stream.model.writer) && (
+                <option value={stream.model.writer}>{stream.model.writer} (current, not in the tested list)</option>
+              )}
+            </select>
+            <span className="dim">{stream.choices.writers.find(w => w.id === stream.model.writer)?.note ?? 'Untested writer. Speed and JSON reliability unknown.'}</span>
+          </label>
+
+          <label className="small" style={{ display: 'grid', gap: 6 }}>
+            <span><strong>Video model</strong> <span className="dim">— renders each beat. Anything slower than Turbo falls behind playback.</span></span>
+            <select
+              value={stream.videoFamily ?? 'minimax-h3-max-turbo'}
+              disabled={!attached}
+              onChange={ev => configure({ videoFamily: ev.target.value })}
+            >
+              {stream.choices.video.map(v => (
+                <option key={v.id} value={v.id}>
+                  {v.label} — ~{v.renderSecApprox}s render, ${v.usdPer15s.toFixed(2)}/15s, {v.speed}
+                </option>
+              ))}
+            </select>
+            {(() => {
+              const v = stream.choices!.video.find(x => x.id === (stream.videoFamily ?? 'minimax-h3-max-turbo'));
+              if (!v) return null;
+              const slow = v.speed !== 'keeps up';
+              return (
+                <span className="dim" style={slow ? { color: '#e5b567' } : undefined}>
+                  {slow ? '⚠ ' : ''}{v.note}
+                  {v.resolutions.length > 1 && (
+                    <>
+                      {' '}Resolution:{' '}
+                      <select value={stream.resolution} disabled={!attached} onChange={ev => configure({ resolution: ev.target.value })} style={{ marginLeft: 4 }}>
+                        {v.resolutions.map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    </>
+                  )}
+                </span>
+              );
+            })()}
+          </label>
+        </div>
+      )}
 
       {!attached && (
         <div className="card dim small">
@@ -218,7 +323,10 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
               {b.beat.summary}
               {b.beat.dialogue ? <span className="dim"> — {b.beat.dialogue.character}: “{b.beat.dialogue.line}”</span> : null}
             </span>
-            <span className="dim small" title={b.lane === 't2v' ? 'Opening beat, text-to-video' : 'Chained image-to-video off the previous beat'}>{b.lane}</span>
+            <span
+              className={b.lane === 't2v-reset' ? 'badge low' : 'dim small'}
+              title={b.lane === 't2v' ? 'Opening beat, text-to-video' : b.lane === 't2v-reset' ? 'Chained render failed repeatedly; this beat re-established the picture from text (identity may drift here)' : 'Chained image-to-video off the previous beat'}
+            >{b.lane}</span>
           </div>
         ))}
       </div>

@@ -17,9 +17,16 @@ import {
   STREAM_MODEL_T2V,
   STREAM_MODEL_I2V,
   STREAM_CHAIN_STEP_BACK_SEC,
+  STREAM_CHAIN_FAILURES_BEFORE_RESET,
+  STREAM_VIDEO_CHOICES,
+  STREAM_DEFAULT_WRITER,
   buildStreamSystemPrompt,
   buildStreamUserPrompt,
 } from '../dist/mini-drama/stream-engine.js';
+
+// Per-beat cost of the default family at 15s (quote-derived, stream-choices.ts).
+const BEAT = STREAM_VIDEO_CHOICES.find(v => v.id === 'minimax-h3-max-turbo').usdPer15s;
+const budgetFor = n => n * BEAT + 1e-6;
 
 function makeSeries() {
   return {
@@ -111,8 +118,8 @@ async function waitForStop(engine, timeoutMs = 10000) {
 
 test('beat 1 is t2v, every later beat is i2v off the previous last frame, in order, never repeating', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'stream-chain-'));
-  // 15s Turbo @ $0.012/s = $0.18/beat; $0.60 buys exactly 3 beats.
-  const { engine, calls } = makeEngine(dir, { budgetUsd: 0.6 });
+  // A budget of exactly 3 beats at the default family's quoted per-beat price.
+  const { engine, calls } = makeEngine(dir, { budgetUsd: budgetFor(3) });
   await engine.init();
   await engine.start();
   await waitForStop(engine);
@@ -130,14 +137,16 @@ test('beat 1 is t2v, every later beat is i2v off the previous last frame, in ord
   const st = engine.state();
   assert.equal(st.beats.length, 3);
   assert.deepEqual(st.beats.map(b => b.lane), ['t2v', 'i2v', 'i2v']);
-  assert.ok(Math.abs(st.spendUsd - 0.54) < 1e-6, 'spend counted per beat');
+  assert.ok(Math.abs(st.spendUsd - 3 * BEAT) < 1e-6, 'spend counted per beat');
+  assert.equal(st.model.writer, STREAM_DEFAULT_WRITER, 'the default writer is the fast bakeoff winner, not the project intelligence model');
+  assert.equal(st.videoFamily, 'minimax-h3-max-turbo');
   assert.ok(existsSync(join(dir, 'episodes/episode-001/stream/stream-manifest.json')));
   assert.ok(existsSync(join(dir, 'episodes/episode-001/stream/beat-00002.json')));
 });
 
 test('the writer sees the story so far and recent beats; the prompt carries the beat and the sfx', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'stream-writer-'));
-  const { engine, calls, inputs } = makeEngine(dir, { budgetUsd: 0.6, direction: 'laugh track after every joke' });
+  const { engine, calls, inputs } = makeEngine(dir, { budgetUsd: budgetFor(3), direction: 'laugh track after every joke' });
   await engine.init();
   await engine.start();
   await waitForStop(engine);
@@ -164,13 +173,13 @@ test('the writer sees the story so far and recent beats; the prompt carries the 
 
 test('resume continues from the last beat on disk and chains off it', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'stream-resume-'));
-  const first = makeEngine(dir, { budgetUsd: 0.36 });
+  const first = makeEngine(dir, { budgetUsd: budgetFor(2) });
   await first.engine.init();
   await first.engine.start();
   await waitForStop(first.engine);
   assert.equal(first.calls.length, 2);
 
-  const second = makeEngine(dir, { budgetUsd: 0.36 });
+  const second = makeEngine(dir, { budgetUsd: budgetFor(2) });
   await second.engine.init();
   assert.equal(second.engine.state().beats.length, 2, 'prior beats are loaded');
   await second.engine.start(); // budget was reached -> start grants one more budget
@@ -205,7 +214,7 @@ test('an opening beat is used verbatim for beat 1 and the writer starts at beat 
     description: 'Cold open. Walt flips the sign to OPEN.', characters: ['WALT'], dialogue: null,
     sfx: 'applause', cameraMovement: 'static wide', summary: 'The bakery opens.',
   };
-  const { engine, calls, inputs } = makeEngine(dir, { budgetUsd: 0.36, openingBeat: opening });
+  const { engine, calls, inputs } = makeEngine(dir, { budgetUsd: budgetFor(2), openingBeat: opening });
   await engine.init();
   await engine.start();
   await waitForStop(engine);
@@ -231,7 +240,7 @@ test('prompts name the cast, the standing direction, and the continuity rule', (
 
 test('prime renders the opening beat and then waits paused; start continues at once', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'stream-prime-'));
-  const { engine, calls, inputs } = makeEngine(dir, { budgetUsd: 0.54 });
+  const { engine, calls, inputs } = makeEngine(dir, { budgetUsd: budgetFor(3) });
   await engine.init();
   const primed = await engine.prime();
 
@@ -266,8 +275,8 @@ test('a failed chained render keeps the written beat and steps back through the 
     renderCount += 1;
     // Snapshot the start frame now: every retry overwrites the same path.
     calls.push({ model: options.prompt.model, outputPath: options.outputPath, frame: options.anchorImagePath ? readFileSync(options.anchorImagePath) : null });
-    // Beat 2's first two attempts die "server-side"; the third succeeds.
-    if (options.prompt.model === STREAM_MODEL_I2V && renderCount <= 3) throw new Error('An unknown error occurred');
+    // Beat 2's first attempt dies "server-side"; the stepped-back retry succeeds.
+    if (options.prompt.model === STREAM_MODEL_I2V && renderCount <= 2) throw new Error('An unknown error occurred');
     await mkdir(join(options.outputPath, '..'), { recursive: true });
     execFileSync('cp', [fixture, options.outputPath]);
     return options.outputPath;
@@ -276,24 +285,116 @@ test('a failed chained render keeps the written beat and steps back through the 
   series.outputDir = dir;
   const engine = new StreamEngine({
     client: {}, series, episode: 1, projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
-    // 4 render attempts x $0.18 (failed queues are billed too) = $0.72.
-    log: () => {}, errorBackoffMs: 1, budgetUsd: 0.72,
+    // 3 render attempts (failed queues are billed too).
+    log: () => {}, errorBackoffMs: 1, budgetUsd: budgetFor(3),
     render: flakyRender, author: scriptedAuthor(inputs),
   });
   await engine.init();
   await engine.start();
   await waitForStop(engine);
 
-  // 1 t2v + 2 failed i2v + 1 successful i2v = 4 render calls, 2 beats on disk.
-  assert.equal(calls.length, 4);
-  assert.equal(engine.state().beats.length, 2, 'beat 2 landed on the third try');
-  assert.equal(inputs.length, 2, 'the writer was NOT asked again for the retries — the text was kept');
+  // 1 t2v + 1 failed i2v + 1 successful i2v = 3 render calls, 2 beats on disk.
+  assert.equal(calls.length, 3);
+  assert.equal(engine.state().beats.length, 2, 'beat 2 landed on the second try');
+  assert.equal(inputs.length, 2, 'the writer was NOT asked again for the retry — the text was kept');
   assert.equal(engine.state().lastError, undefined, 'a recovered stream carries no error');
+  assert.equal(engine.state().beats[1].lane, 'i2v', 'a step-back that works is still a chained beat');
 
-  // Each retry used a different start frame (stepped back into beat 1).
+  // The retry used a different start frame (stepped back into beat 1).
   const frames = calls.slice(1).map(c => c.frame);
   assert.ok(frames.every(Boolean), 'every chained attempt had a start frame');
-  assert.ok(!frames[0].equals(frames[1]), 'retry 1 stepped back to a different frame than the first attempt');
-  assert.ok(!frames[1].equals(frames[2]), 'retry 2 stepped back further still');
+  assert.ok(!frames[0].equals(frames[1]), 'the retry stepped back to a different frame than the first attempt');
   assert.deepEqual(STREAM_CHAIN_STEP_BACK_SEC, [0, 0.5, 1.5, 3.0]);
+});
+
+test('when the chain keeps failing, the beat renders t2v as a soft reset instead of killing the stream', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-reset-'));
+  const fixture = realMp4Long();
+  const calls = [];
+  const inputs = [];
+  // Every i2v attempt dies (a face-filled start frame, anti-pattern 31). t2v works.
+  const faceDeathRender = async (_client, options) => {
+    calls.push({ model: options.prompt.model, prompt: options.prompt.prompt, anchor: options.anchorImagePath });
+    if (options.prompt.model === STREAM_MODEL_I2V) throw new Error('An unknown error occurred');
+    await mkdir(join(options.outputPath, '..'), { recursive: true });
+    execFileSync('cp', [fixture, options.outputPath]);
+    return options.outputPath;
+  };
+  const series = makeSeries();
+  series.outputDir = dir;
+  const engine = new StreamEngine({
+    client: {}, series, episode: 1, projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
+    // beat 1 t2v + 2 failed i2v + 1 t2v-reset = 4 billed renders.
+    log: () => {}, errorBackoffMs: 1, budgetUsd: budgetFor(4),
+    render: faceDeathRender, author: scriptedAuthor(inputs),
+  });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  assert.equal(STREAM_CHAIN_FAILURES_BEFORE_RESET, 2);
+  assert.deepEqual(calls.map(c => c.model), [STREAM_MODEL_T2V, STREAM_MODEL_I2V, STREAM_MODEL_I2V, STREAM_MODEL_T2V]);
+  assert.equal(calls[3].anchor, undefined, 'the reset has no start frame');
+  assert.match(calls[3].prompt, /same scene, same place, same people.*Summary 1\./, 'the reset restates the scene from the previous beat');
+
+  const st = engine.state();
+  assert.equal(st.beats.length, 2, 'the stream did not die and did not skip a beat');
+  assert.deepEqual(st.beats.map(b => b.lane), ['t2v', 't2v-reset']);
+  assert.equal(st.lastError, undefined);
+  assert.equal(inputs.length, 2, 'the writer was not asked again for the reset');
+});
+
+test('the writer is told to end every beat wide, never on a human face', () => {
+  const sys = buildStreamSystemPrompt(makeSeries());
+  assert.match(sys, /Never end on a close-up of a human face/);
+  assert.match(sys, /ENDS on a wide or medium-wide shot/);
+});
+
+test('configure switches the writer and the video family for the NEXT beat, and a resumed stream keeps them', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-config-'));
+  const calls = [];
+  const inputs = [];
+  const engine = new StreamEngine({
+    client: {}, series: Object.assign(makeSeries(), { outputDir: dir }), episode: 1,
+    projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
+    log: () => {}, errorBackoffMs: 1, budgetUsd: 100,
+    render: recordingRender(calls, realMp4()), author: scriptedAuthor(inputs),
+  });
+  await engine.init();
+  // Beat 1 on the defaults.
+  await engine.prime();
+  assert.equal(calls[0].model, 'minimax-h3-max-turbo-text-to-video');
+
+  // Switch both. Family resolution snaps to the new family's draft tier.
+  const st = await engine.configure({ writer: 'mistral-small-2603', videoFamily: 'wan-3-0' });
+  assert.equal(st.model.writer, 'mistral-small-2603');
+  assert.equal(st.videoFamily, 'wan-3-0');
+  assert.equal(st.model.i2v, 'wan-3-0-image-to-video');
+  assert.equal(st.resolution, '480p');
+
+  // Unsupported resolution is refused; supported one is taken.
+  assert.equal((await engine.configure({ resolution: '4K' })).resolution, '480p');
+  assert.equal((await engine.configure({ resolution: '720p' })).resolution, '720p');
+
+  // The next beat renders on the new family, chained off the old beat's frame.
+  await engine.start({ budgetUsd: 100 });
+  await new Promise(r => setTimeout(r, 300));
+  await engine.stop();
+  await waitForStop(engine);
+  assert.ok(calls.length >= 2);
+  assert.equal(calls[1].model, 'wan-3-0-image-to-video');
+  assert.equal(calls[1].resolution, '720p');
+  assert.ok(calls[1].anchor, 'family switch does not break the chain');
+
+  // Resume: the manifest carries the models forward when the caller sets none.
+  const resumed = new StreamEngine({
+    client: {}, series: Object.assign(makeSeries(), { outputDir: dir }), episode: 1,
+    projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
+    log: () => {}, errorBackoffMs: 1, render: recordingRender([], realMp4()), author: scriptedAuthor([]),
+  });
+  await resumed.init();
+  assert.equal(resumed.state().model.writer, 'mistral-small-2603');
+  assert.equal(resumed.state().videoFamily, 'wan-3-0');
+  assert.equal(resumed.state().resolution, '720p');
+  assert.ok(resumed.state().choices.writers.length > 3, 'choices ship in the manifest for the UI');
 });

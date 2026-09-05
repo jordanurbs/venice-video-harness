@@ -537,10 +537,21 @@ export class VeniceClient {
     temperature?: number;
     /** What is being generated, for error messages, e.g. 'workshop'. */
     label?: string;
+    /**
+     * Ask the model to answer directly, with no chain of thought
+     * (`venice_parameters.disable_thinking`). For short, latency-bound
+     * generations (the stream writer) this is the difference between ~4s and
+     * ~35s on the same model. Thinking-only models (GLM 5.3) reject the flag
+     * with a 400; callers that pass it should pick a model that honors it.
+     */
+    disableThinking?: boolean;
   }): Promise<T> {
     const { model, systemPrompt, userPrompt, images = [], label = 'response' } = options;
     const maxTokens = options.maxTokens ?? 8000;
     const temperature = options.temperature ?? 0.65;
+    const veniceParameters = options.disableThinking
+      ? { disable_thinking: true, strip_thinking_response: true }
+      : undefined;
 
     const userContent = images.length > 0
       ? [
@@ -558,7 +569,10 @@ export class VeniceClient {
     for (let attempt = 0; attempt < 2; attempt++) {
       const response = await this.post<{
         choices: Array<{ message: { content: string | null } }>;
-      }>('/api/v1/chat/completions', { model, messages, max_tokens: maxTokens, temperature });
+      }>('/api/v1/chat/completions', {
+        model, messages, max_tokens: maxTokens, temperature,
+        ...(veniceParameters ? { venice_parameters: veniceParameters } : {}),
+      });
 
       const raw = response.choices?.[0]?.message?.content ?? '';
       if (!raw.trim()) {

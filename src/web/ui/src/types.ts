@@ -117,7 +117,7 @@ export interface StreamBeat {
     cameraMovement: string;
     summary: string;
   };
-  lane: 't2v' | 'i2v';
+  lane: 't2v' | 'i2v' | 't2v-reset';
   costUsd: number;
   at: string;
 }
@@ -128,6 +128,7 @@ export interface StreamManifest {
   version: number;
   episode: number;
   model: { t2v: string; i2v: string; writer: string };
+  videoFamily?: string;
   resolution: string;
   duration: string;
   budgetUsd: number | null;
@@ -141,6 +142,10 @@ export interface StreamManifest {
   startedAt: string;
   updatedAt: string;
   beats: StreamBeat[];
+  choices?: {
+    writers: Array<{ id: string; label: string; medianSec: number; reliability: string; privacy: string; note: string }>;
+    video: Array<{ id: string; label: string; usdPer15s: number; renderSecApprox: number; speed: string; resolutions: string[]; note: string }>;
+  };
 }
 
 export interface EpisodeState {

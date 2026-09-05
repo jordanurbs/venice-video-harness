@@ -1,5 +1,88 @@
 # Changelog
 
+## 2.22.0 — 2026-09-05
+
+### Added
+
+- **Stream model selectors.** The Stream tab has two dropdowns: the writer
+  (which model authors each beat) and the video model family (which t2v/i2v
+  pair renders it), each with speed and cost in the label and a plain verdict
+  beside it ("keeps up" / "falls behind" / "much slower"). A change applies to
+  the next beat; the beat in flight finishes on the models it started with.
+  `POST /api/projects/:slug/stream/config`, `StreamEngine.configure()`,
+  `--video-family` on the CLI, and `choices` in the manifest. The i2v chain
+  survives a family switch. A resumed stream keeps the models in its manifest.
+- **Stream writer bakeoff** (`scripts/bakeoff-stream-writer.ts`): times each
+  candidate on the real stream prompt against a real project and checks the
+  beat parses. Results are in `src/mini-drama/stream-choices.ts` and the README.
+- `VeniceClient.chatJson` takes `disableThinking`, which sends
+  `venice_parameters.disable_thinking`. The stream writer sets it per choice.
+- README "Choosing Stream Models": why the stream has its own writer default,
+  why thinking is off, how the numbers were measured, and two decision
+  matrices (writer, video family) scored on privacy, speed, cost, and quality,
+  plus a pick-by-goal table.
+
+### Changed
+
+- **Default stream writer is `deepseek-v4-flash-0731-fast`** (3.8 s median,
+  9/9 valid beats, private), not the project's intelligence model. Kimi K3
+  took 35 s per beat with thinking on and ~10 s without, dropping 1 in 9. With
+  Turbo's ~30 s render, the fast writer brings a beat to ~35 s wall time for
+  15 s of video. `--writer default` means this model now.
+- **Per-beat cost is quote-derived.** Turbo at 480P is $0.11 per 15 s
+  (`POST /video/quote`), not the $0.18 the old `TURBO_USD_PER_SEC` constant
+  assumed. Budgets buy more beats than before.
+- `--resolution` on `stream` defaults to the family's draft tier instead of a
+  hardcoded `480P`; values are validated against the family.
+- **The stream writer is an explicit decision.** A new stream asks which model
+  writes the beats in a terminal; a non-interactive new stream with no
+  `--writer` is a hard error (pass `--writer <model>` or `--writer default`),
+  mirroring `loop --mode`. A resumed stream keeps the project default. The
+  writer and the per-beat cost print before beat 1 bills. AGENTS.md rule 60
+  (g)-(i) records the operating rules.
+
+### Fixed
+
+- **Stream tab showed no Start button on a fresh project.** `stream` needs only
+  `series.json`, but the browser builds its episode list from
+  `series.episodes`, and `stream` never registered its episode. The view fell
+  through to "No episodes yet." with the engine attached and beat 1 billed.
+  `stream` now registers the episode in `series.json` before anything bills,
+  and the view renders with a synthetic episode if the list is still empty.
+- **New beats appeared only after a page reload.** Every beat's files fire the
+  workspace watcher, which pushes `state-changed`; `App` re-fetches the project
+  state, and `StreamView` REPLACED its stream with the on-disk manifest — which
+  can lag the `stream-updated` SSE that already delivered the beat. The view
+  now merges by beat number (SSE is the truth, disk is a fallback), fetches the
+  full state if an event arrives before the initial load, and kicks `play()`
+  after each `<video>` source swap.
+- **A face-ending beat stalled the whole stream.** MiniMax i2v dies
+  server-side on a face-filled start frame after billing (anti-pattern 31); the
+  chain made that one frame poison every retry, and the engine stopped after
+  three. Now: the writer's system prompt carries a MANDATORY camera rule (end
+  every beat wide, never on a human face close-up); and after
+  `STREAM_CHAIN_FAILURES_BEFORE_RESET` (2) chained failures on one beat the
+  engine renders that beat t2v as a soft reset (`lane: "t2v-reset"`) with the
+  previous beat's summary prepended. The Stream tab shows the retry error and
+  marks reset beats.
+- `renderVideoFile` no longer warns "No start image available" on
+  text-to-video models, where no start image is expected.
+- **The stream manifest is written atomically** (temp file + rename), so a
+  concurrent reader — a resuming engine, or the web server serving `/stream/state`
+  — can never parse a half-written manifest and silently fall back to defaults
+  (it would otherwise drop the configured writer/family on a restart under load).
+
+### Known gap (feature request)
+
+- **No path for the driving agent to author beats.** An operator running the
+  agent on a model outside the Venice text registry (e.g. Claude Fable 5.1)
+  cannot make that agent the writer. `AuthorFn` is injectable in code only.
+  Proposed: `--writer external`, where the engine writes
+  `stream/next-beat-request.json` and waits; `venice-video stream-beat -p <dir>
+  -e <n> --file beat.json` (or `POST /api/projects/:slug/stream/beat`) accepts
+  an `AuthoredBeat`, runs `normalizeBeat`, and renders it. Same shape for
+  pinning beat 1 from the CLI.
+
 ## 2.21.1 — 2026-09-04
 
 ### Changed
