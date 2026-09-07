@@ -5004,7 +5004,7 @@ program
   .option('--direction <text>', 'Standing direction folded into every beat (e.g. "live studio audience laugh track after every joke")')
   .option('--writer <model>', 'Model that writes beats. Asked interactively for a new stream; required (or "default" = deepseek-v4-flash-0731-fast, the fastest reliable writer in the bakeoff) in a non-interactive run. A resumed stream keeps the writer it last ran with. Switchable from the Stream tab.')
   .option('--beats-file <path>', 'JSON file of pre-written beats served in order before the live writer runs — no writer call for the beats it covers. Accepts an array of beats or { "beats": [...] } (the /stream/export.json shape; entries with an "authored" object are unwrapped). Each beat: { description, characters, dialogue: { character, line, delivery? } | null, sfx, cameraMovement, summary }.')
-  .option('--video-family <family>', 'Video family for the beats: minimax-h3-max-turbo (default; the only one that keeps pace with playback) | minimax-h3-max | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard. Switchable from the Stream tab.')
+  .option('--video-family <family>', 'Video family for the beats: minimax-h3-max (default; higher fidelity, renders slower than playback) | minimax-h3-max-turbo (fastest and cheapest, nearly keeps pace, lower quality) | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard. Switchable from the Stream tab.')
   .option('--port <port>', 'Port to listen on', '3000')
   .option('--host <host>', 'Host to bind (localhost only by default)', '127.0.0.1')
   .option('--resolution <res>', 'Render resolution (default: the video family\'s draft tier, 480P on MiniMax)')
@@ -5173,7 +5173,7 @@ program
     // story. A resumed session (beats on disk) opens at once, also paused.
     const before = engine.state();
     if (!json && before.beats.length === 0) {
-      const perBeat = (getStreamVideoChoice(before.videoFamily)?.usdPer15s ?? 0.11) * (Number.parseInt(before.duration, 10) / 15);
+      const perBeat = (getStreamVideoChoice(before.videoFamily)?.usdPer15s ?? 0.22) * (Number.parseInt(before.duration, 10) / 15);
       const fam = getStreamVideoChoice(before.videoFamily);
       console.log(`Writer: ${describeStreamWriter(before.model.writer)}. Video: ${before.model.t2v} @ ${before.resolution || 'default'}, ${before.duration}/beat, about $${perBeat.toFixed(2)} per beat (billed at queue time)${fam && fam.speed !== 'keeps up' ? ` — ${fam.label} renders slower than playback (~${fam.renderSecApprox}s per beat)` : ''}.`);
       console.log('Rendering the opening beat before opening the browser…');

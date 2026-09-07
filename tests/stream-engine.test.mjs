@@ -29,7 +29,7 @@ import {
 } from '../dist/mini-drama/stream-engine.js';
 
 // Per-beat cost of the default family at 15s (quote-derived, stream-choices.ts).
-const BEAT = STREAM_VIDEO_CHOICES.find(v => v.id === 'minimax-h3-max-turbo').usdPer15s;
+const BEAT = STREAM_VIDEO_CHOICES.find(v => v.id === 'minimax-h3-max').usdPer15s;
 const budgetFor = n => n * BEAT + 1e-6;
 
 function makeSeries() {
@@ -172,7 +172,7 @@ test('beat 1 is t2v, every later beat is i2v off the previous last frame, in ord
   assert.deepEqual(st.beats.map(b => b.lane), ['t2v', 'i2v', 'i2v']);
   assert.ok(Math.abs(st.spendUsd - 3 * BEAT) < 1e-6, 'spend counted per beat');
   assert.equal(st.model.writer, STREAM_DEFAULT_WRITER, 'the default writer is the fast bakeoff winner, not the project intelligence model');
-  assert.equal(st.videoFamily, 'minimax-h3-max-turbo');
+  assert.equal(st.videoFamily, 'minimax-h3-max');
   assert.ok(existsSync(join(dir, 'episodes/episode-001/stream/stream-manifest.json')));
   assert.ok(existsSync(join(dir, 'episodes/episode-001/stream/beat-00002.json')));
 });
@@ -396,7 +396,7 @@ test('configure switches the writer and the video family for the NEXT beat, and 
   await engine.init();
   // Beat 1 on the defaults.
   await engine.prime();
-  assert.equal(calls[0].model, 'minimax-h3-max-turbo-text-to-video');
+  assert.equal(calls[0].model, 'minimax-h3-max-text-to-video');
 
   // Switch both. Family resolution snaps to the new family's draft tier.
   const st = await engine.configure({ writer: 'mistral-small-2603', videoFamily: 'wan-3-0' });

@@ -28,6 +28,17 @@
     `autoRefill` / `buffered` / `pendingBeats` in the manifest, and
     `STREAM_DEFAULT_LOOKAHEAD` (15), all exported.
 
+### Changed
+
+- **Default stream video family is now `minimax-h3-max`, not `-turbo`.** Turbo
+  (480P, ~30 s/beat) reads noticeably lower quality; the default is now MiniMax
+  H3 Max at 768P (~60 s/beat, $0.22 vs $0.11). It renders slower than playback,
+  but the look-ahead buffer takes the writer latency out of the picture and the
+  Stream tab shows the hold honestly. Turbo is still one dropdown away for a
+  faster, cheaper live watch. `STREAM_DEFAULT_VIDEO_FAMILY`, the default
+  `STREAM_MODEL_T2V` / `STREAM_MODEL_I2V` lanes, and the CLI `--video-family`
+  default all move to `minimax-h3-max`.
+
 ### Fixed
 
 - **Stream tab: switching projects no longer leaks the previous project's

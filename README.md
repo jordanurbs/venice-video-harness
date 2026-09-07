@@ -1113,7 +1113,7 @@ How it works:
    writer and the per-beat cost print before beat 1 bills.
 2. The writer writes beat 1 from the series bible: concept, setting, aesthetic,
    and cast.
-3. Beat 1 renders text-to-video on MiniMax H3 Max Turbo.
+3. Beat 1 renders text-to-video on MiniMax H3 Max (the default; the faster, lower-quality Turbo lane is selectable).
 4. The writer reads `story-so-far.md` (one line per prior beat) plus the last
    6 beats verbatim, and writes beat 2 so it begins exactly where beat 1 ended.
 5. Beat 2 renders image-to-video off beat 1's last frame.
@@ -1133,7 +1133,7 @@ venice-video stream -p <dir> \
   -e 1 \                    # episode the stream lives under (default 1)
   --direction "<text>" \    # standing direction folded into every beat's writer prompt
   --writer <model> \        # writer; asked for a new stream, required non-interactively (see the bakeoff table)
-  --video-family <family> \ # minimax-h3-max-turbo (default) | minimax-h3-max | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard
+  --video-family <family> \ # minimax-h3-max (default) | minimax-h3-max-turbo | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard
   --resolution 480P \       # default: the family's draft tier
   --duration 15s \          # per-beat length, snapped to the 5-15s ladder
   --lookahead 15 \          # beats authored AHEAD of the render (0 = serial)
@@ -1249,16 +1249,18 @@ Not offered, with the reason:
 ##### Video Family Matrix
 
 Speed is the wall time to render one 15 s beat. "Lag" is what the viewer
-feels: with the default writer (~4 s) added, Turbo makes a 15 s beat in ~35 s,
-so the player holds ~20 s between beats once it has caught up. Every other
-family holds for a minute or more. Cost is the quote for 15 s at the family's
-draft resolution. Quality is relative to what the harness knows about each
-family (see the model registry and AGENTS.md).
+feels: the default `minimax-h3-max` renders a 15 s beat in ~60 s, so the player
+holds ~45 s between beats once it has caught up; the faster Turbo lane cuts that
+to a ~20 s hold at lower quality. The look-ahead buffer takes the writer's time
+out of this — only the render remains. Every family other than Turbo holds for a
+minute or more. Cost is the quote for 15 s at the family's draft resolution.
+Quality is relative to what the harness knows about each family (see the model
+registry and AGENTS.md).
 
 | Family | Privacy | Speed (15 s beat) | Cost / 15 s | Quality | Faces on start frame | Verdict |
 |---|---|---|---|---|---|---|
-| `minimax-h3-max-turbo` **(default)** | ●●● private | ●●● ~30 s | ●●● $0.11 | ●●○ good motion, native audio, improvises dialogue | ✗ dies after billing; engine soft-resets | The only lane that nearly keeps pace. Draft look at 480P; 768P selectable. |
-| `minimax-h3-max` | ●●● private | ●●○ ~60 s | ●●● $0.22 | ●●● sharper than Turbo, same model family | ✗ same limit | Pick when you want the Turbo look at finish quality and will accept a 1-minute hold. |
+| `minimax-h3-max` **(default)** | ●●● private | ●●○ ~60 s | ●●● $0.22 | ●●● sharper than Turbo, same family, 768P | ✗ dies after billing; engine soft-resets | The default. Finish-quality picture; ~1-minute hold between beats. |
+| `minimax-h3-max-turbo` | ●●● private | ●●● ~30 s | ●●● $0.11 | ●●○ good motion, native audio, lower quality | ✗ same limit | Fastest and cheapest, the only lane that nearly keeps pace. Draft look at 480P; pick when a live watch matters more than fidelity. |
 | `wan-3-0` | ●○○ anonymized | ●○○ ~120 s | ●●○ $0.68 | ●●● strong, up to 1080p, 30 s ladder | ✓ accepts faces | Best choice if the show is face-heavy and the camera rule is not enough. Slow. |
 | `grok-imagine` | ●○○ anonymized | ●○○ ~90 s | ●○○ $0.95 | ●●○ | ✓ | Faster than Wan, pricier, lower ceiling. |
 | `seedance-2-0` | ●○○ anonymized | ○○○ ~180 s | ●○○ $1.32 | ●●● the harness production look, native lip-synced dialogue | ✓ | Production fidelity. The viewer waits ~3 min per beat. Use for a stream you export, not one you watch. |

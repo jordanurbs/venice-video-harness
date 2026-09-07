@@ -245,7 +245,7 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
           <label className="small" style={{ display: 'grid', gap: 6 }}>
             <span><strong>Video model</strong> <span className="dim">— renders each beat. Anything slower than Turbo falls behind playback.</span></span>
             <select
-              value={stream.videoFamily ?? 'minimax-h3-max-turbo'}
+              value={stream.videoFamily ?? 'minimax-h3-max'}
               disabled={!attached}
               onChange={ev => configure({ videoFamily: ev.target.value })}
             >
@@ -256,7 +256,7 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
               ))}
             </select>
             {(() => {
-              const v = stream.choices!.video.find(x => x.id === (stream.videoFamily ?? 'minimax-h3-max-turbo'));
+              const v = stream.choices!.video.find(x => x.id === (stream.videoFamily ?? 'minimax-h3-max'));
               if (!v) return null;
               const slow = v.speed !== 'keeps up';
               return (

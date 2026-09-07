@@ -104,16 +104,16 @@ export interface StreamVideoChoice {
 
 export const STREAM_VIDEO_CHOICES: ReadonlyArray<StreamVideoChoice> = [
   {
-    id: 'minimax-h3-max-turbo', label: 'MiniMax H3 Max Turbo (default)',
-    t2v: 'minimax-h3-max-turbo-text-to-video', i2v: 'minimax-h3-max-turbo-image-to-video',
-    resolution: '480P', resolutions: ['480P', '768P'], usdPer15s: 0.11, renderSecApprox: 30, speed: 'keeps up',
-    note: 'Fastest and cheapest lane. ~30s per 15s beat; with a fast writer the stream nearly keeps pace with playback. Native audio. i2v dies on a face-filled start frame (the engine soft-resets).',
-  },
-  {
-    id: 'minimax-h3-max', label: 'MiniMax H3 Max',
+    id: 'minimax-h3-max', label: 'MiniMax H3 Max (default)',
     t2v: 'minimax-h3-max-text-to-video', i2v: 'minimax-h3-max-image-to-video',
     resolution: '768P', resolutions: ['480P', '768P'], usdPer15s: 0.22, renderSecApprox: 60, speed: 'falls behind',
-    note: 'Higher fidelity, about 2x the Turbo render time and price. Same face-start-frame limit.',
+    note: 'The default. Higher fidelity at 768P; ~60s per 15s beat, so it renders slower than playback — the look-ahead buffer hides the writer latency but not the render. Native audio. i2v dies on a face-filled start frame (the engine soft-resets).',
+  },
+  {
+    id: 'minimax-h3-max-turbo', label: 'MiniMax H3 Max Turbo',
+    t2v: 'minimax-h3-max-turbo-text-to-video', i2v: 'minimax-h3-max-turbo-image-to-video',
+    resolution: '480P', resolutions: ['480P', '768P'], usdPer15s: 0.11, renderSecApprox: 30, speed: 'keeps up',
+    note: 'Fastest and cheapest lane (480P, half the price, ~30s per beat) but noticeably lower quality. The only family that nearly keeps pace with playback. Same face-start-frame limit.',
   },
   {
     id: 'wan-3-0', label: 'Wan 3.0',
@@ -147,7 +147,7 @@ export const STREAM_VIDEO_CHOICES: ReadonlyArray<StreamVideoChoice> = [
   },
 ];
 
-export const STREAM_DEFAULT_VIDEO_FAMILY = 'minimax-h3-max-turbo';
+export const STREAM_DEFAULT_VIDEO_FAMILY = 'minimax-h3-max';
 
 export function getStreamVideoChoice(id: string): StreamVideoChoice | undefined {
   return STREAM_VIDEO_CHOICES.find(c => c.id === id);
