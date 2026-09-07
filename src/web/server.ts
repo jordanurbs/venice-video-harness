@@ -424,7 +424,7 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
       }
       if (req.method !== 'POST') { sendJson(res, 405, { error: 'Method not allowed' }); return; }
 
-      let body: { budget?: number; unbounded?: boolean; writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean };
+      let body: { budget?: number; unbounded?: boolean; writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean; r2vMode?: boolean };
       try {
         body = await readBody(req) as typeof body;
       } catch (err) {
@@ -434,13 +434,21 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
       try {
         if (action === 'config') {
           // Model switch from the Stream tab. Applies to the next beat.
-          const config: { writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean } = {};
+          const config: { writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean; r2vMode?: boolean } = {};
           if (typeof body.writer === 'string' && body.writer.trim()) config.writer = body.writer.trim();
           if (typeof body.videoFamily === 'string' && body.videoFamily.trim()) config.videoFamily = body.videoFamily.trim();
           if (typeof body.resolution === 'string' && body.resolution.trim()) config.resolution = body.resolution.trim();
           if (typeof body.lookahead === 'number' && Number.isFinite(body.lookahead)) config.lookahead = body.lookahead;
           if (typeof body.autoRefill === 'boolean') config.autoRefill = body.autoRefill;
-          sendJson(res, 200, await engine.configure(config));
+          if (typeof body.r2vMode === 'boolean') config.r2vMode = body.r2vMode;
+          try {
+            sendJson(res, 200, await engine.configure(config));
+          } catch (err) {
+            // Identity-lock validation (no r2v lane / no cast / no aesthetic)
+            // throws a clear message — surface it as a 400 for the UI banner
+            // rather than a 500, and leave the stream's settings unchanged.
+            sendJson(res, 400, { error: err instanceof Error ? err.message : 'Stream config failed' });
+          }
           return;
         }
         if (action === 'start') {

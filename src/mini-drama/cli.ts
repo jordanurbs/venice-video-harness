@@ -5005,6 +5005,7 @@ program
   .option('--writer <model>', 'Model that writes beats. Asked interactively for a new stream; required (or "default" = deepseek-v4-flash-0731-fast, the fastest reliable writer in the bakeoff) in a non-interactive run. A resumed stream keeps the writer it last ran with. Switchable from the Stream tab.')
   .option('--beats-file <path>', 'JSON file of pre-written beats served in order before the live writer runs — no writer call for the beats it covers. Accepts an array of beats or { "beats": [...] } (the /stream/export.json shape; entries with an "authored" object are unwrapped). Each beat: { description, characters, dialogue: { character, line, delivery? } | null, sfx, cameraMovement, summary }.')
   .option('--video-family <family>', 'Video family for the beats: minimax-h3-max (default; higher fidelity, renders slower than playback) | minimax-h3-max-turbo (fastest and cheapest, nearly keeps pace, lower quality) | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard. Switchable from the Stream tab.')
+  .option('--r2v', 'Identity lock: render every beat reference-to-video off the cast\'s character sheets (generated first if missing) instead of the text-to-video → image-to-video chain. Keeps character identity consistent across beats and lifts the no-close-up rule. Needs a cast (add-character) and a locked aesthetic (set-aesthetic), and a family with an r2v lane. Asked interactively for a new stream; switchable from the Stream tab.')
   .option('--port <port>', 'Port to listen on', '3000')
   .option('--host <host>', 'Host to bind (localhost only by default)', '127.0.0.1')
   .option('--resolution <res>', 'Render resolution (default: the video family\'s draft tier, 480P on MiniMax)')
@@ -5015,7 +5016,7 @@ program
   .option('--no-refill', 'Fill the look-ahead buffer once at the start, then stop topping it up (author on demand after it drains). Default keeps the buffer full as it drains.')
   .option('--no-open', 'Do not open the browser automatically')
   .action(async (opts: {
-    project: string; episode: string | number; direction?: string; writer?: string; beatsFile?: string; videoFamily?: string; port: string; host: string;
+    project: string; episode: string | number; direction?: string; writer?: string; beatsFile?: string; videoFamily?: string; r2v?: boolean; port: string; host: string;
     resolution?: string; duration: string; budget: string; unbounded: boolean; lookahead: string; refill: boolean; open: boolean;
   }) => {
     const json = wantsJson();
@@ -5091,6 +5092,38 @@ program
       return;
     }
 
+    // Identity lock (r2v). Resolve to a boolean|undefined: `true` when --r2v is
+    // passed, `undefined` (keep the resumed manifest's value / default off) when
+    // not — asked interactively for a new stream in a terminal. When on, every
+    // beat renders reference-to-video off the cast's sheets instead of chaining.
+    const streamFamily = getStreamVideoChoice(opts.videoFamily ?? 'minimax-h3-max');
+    let r2vOption: boolean | undefined = opts.r2v === true ? true : undefined;
+    if (r2vOption === undefined && !resumed && !json && stdin.isTTY
+      && streamFamily?.r2v && series.characters.length > 0 && series.aesthetic) {
+      const pick = await promptChoice('How should beats keep character identity consistent?', [
+        { label: 'Standard — text-to-video, then image-to-video chained off the previous last frame (no references)', value: 'standard', description: 'Fast, no reference sheets. Identity can drift; beats must end on a wide shot (the chain rejects face-filled start frames).' },
+        { label: `Identity lock — reference-to-video every beat (${streamFamily.r2v}); generates character sheets first`, value: 'r2v', description: 'Locks the cast\'s identity every beat from their reference sheets. Faces are fine. Slightly slower/pricier; needs a cast + aesthetic.' },
+      ], 0);
+      r2vOption = pick === 'r2v';
+    }
+    if (r2vOption === true) {
+      if (!streamFamily?.r2v) {
+        failJson(json, `--r2v needs a video family with a reference-to-video lane. "${streamFamily?.id ?? opts.videoFamily}" has none; try minimax-h3-max, seedance-2-5, wan-3-0, grok-imagine, seedance-2-0, or kling-o3-standard.`);
+        process.exit(1);
+        return;
+      }
+      if (series.characters.length === 0) {
+        failJson(json, '--r2v (identity lock) needs a cast to anchor to. Add at least one character with `venice-video add-character` first.');
+        process.exit(1);
+        return;
+      }
+      if (!series.aesthetic) {
+        failJson(json, '--r2v (identity lock) needs a locked aesthetic to generate reference sheets. Run `venice-video set-aesthetic` first.');
+        process.exit(1);
+        return;
+      }
+    }
+
     // Pre-written beats are normalized against the locked cast the same way a
     // writer's output would be: names snap to the cast's spelling, missing
     // fields are completed, and a beat with no description fails here — before
@@ -5147,6 +5180,7 @@ program
       slug,
       writerModel: writer,
       videoFamily: opts.videoFamily,
+      r2vMode: r2vOption,
       resolution: opts.resolution,
       duration: opts.duration,
       budgetUsd: Number.isFinite(budgetUsd) ? budgetUsd : undefined,
@@ -5175,7 +5209,11 @@ program
     if (!json && before.beats.length === 0) {
       const perBeat = (getStreamVideoChoice(before.videoFamily)?.usdPer15s ?? 0.22) * (Number.parseInt(before.duration, 10) / 15);
       const fam = getStreamVideoChoice(before.videoFamily);
-      console.log(`Writer: ${describeStreamWriter(before.model.writer)}. Video: ${before.model.t2v} @ ${before.resolution || 'default'}, ${before.duration}/beat, about $${perBeat.toFixed(2)} per beat (billed at queue time)${fam && fam.speed !== 'keeps up' ? ` — ${fam.label} renders slower than playback (~${fam.renderSecApprox}s per beat)` : ''}.`);
+      const videoLine = before.r2vMode && before.model.r2v
+        ? `${before.model.r2v} (identity lock — reference-to-video every beat)`
+        : before.model.t2v;
+      console.log(`Writer: ${describeStreamWriter(before.model.writer)}. Video: ${videoLine} @ ${before.resolution || 'default'}, ${before.duration}/beat, about $${perBeat.toFixed(2)} per beat (billed at queue time)${fam && fam.speed !== 'keeps up' ? ` — ${fam.label} renders slower than playback (~${fam.renderSecApprox}s per beat)` : ''}.`);
+      if (before.r2vMode) console.log('Identity lock is on — generating any missing character reference sheets before the opening beat…');
       console.log('Rendering the opening beat before opening the browser…');
     }
     const status = await engine.prime();
@@ -5188,6 +5226,7 @@ program
         episode: episodeNumber,
         paused: true,
         model: status.model,
+        r2vMode: status.r2vMode,
         resolution: status.resolution,
         duration: status.duration,
         budget: opts.unbounded ? 'unbounded' : budgetUsd,
@@ -5199,8 +5238,12 @@ program
       console.log(`venice-video stream running at ${url}`);
       console.log(`  project:    ${slug} (episode ${episodeNumber})`);
       console.log(`  writer:     ${describeStreamWriter(status.model.writer)}`);
-      console.log(`  video:      ${status.model.t2v} (beat 1) then ${status.model.i2v} chained off each last frame @ ${status.resolution || 'default'}, ${status.duration}/beat`);
-      console.log('  models:     switch the writer or the video model any time from the Stream tab; changes apply to the next beat.');
+      if (status.r2vMode && status.model.r2v) {
+        console.log(`  video:      ${status.model.r2v} — identity lock: reference-to-video every beat off the cast's sheets @ ${status.resolution || 'default'}, ${status.duration}/beat`);
+      } else {
+        console.log(`  video:      ${status.model.t2v} (beat 1) then ${status.model.i2v} chained off each last frame @ ${status.resolution || 'default'}, ${status.duration}/beat`);
+      }
+      console.log('  models:     switch the writer, video model, or identity lock (r2v) any time from the Stream tab; changes apply to the next beat.');
       console.log(`  direction:  ${opts.direction ?? '(none)'}`);
       console.log(`  lookahead:  ${lookahead > 0 ? `${lookahead} beats authored ahead of the render${opts.refill ? ', kept topped up' : ', filled once then on demand'} (no writer latency between beats)` : 'serial — each beat is authored just before it renders'}`);
       if (scriptedBeats?.length) console.log(`  beats-file: ${scriptedBeats.length} pre-written beat(s) render before the live writer takes over`);

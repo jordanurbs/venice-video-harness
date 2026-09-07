@@ -30,7 +30,7 @@ import type { VeniceClient } from '../venice/client.js';
 import type { SeriesState, ShotScript } from '../series/types.js';
 import { closestValidDuration } from '../venice/models.js';
 import { buildVideoPrompt, type MiniDramaVideoPrompt } from './prompt-builder.js';
-import { renderVideoFile, extractLastFrame, type RenderVideoOptions } from './video-generator.js';
+import { renderVideoFile, extractLastFrame, resolveShotReferenceInputs, type RenderVideoOptions } from './video-generator.js';
 import {
   STREAM_DEFAULT_WRITER,
   STREAM_VIDEO_CHOICES,
@@ -119,6 +119,12 @@ export interface AuthorInput {
   recentBeats: ReadonlyArray<{ n: number; beat: AuthoredBeat }>;
   /** Operator direction that applies to every beat (e.g. "laugh track"). */
   direction?: string;
+  /**
+   * Identity-lock mode is on: the writer may end beats on faces/close-ups
+   * because R2V re-anchors identity from the cast's sheets every beat (there is
+   * no chained start frame that rejects faces).
+   */
+  r2vMode?: boolean;
 }
 
 export interface StreamBeat {
@@ -126,8 +132,12 @@ export interface StreamBeat {
   /** Project-relative path to the beat mp4 (for /media URLs). */
   file: string;
   beat: AuthoredBeat;
-  /** t2v-reset: a chained render failed repeatedly, so this beat re-established the picture from text. */
-  lane: 't2v' | 'i2v' | 't2v-reset';
+  /**
+   * t2v-reset: a chained render failed repeatedly, so this beat re-established
+   * the picture from text. r2v: identity-lock mode — the beat rendered
+   * reference-to-video off the cast's character sheets (no start frame).
+   */
+  lane: 't2v' | 'i2v' | 't2v-reset' | 'r2v';
   costUsd: number;
   at: string;
   /**
@@ -148,9 +158,14 @@ export type StreamStatus = 'idle' | 'writing' | 'rendering' | 'error';
 export interface StreamManifest {
   version: number;
   episode: number;
-  model: { t2v: string; i2v: string; writer: string };
+  model: { t2v: string; i2v: string; r2v?: string; writer: string };
   /** Family key for the current video lanes (stream-choices.ts). */
   videoFamily: string;
+  /**
+   * Identity-lock: render every beat reference-to-video off the cast's
+   * character sheets (model.r2v) instead of the t2v→i2v chain. Off by default.
+   */
+  r2vMode: boolean;
   resolution: string;
   duration: string;
   budgetUsd: number;
@@ -176,7 +191,7 @@ export interface StreamManifest {
   /** Selectable writers and video families, so the UI can offer them with speed/cost hints. */
   choices?: {
     writers: ReadonlyArray<{ id: string; label: string; medianSec: number; reliability: string; privacy: string; note: string }>;
-    video: ReadonlyArray<{ id: string; label: string; usdPer15s: number; renderSecApprox: number; speed: string; resolutions: string[]; note: string }>;
+    video: ReadonlyArray<{ id: string; label: string; usdPer15s: number; renderSecApprox: number; speed: string; resolutions: string[]; r2v?: string; note: string }>;
   };
 }
 
@@ -199,6 +214,13 @@ export interface StreamEngineOptions {
   writerModel?: string;
   /** Video family key or lane model id (stream-choices.ts). Defaults to MiniMax H3 Max. */
   videoFamily?: string;
+  /**
+   * Identity-lock: render every beat reference-to-video off the cast's
+   * character sheets instead of the t2v→i2v chain. Requires a family with an
+   * r2v lane, a cast, and a locked aesthetic. Defaults to false. A resumed
+   * stream keeps the manifest's value when this is left undefined.
+   */
+  r2vMode?: boolean;
   resolution?: string;
   duration?: string;
   budgetUsd?: number;
@@ -258,10 +280,16 @@ function describeCast(series: SeriesState): string {
   }).join('\n');
 }
 
-export function buildStreamSystemPrompt(series: SeriesState, direction?: string): string {
+export function buildStreamSystemPrompt(series: SeriesState, direction?: string, r2vMode = false): string {
   const aesthetic = series.aesthetic
     ? `${series.aesthetic.style}. Palette: ${series.aesthetic.palette}. Lighting: ${series.aesthetic.lighting}.`
     : '(no locked aesthetic)';
+  // In identity-lock (r2v) mode every beat re-anchors identity from the cast's
+  // reference sheets, so there is no chained start frame that rejects a face —
+  // the no-close-up rule (which exists only for the i2v chain) is lifted.
+  const cameraRule = r2vMode
+    ? '- CAMERA: frame each beat as one continuous shot; close-ups and faces are welcome. Continuity carries through the writing (same place, same people, same moment), not a handed-off frame. State the framing in `cameraMovement`.'
+    : '- CAMERA, MANDATORY: every beat ENDS on a wide or medium-wide shot of the whole set. Never end on a close-up of a human face. If a human is the last thing on screen, they are small in frame or turned away. (The next beat starts from this frame, and the video model rejects a start frame filled by a human face.) State this ending in `cameraMovement`.';
   return [
     `You are the head writer of "${series.name}", a never-ending ${series.genre}. You write ONE beat at a time. The story never ends and never resets.`,
     '',
@@ -274,7 +302,7 @@ export function buildStreamSystemPrompt(series: SeriesState, direction?: string)
     '',
     direction ? `STANDING DIRECTION (applies to every beat): ${direction}\n` : '',
     'RULES',
-    '- CAMERA, MANDATORY: every beat ENDS on a wide or medium-wide shot of the whole set. Never end on a close-up of a human face. If a human is the last thing on screen, they are small in frame or turned away. (The next beat starts from this frame, and the video model rejects a start frame filled by a human face.) State this ending in `cameraMovement`.',
+    cameraRule,
     '- Each beat is one continuous shot of about 15 seconds. It begins EXACTLY where the previous beat ended: same place, same people in frame, same moment. The camera does not cut. Never restart the scene, never jump in time or place unless a character physically walks somewhere within the shot.',
     '- Move the story forward every beat. Something new happens. Callbacks to earlier beats are good. Repeating a beat is not.',
     '- Describe what happens on screen in present tense, in one or two sentences. Direct the action, the performance, and the sound. Do NOT re-describe what the characters look like — identity is locked elsewhere.',
@@ -376,7 +404,7 @@ export function makeChatAuthor(client: VeniceClient, model: string): AuthorFn {
   return async (input) => {
     const raw = await client.chatJson<Partial<AuthoredBeat>>({
       model,
-      systemPrompt: buildStreamSystemPrompt(input.series, input.direction),
+      systemPrompt: buildStreamSystemPrompt(input.series, input.direction, input.r2vMode),
       userPrompt: buildStreamUserPrompt(input),
       maxTokens: 1500,
       temperature: 0.8,
@@ -405,6 +433,9 @@ export class StreamEngine {
   private writerModel: string;
   private readonly streamDir: string;
   private video: StreamVideoChoice;
+  private r2vMode: boolean;
+  /** True once character reference sheets have been ensured this session. */
+  private refsEnsured = false;
   private resolution: string;
   private duration: string;
   private readonly initialBudgetUsd: number;
@@ -419,6 +450,7 @@ export class StreamEngine {
   private readonly scriptedBeats: readonly AuthoredBeat[];
   private readonly explicitWriter: boolean;
   private readonly explicitVideo: boolean;
+  private readonly explicitR2v: boolean;
   private readonly errorBackoffMs: number;
 
   private unbounded: boolean;
@@ -468,9 +500,12 @@ export class StreamEngine {
     this.slug = options.slug ?? options.series.slug;
     this.explicitWriter = options.writerModel !== undefined;
     this.explicitVideo = options.videoFamily !== undefined;
+    this.explicitR2v = options.r2vMode !== undefined;
     this.writerModel = options.writerModel ?? STREAM_DEFAULT_WRITER;
     this.streamDir = join(options.episodeDir, 'stream');
     this.video = resolveStreamVideoFamily(options.videoFamily);
+    // Identity-lock only sticks when the family actually has an r2v lane.
+    this.r2vMode = Boolean(options.r2vMode) && Boolean(this.video.r2v);
     this.resolution = options.resolution ?? this.video.resolution;
     this.duration = this.resolveDuration(options.duration ?? STREAM_DEFAULT_DURATION);
     this.unbounded = options.unbounded ?? false;
@@ -502,16 +537,56 @@ export class StreamEngine {
 
   private resolveDuration(requested: string): string {
     const sec = durationSeconds(requested);
-    const snapped = closestValidDuration(this.video.t2v, sec);
+    // Snap against the lane that will actually render: the r2v model when
+    // identity-lock is on (its ladder can differ — e.g. Grok R2V caps at 10s).
+    const snapModel = this.r2vMode && this.video.r2v ? this.video.r2v : this.video.t2v;
+    const snapped = closestValidDuration(snapModel, sec);
     if (snapped && snapped !== `${sec}s`) {
-      this.log(`  Stream duration ${requested} snapped to ${snapped} (H3 Max 5-15s ladder).`);
+      this.log(`  Stream duration ${requested} snapped to ${snapped} (${snapModel} ladder).`);
     }
     return snapped ?? requested;
   }
 
   private costPerBeat(): number {
     // Quote-derived per-15s price for the family, scaled to the beat length.
+    // (An estimate: the r2v lane may price slightly differently, but Venice
+    // bills the real amount at queue time either way.)
     return this.video.usdPer15s * (durationSeconds(this.duration) / 15);
+  }
+
+  /** Preconditions for identity-lock (r2v): a cast to anchor and a look to draw. */
+  private assertR2VReady(): void {
+    if (this.series.characters.length === 0) {
+      throw new Error('Identity lock (r2v) needs a cast — add at least one character (add-character) before turning it on.');
+    }
+    if (!this.series.aesthetic) {
+      throw new Error('Identity lock (r2v) needs a locked aesthetic to generate reference sheets — run set-aesthetic first.');
+    }
+  }
+
+  /**
+   * Ensure a front + three-quarter reference sheet exists for every cast member
+   * so the r2v lane has an identity stack to anchor to. Only the two angles the
+   * stream's reference resolver uses are generated (cheaper than the full four),
+   * and existing sheets are kept (`skipExisting`). Idempotent per session.
+   */
+  private async ensureCharacterReferences(): Promise<void> {
+    if (this.refsEnsured || this.series.characters.length === 0 || !this.series.aesthetic) return;
+    const { generateCharacterReferences } = await import('./character-reference-generator.js');
+    for (const c of this.series.characters) {
+      try {
+        const { generated } = await generateCharacterReferences(this.client, this.series, c, {
+          skipExisting: true,
+          angles: ['front', 'three-quarter'],
+        });
+        if (generated.length > 0) {
+          this.log(`  [stream] generated ${generated.length} reference angle(s) for ${c.name} (identity lock).`);
+        }
+      } catch (err) {
+        this.log(`  ⚠ Could not generate references for ${c.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    this.refsEnsured = true;
   }
 
   /**
@@ -521,7 +596,7 @@ export class StreamEngine {
    * can pick it up. Resolution snaps to the new family's draft tier unless the
    * caller passes one that the family supports.
    */
-  async configure(config: { writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean }): Promise<StreamManifest> {
+  async configure(config: { writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean; r2vMode?: boolean }): Promise<StreamManifest> {
     const changes: string[] = [];
     if (config.writer && config.writer !== this.writerModel) {
       this.writerModel = config.writer;
@@ -545,8 +620,31 @@ export class StreamEngine {
       const next = resolveStreamVideoFamily(config.videoFamily);
       this.video = next;
       this.resolution = next.resolution;
+      // A family with no r2v lane cannot keep identity-lock on.
+      if (this.r2vMode && !this.video.r2v) {
+        this.r2vMode = false;
+        changes.push('identity lock (r2v) turned off — the new family has no reference-to-video lane');
+      }
       this.duration = this.resolveDuration(this.duration);
       changes.push(`video -> ${next.id} (${next.t2v} / ${next.i2v}) @ ${next.resolution || 'model default'}, ~$${this.costPerBeat().toFixed(2)}/beat`);
+    }
+    if (typeof config.r2vMode === 'boolean' && config.r2vMode !== this.r2vMode) {
+      if (config.r2vMode) {
+        // Turning identity-lock ON. Validate up front so nothing bills a beat
+        // that would 400 (r2v models reject an empty reference stack).
+        if (!this.video.r2v) {
+          throw new Error(`${this.video.label} has no reference-to-video lane. Switch to a family with one (e.g. MiniMax H3 Max, Seedance 2.5, Wan 3.0) to lock character identity.`);
+        }
+        this.assertR2VReady();
+        this.r2vMode = true;
+        this.duration = this.resolveDuration(this.duration);
+        changes.push(`identity lock (r2v) -> on (${this.video.r2v}); character sheets carry identity every beat`);
+        await this.ensureCharacterReferences();
+      } else {
+        this.r2vMode = false;
+        this.duration = this.resolveDuration(this.duration);
+        changes.push('identity lock (r2v) -> off (text-to-video then image-to-video chain)');
+      }
     }
     if (config.resolution) {
       const r = config.resolution;
@@ -604,7 +702,9 @@ export class StreamEngine {
     if (this.beats.length > 0 || this.running || this.priming) return this.snapshot();
     this.priming = true;
     this.writerRunning = this.lookahead > 0;
-    this.log(`Priming: rendering the opening beat, then waiting for Start${this.lookahead > 0 ? ` (the writer pre-authors up to ${this.lookahead} beats ahead while paused)` : ''}. writer=${this.writerModel}, video=${this.video.t2v}, ${this.resolution}, ${this.duration}.`);
+    const openingModel = this.r2vMode && this.video.r2v ? this.video.r2v : this.video.t2v;
+    this.log(`Priming: rendering the opening beat, then waiting for Start${this.lookahead > 0 ? ` (the writer pre-authors up to ${this.lookahead} beats ahead while paused)` : ''}. writer=${this.writerModel}, video=${openingModel}${this.r2vMode ? ' (identity lock)' : ''}, ${this.resolution}, ${this.duration}.`);
+    if (this.r2vMode) await this.ensureCharacterReferences();
     this.ensureWriter();
     try {
       let ok = false;
@@ -639,7 +739,11 @@ export class StreamEngine {
     this.writerRunning = true;
     this.consecutiveErrors = 0;
     this.lastError = undefined;
-    this.log(`Stream engine running: writer=${this.writerModel}, video=${this.video.t2v} then ${this.video.i2v} chained, ${this.resolution}, ${this.duration}/beat, budget=${this.unbounded ? 'unbounded' : `$${this.budgetUsd.toFixed(2)}`}${this.lookahead > 0 ? `, ${this.lookahead} beats look-ahead${this.autoRefill ? '' : ' (fill once)'}` : ' (serial writer)'}.`);
+    if (this.r2vMode) await this.ensureCharacterReferences();
+    const videoDesc = this.r2vMode && this.video.r2v
+      ? `${this.video.r2v} (identity lock — reference-to-video every beat)`
+      : `${this.video.t2v} then ${this.video.i2v} chained`;
+    this.log(`Stream engine running: writer=${this.writerModel}, video=${videoDesc}, ${this.resolution}, ${this.duration}/beat, budget=${this.unbounded ? 'unbounded' : `$${this.budgetUsd.toFixed(2)}`}${this.lookahead > 0 ? `, ${this.lookahead} beats look-ahead${this.autoRefill ? '' : ' (fill once)'}` : ' (serial writer)'}.`);
     if (this.beats.length > 0) this.log(`  Continuing from beat ${this.beats.length}${this.buffer.length > 0 ? ` (${this.buffer.length} beat(s) already buffered)` : ''}.`);
     // The look-ahead writer produces beats; the worker consumes them. Wake the
     // writer so a raised budget lets it author past the old cap.
@@ -827,6 +931,7 @@ export class StreamEngine {
       storySoFar: ctx.storySoFar,
       recentBeats: ctx.recentBeats,
       direction: this.direction,
+      r2vMode: this.r2vMode,
     }), this.series);
   }
 
@@ -872,7 +977,13 @@ export class StreamEngine {
       return true; // the worker loop sees budgetExhausted() and stops cleanly
     }
 
-    // 3. Render: t2v for the opening beat, i2v off the previous last frame after.
+    // 3. Render. Two lanes:
+    //    - identity lock (r2vMode): every beat renders reference-to-video off
+    //      the cast's character sheets. No start frame, no chaining — identity
+    //      is re-anchored from the refs and continuity carries through the
+    //      writing. Faces are fine (R2V takes faces as refs, not a start frame).
+    //    - default chain: t2v for the opening beat, i2v off the previous last
+    //      frame after, with the step-back / t2v-reset recovery.
     this.status = 'rendering';
     this.emit();
     const key = beatKey(n);
@@ -881,40 +992,63 @@ export class StreamEngine {
 
     let lane: StreamBeat['lane'] = 't2v';
     let anchorImagePath: string | undefined;
-    const resetChain = Boolean(previous) && this.consecutiveErrors >= STREAM_CHAIN_FAILURES_BEFORE_RESET;
-    if (previous && resetChain) {
-      // The chain has failed repeatedly on this beat. The start frame is the
-      // usual cause (anti-pattern 31), and stepping back has not found a frame
-      // the model accepts. Re-establish the picture from text instead of
-      // stopping the stream: a one-beat identity drift beats a dead stream.
-      lane = 't2v-reset';
-      this.log(`  [stream] beat ${n} reset: ${this.consecutiveErrors} chained renders failed; rendering t2v from the beat text (identity may drift this beat).`);
-    } else if (previous) {
-      const prevPath = join(this.projectDir, previous.file);
-      const startFrame = join(this.streamDir, `beat-${key}-start.png`);
-      // Retry N steps back N-th offset into the previous clip.
-      const stepBack = STREAM_CHAIN_STEP_BACK_SEC[Math.min(this.consecutiveErrors, STREAM_CHAIN_STEP_BACK_SEC.length - 1)];
-      try {
-        extractLastFrame(prevPath, startFrame, stepBack);
-        lane = 'i2v';
-        anchorImagePath = startFrame;
-        if (stepBack > 0) this.log(`  [stream] beat ${n} retry: start frame stepped back ${stepBack}s into beat ${previous.n}.`);
-      } catch (err) {
-        // A stream cannot break its chain silently — that would be a hidden cut.
-        return this.fail(n, 'chain', err);
+    let referenceImagePaths: string[] | undefined;
+    let shot: ShotScript;
+    let prompt: MiniDramaVideoPrompt;
+
+    if (this.r2vMode && this.video.r2v) {
+      lane = 'r2v';
+      shot = this.toShot(n, beat);
+      prompt = this.buildPrompt(shot, this.video.r2v);
+      referenceImagePaths = resolveShotReferenceInputs(this.series, shot, prompt).referenceImagePaths;
+      if (!referenceImagePaths || referenceImagePaths.length === 0) {
+        // Sheets missing on disk — generate them once, then re-resolve.
+        await this.ensureCharacterReferences();
+        referenceImagePaths = resolveShotReferenceInputs(this.series, shot, prompt).referenceImagePaths;
       }
+      if (!referenceImagePaths || referenceImagePaths.length === 0) {
+        // Still nothing to anchor to (no cast art). Rather than bill an r2v
+        // request that Venice rejects for an empty reference stack, fail the
+        // beat with a clear message so the operator can add a cast / aesthetic.
+        return this.fail(n, 'render', new Error('identity lock is on but no character reference images could be generated (need a cast and a locked aesthetic).'));
+      }
+    } else {
+      const resetChain = Boolean(previous) && this.consecutiveErrors >= STREAM_CHAIN_FAILURES_BEFORE_RESET;
+      if (previous && resetChain) {
+        // The chain has failed repeatedly on this beat. The start frame is the
+        // usual cause (anti-pattern 31), and stepping back has not found a frame
+        // the model accepts. Re-establish the picture from text instead of
+        // stopping the stream: a one-beat identity drift beats a dead stream.
+        lane = 't2v-reset';
+        this.log(`  [stream] beat ${n} reset: ${this.consecutiveErrors} chained renders failed; rendering t2v from the beat text (identity may drift this beat).`);
+      } else if (previous) {
+        const prevPath = join(this.projectDir, previous.file);
+        const startFrame = join(this.streamDir, `beat-${key}-start.png`);
+        // Retry N steps back N-th offset into the previous clip.
+        const stepBack = STREAM_CHAIN_STEP_BACK_SEC[Math.min(this.consecutiveErrors, STREAM_CHAIN_STEP_BACK_SEC.length - 1)];
+        try {
+          extractLastFrame(prevPath, startFrame, stepBack);
+          lane = 'i2v';
+          anchorImagePath = startFrame;
+          if (stepBack > 0) this.log(`  [stream] beat ${n} retry: start frame stepped back ${stepBack}s into beat ${previous.n}.`);
+        } catch (err) {
+          // A stream cannot break its chain silently — that would be a hidden cut.
+          return this.fail(n, 'chain', err);
+        }
+      }
+      shot = this.toShot(n, beat, lane === 't2v-reset' ? previous : undefined);
+      prompt = this.buildPrompt(shot, lane === 'i2v' ? this.video.i2v : this.video.t2v);
     }
 
-    const shot = this.toShot(n, beat, lane === 't2v-reset' ? previous : undefined);
-    const prompt = this.buildPrompt(shot, lane === 'i2v' ? this.video.i2v : this.video.t2v);
     this.spendUsd += est;
-    this.log(`  [stream] beat ${n} rendering: ${lane} ${prompt.model} @ ${this.resolution}, ${this.duration}`);
+    this.log(`  [stream] beat ${n} rendering: ${lane} ${prompt.model} @ ${this.resolution}, ${this.duration}${lane === 'r2v' ? ` (${referenceImagePaths?.length ?? 0} identity ref(s))` : ''}`);
 
     try {
       await this.render(this.client, {
         prompt,
         outputPath,
         anchorImagePath,
+        referenceImagePaths,
         resolution: this.resolution || undefined,
         aspectRatio: this.series.storyboardAspectRatio,
         project: this.projectDir,
@@ -992,6 +1126,9 @@ export class StreamEngine {
       transition: 'continuous',
       faceVisible: beat.characters.length > 0,
       mustStaySingle: true,
+      // Identity lock: tell the reference resolver to pull the cast's sheets
+      // into reference_image_urls for this shot.
+      useReferenceImages: this.r2vMode,
     };
   }
 
@@ -1036,8 +1173,9 @@ export class StreamEngine {
     return {
       version: MANIFEST_VERSION,
       episode: this.episode,
-      model: { t2v: this.video.t2v, i2v: this.video.i2v, writer: this.writerModel },
+      model: { t2v: this.video.t2v, i2v: this.video.i2v, r2v: this.video.r2v, writer: this.writerModel },
       videoFamily: this.video.id,
+      r2vMode: this.r2vMode,
       resolution: this.resolution,
       duration: this.duration,
       budgetUsd: this.unbounded ? Infinity : this.budgetUsd,
@@ -1057,7 +1195,7 @@ export class StreamEngine {
       pendingBeats: this.buffer.slice(),
       choices: {
         writers: STREAM_WRITER_CHOICES.map(w => ({ id: w.id, label: w.label, medianSec: w.medianSec, reliability: w.reliability, privacy: w.privacy, note: w.note })),
-        video: STREAM_VIDEO_CHOICES.map(v => ({ id: v.id, label: v.label, usdPer15s: v.usdPer15s, renderSecApprox: v.renderSecApprox, speed: v.speed, resolutions: v.resolutions, note: v.note })),
+        video: STREAM_VIDEO_CHOICES.map(v => ({ id: v.id, label: v.label, usdPer15s: v.usdPer15s, renderSecApprox: v.renderSecApprox, speed: v.speed, resolutions: v.resolutions, r2v: v.r2v, note: v.note })),
       },
     };
   }
@@ -1094,6 +1232,12 @@ export class StreamEngine {
       if (!this.explicitVideo && prior.videoFamily && getStreamVideoChoice(prior.videoFamily)) {
         this.video = getStreamVideoChoice(prior.videoFamily)!;
         this.resolution = prior.resolution || this.video.resolution;
+      }
+      // A resumed stream keeps its identity-lock setting unless set on this run.
+      // Only sticks when the (possibly resumed) family actually has an r2v lane.
+      if (!this.explicitR2v && typeof prior.r2vMode === 'boolean') {
+        this.r2vMode = prior.r2vMode && Boolean(this.video.r2v);
+        this.duration = this.resolveDuration(this.duration);
       }
       // Trust only beats whose files exist, and only an unbroken prefix — the
       // chain cannot continue from a beat whose predecessor is gone.
@@ -1154,6 +1298,7 @@ export class StreamEngine {
       buffered: this.buffer.length,
       lookahead: this.lookahead,
       autoRefill: this.autoRefill,
+      r2vMode: this.r2vMode,
       beat: newBeat,
     });
   }
@@ -1175,7 +1320,7 @@ export function exportStreamJson(manifest: StreamManifest, series: SeriesState):
       direction: manifest.direction,
       exportedAt: new Date().toISOString(),
     },
-    writerSystemPrompt: buildStreamSystemPrompt(series, manifest.direction),
+    writerSystemPrompt: buildStreamSystemPrompt(series, manifest.direction, manifest.r2vMode),
     beats: manifest.beats.map(b => ({
       n: b.n,
       lane: b.lane,
@@ -1192,10 +1337,14 @@ export function exportStreamMarkdown(manifest: StreamManifest, series: SeriesSta
   const lines: string[] = [];
   lines.push(`# ${series.name} — Stream Prompts (episode ${manifest.episode})`, '');
   lines.push(`- Writer: \`${manifest.model.writer}\``);
-  lines.push(`- Video: \`${manifest.model.t2v}\` (beat 1) then \`${manifest.model.i2v}\` chained · ${manifest.resolution || 'default'} · ${manifest.duration}/beat`);
+  if (manifest.r2vMode && manifest.model.r2v) {
+    lines.push(`- Video: \`${manifest.model.r2v}\` (identity lock — reference-to-video every beat off the cast's sheets) · ${manifest.resolution || 'default'} · ${manifest.duration}/beat`);
+  } else {
+    lines.push(`- Video: \`${manifest.model.t2v}\` (beat 1) then \`${manifest.model.i2v}\` chained · ${manifest.resolution || 'default'} · ${manifest.duration}/beat`);
+  }
   if (manifest.direction) lines.push(`- Standing direction: ${manifest.direction}`);
   lines.push(`- Beats: ${manifest.beats.length} · Spend: $${manifest.spendUsd.toFixed(2)}`, '');
-  lines.push('## Writer System Prompt', '', '```', buildStreamSystemPrompt(series, manifest.direction), '```', '');
+  lines.push('## Writer System Prompt', '', '```', buildStreamSystemPrompt(series, manifest.direction, manifest.r2vMode), '```', '');
   lines.push('## Beats', '');
   for (const b of manifest.beats) {
     lines.push(`### Beat ${b.n} — ${b.lane}${b.render?.model ? ` · \`${b.render.model}\`` : ''}`, '');

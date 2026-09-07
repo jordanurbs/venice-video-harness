@@ -117,7 +117,7 @@ export interface StreamBeat {
     cameraMovement: string;
     summary: string;
   };
-  lane: 't2v' | 'i2v' | 't2v-reset';
+  lane: 't2v' | 'i2v' | 't2v-reset' | 'r2v';
   render?: { model: string; prompt: string; resolution?: string; duration: string; startFrame?: string };
   costUsd: number;
   at: string;
@@ -128,8 +128,10 @@ export type StreamStatus = 'idle' | 'writing' | 'rendering' | 'error';
 export interface StreamManifest {
   version: number;
   episode: number;
-  model: { t2v: string; i2v: string; writer: string };
+  model: { t2v: string; i2v: string; r2v?: string; writer: string };
   videoFamily?: string;
+  /** Identity lock: render every beat reference-to-video off the cast's sheets. */
+  r2vMode?: boolean;
   resolution: string;
   duration: string;
   budgetUsd: number | null;
@@ -151,7 +153,7 @@ export interface StreamManifest {
   beats: StreamBeat[];
   choices?: {
     writers: Array<{ id: string; label: string; medianSec: number; reliability: string; privacy: string; note: string }>;
-    video: Array<{ id: string; label: string; usdPer15s: number; renderSecApprox: number; speed: string; resolutions: string[]; note: string }>;
+    video: Array<{ id: string; label: string; usdPer15s: number; renderSecApprox: number; speed: string; resolutions: string[]; r2v?: string; note: string }>;
   };
 }
 

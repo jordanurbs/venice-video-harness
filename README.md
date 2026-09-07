@@ -1138,9 +1138,34 @@ venice-video stream -p <dir> \
   --duration 15s \          # per-beat length, snapped to the 5-15s ladder
   --lookahead 15 \          # beats authored AHEAD of the render (0 = serial)
   --budget 2                # stop after ~$2; Continue authorizes another budget
+# --r2v                     # identity lock: render every beat reference-to-video off the cast's sheets (see below)
 # --no-refill               # fill the look-ahead buffer once, then author on demand
 # --unbounded               # no cap (streams until Ctrl-C)
 ```
+
+#### Identity lock (reference-to-video)
+
+By default the stream evolves the picture the way one long take would — beat 1
+text-to-video, every later beat image-to-video off the previous last frame — and
+identity drifts slowly by design. **Identity lock** trades that continuous-take
+look for consistent characters: every beat renders **reference-to-video** off
+the cast's `front` + `three-quarter` character sheets (`reference_image_urls`),
+with no start frame and no chaining, so each beat re-anchors identity and
+continuity carries through the writing instead of the frame handoff.
+
+- Turn it on with `--r2v`, the **Identity lock** checkbox on the Stream tab, or
+  the interactive prompt a new stream shows in a terminal. It is switchable live
+  (applies to the next beat) and persists across a resume.
+- It needs a cast (`add-character`) and a locked aesthetic (`set-aesthetic`);
+  missing sheets are generated on start (**only** when identity lock is on — a
+  plain t2v→i2v stream generates nothing). Turning it on without a cast/aesthetic
+  is refused before anything bills.
+- **Faces are welcome.** The no-close-up rule (below) exists only for the i2v
+  chain's start frame; identity lock lifts it in the writer prompt.
+- Families with an r2v lane: MiniMax H3 Max (Turbo crosses to the non-turbo
+  R2V), Seedance 2.0, Seedance 2.5, Wan 3.0, Grok Imagine (beats snap to
+  5/8/10s), Kling O3 Standard. LTX 2.5 Fast and Veo 3.1 Fast have none — the
+  toggle is disabled for them, and switching to one turns identity lock off.
 
 #### Look-ahead writer buffer
 

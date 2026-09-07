@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.26.0 — 2026-09-07
+
+### Added
+
+- **Stream identity lock (reference-to-video).** The stream can now render every
+  beat **reference-to-video** off the cast's character sheets instead of the
+  text-to-video → image-to-video chain. Toggle it with the new **Identity lock**
+  checkbox on the Stream tab, `--r2v` on `venice-video stream`, or an interactive
+  prompt when a new stream starts in a terminal. When on:
+  - every beat (including beat 1) renders on the family's `*-reference-to-video`
+    lane with the cast's `front` + `three-quarter` sheets as `reference_image_urls`
+    — no start frame, no chaining. Character identity is re-anchored each beat and
+    continuity carries through the writing (same place, same people, same moment).
+  - **faces are welcome again.** The i2v chain's "every beat must END on a wide
+    shot, never a close-up" rule (anti-pattern 31: MiniMax i2v dies on a
+    face-filled start frame) is lifted in the writer prompt — R2V takes faces as
+    references, not a start frame.
+  - **references are generated only when it's on.** Missing `front` /
+    `three-quarter` sheets are generated on start (nothing is generated for a
+    plain t2v→i2v stream). Requires a cast (`add-character`) and a locked
+    aesthetic (`set-aesthetic`); turning it on without them is refused before
+    anything bills.
+  - switchable live from the Stream tab (applies to the next beat) and persisted
+    across a resume. Families with an r2v lane: MiniMax H3 Max (+ Turbo, which
+    crosses to the non-turbo R2V), Seedance 2.0, Seedance 2.5, Wan 3.0, Grok
+    Imagine (beats snap to 5/8/10s), Kling O3 Standard. Families without one
+    (LTX 2.5 Fast, Veo 3.1 Fast) show the toggle disabled, and switching to one
+    turns identity lock off.
+
 ## 2.25.0 — 2026-09-07
 
 ### Fixed
