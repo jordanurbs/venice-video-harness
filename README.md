@@ -944,6 +944,58 @@ venice-video loop -p ~/VeniceVideos/my-film -e 1 --mode looping    # or state it
 venice-video loop -p ~/VeniceVideos/my-film -e 1 --mode production
 ```
 
+### Pre-written beats: `stream --beats-file`
+
+The stream writes every beat with a live writer model. To author the beats
+yourself — or have an agent write them up front — pass `--beats-file`. The
+first N beats of the stream are then served from the file and the writer model
+is **never called** for them; only if the stream runs past the last scripted
+beat does the live writer take over (defaulting to `STREAM_DEFAULT_WRITER`).
+
+```bash
+venice-video stream -p ~/VeniceVideos/my-film -e 1 \
+  --beats-file ~/VeniceVideos/my-film/beats.json \
+  --direction "live studio audience laugh track after every joke" \
+  --budget 2
+```
+
+With `--beats-file` a new stream needs no `--writer`: the file IS the writer
+decision for the beats it covers. A `--writer` still overrides the fallback
+used past the file. On resume the scripted lane re-attaches the same way —
+beats already rendered are never re-rendered, and a writer switch from the
+Stream tab changes only the fallback.
+
+The file is JSON and accepts two shapes:
+
+```jsonc
+// 1. A bare array of beats.
+[
+  {
+    "description": "The bell jingles as JAKE strides in and takes the couch.",
+    "characters": ["JAKE KELLER", "MEL"],
+    "dialogue": { "character": "JAKE KELLER", "line": "The usual.", "delivery": "cheerful" },
+    "sfx": "door bell, live studio audience applause",
+    "cameraMovement": "slow dolly in to a wide of the cafe",
+    "summary": "Jake arrives at the cafe."
+  }
+]
+```
+
+```jsonc
+// 2. The { "beats": [...] } shape of /stream/export.json — entries with an
+//    "authored" object are unwrapped, so an exported stream replays as-is.
+{ "beats": [ { "n": 1, "authored": { "description": "…", … } } ] }
+```
+
+Beat fields match `AuthoredBeat` in `stream-engine.ts`. Each entry is
+normalized against the locked cast (names snap to the cast's spelling, missing
+fields are completed), and a beat with no `description` fails at load — before
+anything bills. The stream's continuity rules still apply to what you write:
+each beat is one continuous shot that begins where the previous beat ended,
+and every beat should END on a wide or medium-wide frame, never a human-face
+close-up (the next beat chains off that frame, and MiniMax i2v dies on a
+face-filled start frame — anti-pattern 31).
+
 Loop mode starts with one **required, deliberate decision** — **is this for
 LOOPING or for PRODUCTION?** — because it is a real quality-vs-flow tradeoff, not
 a default to fall through. In a terminal it asks; non-interactively you must pass

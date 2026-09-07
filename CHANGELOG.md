@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.23.0 — 2026-09-07
+
+### Added
+
+- **Pre-written beats for the stream: `stream --beats-file`.** Author beats up
+  front and the stream renders them without ever calling the writer model.
+  Accepts a bare JSON array of beats or the `{ "beats": [...] }` shape of
+  `/stream/export.json` (entries with an `authored` object are unwrapped, so an
+  exported stream replays as-is). Each entry is normalized against the locked
+  cast the same way a writer's output would be; a beat with no description
+  fails at load, before anything bills. The live writer (defaulting to
+  `STREAM_DEFAULT_WRITER` for a new stream) is only the fallback past the last
+  scripted beat, and a writer switch from the Stream tab changes only that
+  fallback. Engine side: `scriptedBeats` on `StreamEngineOptions`,
+  `makeScriptedAuthor()`, and `parseScriptedBeats()`, all exported.
+
 ## 2.22.1 — 2026-09-05
 
 ### Added

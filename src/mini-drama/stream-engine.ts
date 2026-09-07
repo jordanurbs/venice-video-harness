@@ -191,6 +191,12 @@ export interface StreamEngineOptions {
   direction?: string;
   /** Optional opening beat, used verbatim for beat 1 instead of asking the writer. */
   openingBeat?: AuthoredBeat;
+  /**
+   * Pre-written beats, consumed in order before the live writer is asked
+   * (`--beats-file`). The live writer is only the fallback past the last one,
+   * so a fully-scripted run never calls the writer model.
+   */
+  scriptedBeats?: AuthoredBeat[];
   broadcaster?: StreamBroadcaster;
   log?: (line: string) => void;
   /** Override the render primitive (tests). Defaults to renderVideoFile. */
@@ -305,6 +311,38 @@ export function normalizeBeat(raw: Partial<AuthoredBeat>, series: SeriesState): 
   };
 }
 
+/**
+ * A writer that serves pre-written beats in order, then hands the pen to the
+ * live writer past the last one. Used by `stream --beats-file`: an operator
+ * (or an agent) authors N beats up front and the stream renders them without
+ * calling the writer model at all. Beat N in the file is beat N of the stream
+ * — the file is indexed by position, and entries recovered from
+ * `exportStreamJson`'s `{ n, authored }` shape are unwrapped automatically.
+ */
+export function makeScriptedAuthor(scripted: readonly AuthoredBeat[], fallback: AuthorFn, log?: (line: string) => void): AuthorFn {
+  return async (input) => {
+    const beat = scripted[input.beatNumber - 1];
+    if (beat) return beat;
+    if (log) log(`  [stream] beat ${input.beatNumber} is past the ${scripted.length} pre-written beat(s) — the live writer takes over.`);
+    return fallback(input);
+  };
+}
+
+/** Structural check + unwrap for a parsed beats file. Use before normalizeBeat. */
+export function parseScriptedBeats(raw: unknown): Partial<AuthoredBeat>[] {
+  const arr = Array.isArray(raw)
+    ? raw
+    : (raw !== null && typeof raw === 'object' && Array.isArray((raw as { beats?: unknown }).beats) ? (raw as { beats: unknown[] }).beats : null);
+  if (!arr) throw new Error('A beats file must be an array of beats, or an object with a "beats" array (as produced by /stream/export.json).');
+  return arr.map((entry, i) => {
+    const b = (entry !== null && typeof entry === 'object' && 'authored' in entry)
+      ? (entry as { authored: unknown }).authored
+      : entry;
+    if (!b || typeof b !== 'object' || Array.isArray(b)) throw new Error(`Beat ${i + 1} in the beats file is not an object.`);
+    return b as Partial<AuthoredBeat>;
+  });
+}
+
 /** Default writer: one chatJson call on the intelligence model. */
 export function makeChatAuthor(client: VeniceClient, model: string): AuthorFn {
   return async (input) => {
@@ -349,6 +387,8 @@ export class StreamEngine {
   private readonly render: RenderFn;
   private author: AuthorFn;
   private readonly authorOverride?: AuthorFn;
+  /** Pre-written beats served before the live writer (options.scriptedBeats). */
+  private readonly scriptedBeats: readonly AuthoredBeat[];
   private readonly explicitWriter: boolean;
   private readonly explicitVideo: boolean;
   private readonly errorBackoffMs: number;
@@ -394,8 +434,20 @@ export class StreamEngine {
     this.log = options.log ?? ((line: string) => console.log(line));
     this.render = options.render ?? renderVideoFile;
     this.authorOverride = options.author;
-    this.author = options.author ?? makeChatAuthor(this.client, this.writerModel);
+    this.scriptedBeats = options.scriptedBeats ?? [];
+    this.author = this.buildAuthor();
     this.errorBackoffMs = options.errorBackoffMs ?? ERROR_BACKOFF_MS;
+  }
+
+  /**
+   * The writer for the next beat: pre-written beats first (when present),
+   * then the injected author override (tests), then the chat writer. A writer
+   * switch (configure / a resumed manifest) rebuilds through here, so
+   * scripted beats keep serving and only the fallback changes.
+   */
+  private buildAuthor(): AuthorFn {
+    const base = this.authorOverride ?? makeChatAuthor(this.client, this.writerModel);
+    return this.scriptedBeats.length > 0 ? makeScriptedAuthor(this.scriptedBeats, base, this.log) : base;
   }
 
   private resolveDuration(requested: string): string {
@@ -423,7 +475,7 @@ export class StreamEngine {
     const changes: string[] = [];
     if (config.writer && config.writer !== this.writerModel) {
       this.writerModel = config.writer;
-      if (!this.authorOverride) this.author = makeChatAuthor(this.client, this.writerModel);
+      if (!this.authorOverride || this.scriptedBeats.length > 0) this.author = this.buildAuthor();
       changes.push(`writer -> ${this.writerModel}`);
     }
     if (config.videoFamily && config.videoFamily !== this.video.id) {
@@ -813,7 +865,7 @@ export class StreamEngine {
       // caller set them explicitly on this run.
       if (!this.explicitWriter && prior.model?.writer) {
         this.writerModel = prior.model.writer;
-        if (!this.authorOverride) this.author = makeChatAuthor(this.client, this.writerModel);
+        if (!this.authorOverride || this.scriptedBeats.length > 0) this.author = this.buildAuthor();
       }
       if (!this.explicitVideo && prior.videoFamily && getStreamVideoChoice(prior.videoFamily)) {
         this.video = getStreamVideoChoice(prior.videoFamily)!;

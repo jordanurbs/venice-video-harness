@@ -24,6 +24,8 @@ import {
   exportStreamMarkdown,
   buildStreamSystemPrompt,
   buildStreamUserPrompt,
+  makeScriptedAuthor,
+  parseScriptedBeats,
 } from '../dist/mini-drama/stream-engine.js';
 
 // Per-beat cost of the default family at 15s (quote-derived, stream-choices.ts).
@@ -461,4 +463,77 @@ test('a resumed stream backfills render prompts from recipe sidecars written bef
   await resumed.init();
   assert.equal(resumed.state().beats[0].render?.prompt, original);
   assert.equal(resumed.state().beats[0].render?.model, 'minimax-h3-max-turbo-text-to-video');
+});
+
+// ---- Pre-written beats (--beats-file) --------------------------------------
+
+function scriptedBeat(n) {
+  return {
+    description: `Scripted beat ${n}: the robot refills the coffee.`,
+    characters: ['WALT'],
+    dialogue: { character: 'CRUMB', line: `Scripted line ${n}.`, delivery: 'deadpan' },
+    sfx: 'studio audience laugh',
+    cameraMovement: 'static wide',
+    summary: `Scripted summary ${n}.`,
+  };
+}
+
+test('pre-written beats render in order without calling the live writer; the writer takes over past them', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-scripted-'));
+  const { engine, calls, inputs } = makeEngine(dir, {
+    budgetUsd: budgetFor(4),
+    scriptedBeats: [scriptedBeat(1), scriptedBeat(2), scriptedBeat(3)],
+  });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  assert.equal(calls.length, 4, 'four beats within the budget');
+  assert.match(calls[0].prompt, /Scripted beat 1/, 'beat 1 came from the file');
+  assert.match(calls[2].prompt, /Scripted beat 3/, 'beat 3 came from the file');
+  assert.match(calls[3].prompt, /Beat 4: something happens/, 'beat 4 fell back to the live writer');
+  assert.equal(inputs.length, 1, 'the writer was asked only once, past the scripted beats');
+  assert.equal(inputs[0].beatNumber, 4);
+
+  const st = engine.state();
+  assert.deepEqual(st.beats.slice(0, 3).map(b => b.beat.summary), ['Scripted summary 1.', 'Scripted summary 2.', 'Scripted summary 3.']);
+  assert.equal(st.beats[3].beat.summary, 'Summary 4.');
+  assert.match(st.beats[0].render.prompt, /Scripted beat 1/, 'the scripted beat records its real render prompt');
+});
+
+test('a writer switch keeps the scripted lane and moves only the fallback', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-scripted-switch-'));
+  const { engine, calls, inputs } = makeEngine(dir, {
+    budgetUsd: budgetFor(3),
+    scriptedBeats: [scriptedBeat(1)],
+  });
+  await engine.init();
+  await engine.configure({ writer: 'mistral-small-2603' });
+  await engine.start();
+  await waitForStop(engine);
+
+  assert.match(calls[0].prompt, /Scripted beat 1/, 'the scripted beat is served even after a writer switch');
+  assert.equal(inputs[0].beatNumber, 2, 'the fallback writer was not asked for beat 1');
+  assert.equal(engine.state().beats[1].beat.summary, 'Summary 2.', 'the fallback took over past the file');
+});
+
+test('parseScriptedBeats accepts arrays, {beats}, and export.json entries; rejects junk', () => {
+  const beat = scriptedBeat(1);
+  assert.deepEqual(parseScriptedBeats([beat]).map(b => b.description), [beat.description]);
+  assert.deepEqual(parseScriptedBeats({ beats: [beat] }).map(b => b.description), [beat.description]);
+  assert.deepEqual(parseScriptedBeats({ beats: [{ n: 1, authored: beat }] }).map(b => b.description), [beat.description]);
+
+  assert.throws(() => parseScriptedBeats({ nope: true }), /array of beats/);
+  assert.throws(() => parseScriptedBeats([null]), /not an object/);
+  assert.throws(() => parseScriptedBeats(['a string']), /not an object/);
+});
+
+test('makeScriptedAuthor falls through and logs past the last scripted beat', async () => {
+  const lines = [];
+  const fallback = async (input) => ({ description: `Live ${input.beatNumber}.`, characters: [], dialogue: null, sfx: null, cameraMovement: 'static', summary: `Live ${input.beatNumber}.` });
+  const author = makeScriptedAuthor([scriptedBeat(1)], fallback, l => lines.push(l));
+  assert.equal((await author({ beatNumber: 1, series: {}, storySoFar: '', recentBeats: [] })).description, 'Scripted beat 1: the robot refills the coffee.');
+  assert.equal((await author({ beatNumber: 2, series: {}, storySoFar: '', recentBeats: [] })).description, 'Live 2.');
+  assert.equal(lines.length, 1, 'the handover is logged once');
+  assert.match(lines[0], /past the 1 pre-written beat/);
 });
