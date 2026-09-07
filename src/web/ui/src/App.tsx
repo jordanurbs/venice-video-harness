@@ -145,7 +145,10 @@ export function App() {
               {tab === 'Script' && <ScriptView slug={slug} state={state} busy={busy} />}
               {tab === 'Shots' && <ShotsView slug={slug} state={state} busy={busy} />}
               {tab === 'Dailies' && <DailiesView slug={slug} state={state} busy={busy} />}
-              {tab === 'Stream' && <StreamView slug={slug} state={state} busy={busy} />}
+              {/* Key by slug so switching projects remounts the view with fresh
+                  state — otherwise the previous project's beats and its
+                  attached/disabled controls leak into the new project. */}
+              {tab === 'Stream' && <StreamView key={slug} slug={slug} state={state} busy={busy} />}
               {tab === 'Cast & Locations' && <CastView slug={slug} state={state} busy={busy} />}
               {tab === 'Post' && <PostView slug={slug} state={state} busy={busy} />}
               {tab === 'Settings' && <SettingsView slug={slug} busy={busy} />}

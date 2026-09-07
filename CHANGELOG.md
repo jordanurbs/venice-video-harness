@@ -1,5 +1,70 @@
 # Changelog
 
+## 2.24.0 — 2026-09-07
+
+### Added
+
+- **Look-ahead writer buffer — the writer authors beats ahead of the render by
+  default.** The stream now runs the writer and the renderer as a
+  producer/consumer pair: the writer keeps up to `--lookahead` beats (default
+  **15**) authored and waiting in a buffer, so a render never blocks on a
+  writer-model call. Priming fills the buffer while the stream is paused, so
+  clicking Start renders back to back with no writer latency. This also lets a
+  slower, better writer keep pace as long as it stays ahead.
+  - `--lookahead <n>` sets the buffer depth. `0` restores the pre-2.24 serial
+    behaviour (author each beat just before it renders).
+  - `--no-refill` fills the buffer once, then authors on demand as it drains;
+    the default keeps the buffer topped up as the renderer consumes it.
+  - Both are switchable at runtime from the Stream tab (a **Look-ahead buffer**
+    control: depth input + "keep topped up" toggle) and via
+    `POST /stream/config` (`lookahead`, `autoRefill`). The Stream tab shows a
+    live `buffered / depth` meter.
+  - Switching the writer drops the beats the old writer had buffered (keeping
+    only the one on the wire) so the new writer takes over from the next beat.
+  - Budget still bounds it: the writer never authors beats the budget cannot
+    render. The buffer persists in the manifest (`pendingBeats`) so a resume
+    renders the pre-authored beats without paying for them again.
+  - Engine: `lookahead` / `autoRefill` on `StreamEngineOptions`, `lookahead` /
+    `autoRefill` / `buffered` / `pendingBeats` in the manifest, and
+    `STREAM_DEFAULT_LOOKAHEAD` (15), all exported.
+
+### Changed
+
+- **Default stream video family is now `minimax-h3-max`, pinned to 480P.** Turbo
+  reads noticeably lower quality, so the default is the sharper MiniMax H3 Max
+  model — but kept at **480P** (not its 768P draft tier) so it still generates
+  fast: ~45 s/beat at $0.22 per 15 s (verified via `POST /video/quote`; 768P is
+  $0.36 and selectable). It renders slower than playback, but the look-ahead
+  buffer takes the writer latency out of the picture and the Stream tab shows
+  the hold honestly. Turbo ($0.11, ~30 s) is still one dropdown away for a
+  cheaper live watch. `STREAM_DEFAULT_VIDEO_FAMILY`, the default
+  `STREAM_MODEL_T2V` / `STREAM_MODEL_I2V` lanes, the H3 Max draft resolution,
+  and the CLI `--video-family` default all move to `minimax-h3-max` @ 480P.
+
+### Fixed
+
+- **Stream tab: switching projects no longer leaks the previous project's
+  beats or its disabled/attached controls.** The view is keyed by project, so
+  it remounts with fresh state on a project switch (the old project's beats
+  stayed under the player, and the writer/video/resolution selects stayed
+  greyed out because the engine was still bound to the other project).
+
+## 2.23.0 — 2026-09-07
+
+### Added
+
+- **Pre-written beats for the stream: `stream --beats-file`.** Author beats up
+  front and the stream renders them without ever calling the writer model.
+  Accepts a bare JSON array of beats or the `{ "beats": [...] }` shape of
+  `/stream/export.json` (entries with an `authored` object are unwrapped, so an
+  exported stream replays as-is). Each entry is normalized against the locked
+  cast the same way a writer's output would be; a beat with no description
+  fails at load, before anything bills. The live writer (defaulting to
+  `STREAM_DEFAULT_WRITER` for a new stream) is only the fallback past the last
+  scripted beat, and a writer switch from the Stream tab changes only that
+  fallback. Engine side: `scriptedBeats` on `StreamEngineOptions`,
+  `makeScriptedAuthor()`, and `parseScriptedBeats()`, all exported.
+
 ## 2.22.1 — 2026-09-05
 
 ### Added

@@ -944,6 +944,58 @@ venice-video loop -p ~/VeniceVideos/my-film -e 1 --mode looping    # or state it
 venice-video loop -p ~/VeniceVideos/my-film -e 1 --mode production
 ```
 
+### Pre-written beats: `stream --beats-file`
+
+The stream writes every beat with a live writer model. To author the beats
+yourself — or have an agent write them up front — pass `--beats-file`. The
+first N beats of the stream are then served from the file and the writer model
+is **never called** for them; only if the stream runs past the last scripted
+beat does the live writer take over (defaulting to `STREAM_DEFAULT_WRITER`).
+
+```bash
+venice-video stream -p ~/VeniceVideos/my-film -e 1 \
+  --beats-file ~/VeniceVideos/my-film/beats.json \
+  --direction "live studio audience laugh track after every joke" \
+  --budget 2
+```
+
+With `--beats-file` a new stream needs no `--writer`: the file IS the writer
+decision for the beats it covers. A `--writer` still overrides the fallback
+used past the file. On resume the scripted lane re-attaches the same way —
+beats already rendered are never re-rendered, and a writer switch from the
+Stream tab changes only the fallback.
+
+The file is JSON and accepts two shapes:
+
+```jsonc
+// 1. A bare array of beats.
+[
+  {
+    "description": "The bell jingles as JAKE strides in and takes the couch.",
+    "characters": ["JAKE KELLER", "MEL"],
+    "dialogue": { "character": "JAKE KELLER", "line": "The usual.", "delivery": "cheerful" },
+    "sfx": "door bell, live studio audience applause",
+    "cameraMovement": "slow dolly in to a wide of the cafe",
+    "summary": "Jake arrives at the cafe."
+  }
+]
+```
+
+```jsonc
+// 2. The { "beats": [...] } shape of /stream/export.json — entries with an
+//    "authored" object are unwrapped, so an exported stream replays as-is.
+{ "beats": [ { "n": 1, "authored": { "description": "…", … } } ] }
+```
+
+Beat fields match `AuthoredBeat` in `stream-engine.ts`. Each entry is
+normalized against the locked cast (names snap to the cast's spelling, missing
+fields are completed), and a beat with no `description` fails at load — before
+anything bills. The stream's continuity rules still apply to what you write:
+each beat is one continuous shot that begins where the previous beat ended,
+and every beat should END on a wide or medium-wide frame, never a human-face
+close-up (the next beat chains off that frame, and MiniMax i2v dies on a
+face-filled start frame — anti-pattern 31).
+
 Loop mode starts with one **required, deliberate decision** — **is this for
 LOOPING or for PRODUCTION?** — because it is a real quality-vs-flow tradeoff, not
 a default to fall through. In a terminal it asks; non-interactively you must pass
@@ -1061,7 +1113,7 @@ How it works:
    writer and the per-beat cost print before beat 1 bills.
 2. The writer writes beat 1 from the series bible: concept, setting, aesthetic,
    and cast.
-3. Beat 1 renders text-to-video on MiniMax H3 Max Turbo.
+3. Beat 1 renders text-to-video on MiniMax H3 Max (the default; the faster, lower-quality Turbo lane is selectable).
 4. The writer reads `story-so-far.md` (one line per prior beat) plus the last
    6 beats verbatim, and writes beat 2 so it begins exactly where beat 1 ended.
 5. Beat 2 renders image-to-video off beat 1's last frame.
@@ -1081,12 +1133,38 @@ venice-video stream -p <dir> \
   -e 1 \                    # episode the stream lives under (default 1)
   --direction "<text>" \    # standing direction folded into every beat's writer prompt
   --writer <model> \        # writer; asked for a new stream, required non-interactively (see the bakeoff table)
-  --video-family <family> \ # minimax-h3-max-turbo (default) | minimax-h3-max | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard
+  --video-family <family> \ # minimax-h3-max (default) | minimax-h3-max-turbo | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard
   --resolution 480P \       # default: the family's draft tier
   --duration 15s \          # per-beat length, snapped to the 5-15s ladder
+  --lookahead 15 \          # beats authored AHEAD of the render (0 = serial)
   --budget 2                # stop after ~$2; Continue authorizes another budget
+# --no-refill               # fill the look-ahead buffer once, then author on demand
 # --unbounded               # no cap (streams until Ctrl-C)
 ```
+
+#### Look-ahead writer buffer
+
+By default the writer runs **ahead** of the render. It is a producer/consumer
+pair: the writer keeps up to `--lookahead` beats (default **15**) authored and
+waiting in a buffer, and the renderer pulls from it — so a render never blocks
+on a writer-model call. While the stream is paused after priming, the writer is
+already filling the buffer, so clicking Start renders back to back with no
+writer latency between beats. It also lets you run a slower, better writer
+without stalling playback, as long as the writer stays ahead of the render.
+
+- `--lookahead <n>` sets the depth. `0` is serial: each beat is authored just
+  before it renders (the pre-2.24 behaviour), so every beat pays the writer
+  latency.
+- `--no-refill` fills the buffer once and then authors on demand as it drains;
+  the default keeps it topped up to the depth as the renderer consumes it.
+- Both are switchable live from the Stream tab (the **Look-ahead buffer**
+  control — a depth field and a "keep topped up" toggle) and via
+  `POST /stream/config`. The tab shows a live `buffered / depth` meter.
+- Switching the writer drops the beats the old writer had queued (keeping only
+  the one on the wire) so the new writer takes over from the next beat.
+- The budget still bounds it — the writer never authors beats the budget cannot
+  render — and the buffer is saved in `stream-manifest.json` (`pendingBeats`),
+  so a resume renders the pre-authored beats without paying for them again.
 
 The stream is resumable: re-running `stream` continues from the last beat on
 disk and chains off it. After 3 consecutive failures (write, chain, or render)
@@ -1171,16 +1249,18 @@ Not offered, with the reason:
 ##### Video Family Matrix
 
 Speed is the wall time to render one 15 s beat. "Lag" is what the viewer
-feels: with the default writer (~4 s) added, Turbo makes a 15 s beat in ~35 s,
-so the player holds ~20 s between beats once it has caught up. Every other
-family holds for a minute or more. Cost is the quote for 15 s at the family's
+feels: the default `minimax-h3-max` at 480P renders a 15 s beat in ~45 s, so the
+player holds ~30 s between beats once it has caught up; the faster Turbo lane
+cuts that to a ~20 s hold at lower quality. The look-ahead buffer takes the
+writer's time out of this — only the render remains. Every family other than
+Turbo holds for a minute or more. Cost is the quote for 15 s at the family's
 draft resolution. Quality is relative to what the harness knows about each
 family (see the model registry and AGENTS.md).
 
 | Family | Privacy | Speed (15 s beat) | Cost / 15 s | Quality | Faces on start frame | Verdict |
 |---|---|---|---|---|---|---|
-| `minimax-h3-max-turbo` **(default)** | ●●● private | ●●● ~30 s | ●●● $0.11 | ●●○ good motion, native audio, improvises dialogue | ✗ dies after billing; engine soft-resets | The only lane that nearly keeps pace. Draft look at 480P; 768P selectable. |
-| `minimax-h3-max` | ●●● private | ●●○ ~60 s | ●●● $0.22 | ●●● sharper than Turbo, same model family | ✗ same limit | Pick when you want the Turbo look at finish quality and will accept a 1-minute hold. |
+| `minimax-h3-max` **(default)** | ●●● private | ●●○ ~45 s @ 480P | ●●● $0.22 | ●●● sharper than Turbo, same model | ✗ dies after billing; engine soft-resets | The default. H3 Max quality pinned to 480P for speed; ~30 s hold. 768P selectable at $0.36. |
+| `minimax-h3-max-turbo` | ●●● private | ●●● ~30 s | ●●● $0.11 | ●●○ good motion, native audio, lower quality | ✗ same limit | Fastest and cheapest, the only lane that nearly keeps pace. Draft look at 480P; pick when a live watch matters more than fidelity. |
 | `wan-3-0` | ●○○ anonymized | ●○○ ~120 s | ●●○ $0.68 | ●●● strong, up to 1080p, 30 s ladder | ✓ accepts faces | Best choice if the show is face-heavy and the camera rule is not enough. Slow. |
 | `grok-imagine` | ●○○ anonymized | ●○○ ~90 s | ●○○ $0.95 | ●●○ | ✓ | Faster than Wan, pricier, lower ceiling. |
 | `seedance-2-0` | ●○○ anonymized | ○○○ ~180 s | ●○○ $1.32 | ●●● the harness production look, native lip-synced dialogue | ✓ | Production fidelity. The viewer waits ~3 min per beat. Use for a stream you export, not one you watch. |
@@ -1193,7 +1273,8 @@ family (see the model registry and AGENTS.md).
 |---|---|---|---|
 | Watch it live, cheapest, private | `deepseek-v4-flash-0731-fast` | `minimax-h3-max-turbo` @ 480P | ~35 s per beat, ~20 s hold, ~$0.11/beat, ~$13/hour of story |
 | Watch it live, best sitcom writing | `mistral-small-2603` | `minimax-h3-max-turbo` | Same lag, warmer beats |
-| Sharper picture, still private | `deepseek-v4-flash-0731-fast` | `minimax-h3-max` @ 768P | ~65 s per beat, ~50 s hold, $0.22/beat |
+| Sharper picture, still fast (default) | `deepseek-v4-flash-0731-fast` | `minimax-h3-max` @ 480P | ~45 s per beat, ~30 s hold, $0.22/beat |
+| Max fidelity, will accept the wait | `deepseek-v4-flash-0731-fast` | `minimax-h3-max` @ 768P | ~65 s per beat, ~50 s hold, $0.36/beat |
 | Human faces fill the frame often | any fast writer | `wan-3-0` | Faces never kill the chain; ~2 min per beat |
 | Production look to export later | `kimi-k3` | `seedance-2-0` or `-2-5` | ~3.5 min per beat, $1.32-1.93/beat; run it overnight, do not watch it live |
 | Strict privacy for both text and pixels | `deepseek-v4-flash-0731-fast` or `mistral-small-2603` | `minimax-h3-max-turbo` or `minimax-h3-max` | The only fully private pairing; MiniMax is the sole private video family here |

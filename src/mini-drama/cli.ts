@@ -5003,17 +5003,20 @@ program
   .option('-e, --episode <number>', 'Episode number the stream lives under', '1')
   .option('--direction <text>', 'Standing direction folded into every beat (e.g. "live studio audience laugh track after every joke")')
   .option('--writer <model>', 'Model that writes beats. Asked interactively for a new stream; required (or "default" = deepseek-v4-flash-0731-fast, the fastest reliable writer in the bakeoff) in a non-interactive run. A resumed stream keeps the writer it last ran with. Switchable from the Stream tab.')
-  .option('--video-family <family>', 'Video family for the beats: minimax-h3-max-turbo (default; the only one that keeps pace with playback) | minimax-h3-max | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard. Switchable from the Stream tab.')
+  .option('--beats-file <path>', 'JSON file of pre-written beats served in order before the live writer runs — no writer call for the beats it covers. Accepts an array of beats or { "beats": [...] } (the /stream/export.json shape; entries with an "authored" object are unwrapped). Each beat: { description, characters, dialogue: { character, line, delivery? } | null, sfx, cameraMovement, summary }.')
+  .option('--video-family <family>', 'Video family for the beats: minimax-h3-max (default; higher fidelity, renders slower than playback) | minimax-h3-max-turbo (fastest and cheapest, nearly keeps pace, lower quality) | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard. Switchable from the Stream tab.')
   .option('--port <port>', 'Port to listen on', '3000')
   .option('--host <host>', 'Host to bind (localhost only by default)', '127.0.0.1')
   .option('--resolution <res>', 'Render resolution (default: the video family\'s draft tier, 480P on MiniMax)')
   .option('--duration <dur>', 'Per-beat duration, snapped to the 5-15s ladder', '15s')
   .option('--budget <usd>', 'Stop after this much estimated spend (each Start authorizes another budget)', '2')
   .option('--unbounded', 'No budget cap — stream until stopped', false)
+  .option('--lookahead <n>', 'How many beats the writer authors AHEAD of the renderer so a render never waits on a writer call. 0 = serial (author each beat just before it renders).', '15')
+  .option('--no-refill', 'Fill the look-ahead buffer once at the start, then stop topping it up (author on demand after it drains). Default keeps the buffer full as it drains.')
   .option('--no-open', 'Do not open the browser automatically')
   .action(async (opts: {
-    project: string; episode: string | number; direction?: string; writer?: string; videoFamily?: string; port: string; host: string;
-    resolution?: string; duration: string; budget: string; unbounded: boolean; open: boolean;
+    project: string; episode: string | number; direction?: string; writer?: string; beatsFile?: string; videoFamily?: string; port: string; host: string;
+    resolution?: string; duration: string; budget: string; unbounded: boolean; lookahead: string; refill: boolean; open: boolean;
   }) => {
     const json = wantsJson();
     const port = Number.parseInt(opts.port, 10);
@@ -5042,6 +5045,11 @@ program
     }
 
     const budgetUsd = Number.parseFloat(opts.budget);
+    const lookahead = Number.parseInt(String(opts.lookahead), 10);
+    if (!Number.isFinite(lookahead) || lookahead < 0) {
+      failJson(json, `--lookahead must be a non-negative integer (0 = serial). Got "${opts.lookahead}".`);
+      process.exit(1);
+    }
     const slug = series.slug;
     const workspace = dirname(projectDir);
     if (basename(projectDir) !== slug) {
@@ -5062,6 +5070,10 @@ program
       writer = opts.writer === 'default' ? STREAM_DEFAULT_WRITER : opts.writer;
     } else if (resumed) {
       writer = undefined; // the engine keeps the manifest's writer
+    } else if (opts.beatsFile) {
+      // Pre-written beats skip the writer for the beats they cover. The stored
+      // model is only the fallback past the last scripted beat.
+      writer = STREAM_DEFAULT_WRITER;
     } else if (!json && stdin.isTTY) {
       writer = await promptChoice('Which model writes the beats? (its speed sets how far the stream lags playback)', STREAM_WRITER_CHOICES.map(w => ({
         label: `${w.label} — ~${w.medianSec}s/beat, ${w.reliability} valid, ${w.privacy}${w.id === STREAM_DEFAULT_WRITER ? ' (default)' : ''}`,
@@ -5077,6 +5089,33 @@ program
       failJson(json, `Unknown --video-family "${opts.videoFamily}". Choices: ${STREAM_VIDEO_CHOICES.map(v => v.id).join(', ')}.`);
       process.exit(1);
       return;
+    }
+
+    // Pre-written beats are normalized against the locked cast the same way a
+    // writer's output would be: names snap to the cast's spelling, missing
+    // fields are completed, and a beat with no description fails here — before
+    // anything bills.
+    let scriptedBeats: import('./stream-engine.js').AuthoredBeat[] | undefined;
+    if (opts.beatsFile) {
+      const beatsPath = resolve(opts.beatsFile);
+      if (!existsSync(beatsPath)) {
+        failJson(json, `Beats file not found: ${beatsPath}`);
+        process.exit(1);
+        return;
+      }
+      const { parseScriptedBeats, normalizeBeat } = await import('./stream-engine.js');
+      try {
+        const raw = JSON.parse(await readFile(beatsPath, 'utf-8')) as unknown;
+        scriptedBeats = parseScriptedBeats(raw).map((b, i) => {
+          try { return normalizeBeat(b, series); }
+          catch (err) { throw new Error(`beat ${i + 1}: ${(err as Error).message}`); }
+        });
+      } catch (err) {
+        failJson(json, `Could not load --beats-file: ${(err as Error).message}`);
+        process.exit(1);
+        return;
+      }
+      if (!json) console.log(`Loaded ${scriptedBeats.length} pre-written beat(s) from ${beatsPath}.`);
     }
 
     // The stream needs only series.json, but the browser builds its episode
@@ -5113,6 +5152,9 @@ program
       budgetUsd: Number.isFinite(budgetUsd) ? budgetUsd : undefined,
       unbounded: opts.unbounded,
       direction: opts.direction,
+      scriptedBeats,
+      lookahead,
+      autoRefill: opts.refill,
       broadcaster: hub,
     });
     await engine.init();
@@ -5131,7 +5173,7 @@ program
     // story. A resumed session (beats on disk) opens at once, also paused.
     const before = engine.state();
     if (!json && before.beats.length === 0) {
-      const perBeat = (getStreamVideoChoice(before.videoFamily)?.usdPer15s ?? 0.11) * (Number.parseInt(before.duration, 10) / 15);
+      const perBeat = (getStreamVideoChoice(before.videoFamily)?.usdPer15s ?? 0.22) * (Number.parseInt(before.duration, 10) / 15);
       const fam = getStreamVideoChoice(before.videoFamily);
       console.log(`Writer: ${describeStreamWriter(before.model.writer)}. Video: ${before.model.t2v} @ ${before.resolution || 'default'}, ${before.duration}/beat, about $${perBeat.toFixed(2)} per beat (billed at queue time)${fam && fam.speed !== 'keeps up' ? ` — ${fam.label} renders slower than playback (~${fam.renderSecApprox}s per beat)` : ''}.`);
       console.log('Rendering the opening beat before opening the browser…');
@@ -5149,6 +5191,8 @@ program
         resolution: status.resolution,
         duration: status.duration,
         budget: opts.unbounded ? 'unbounded' : budgetUsd,
+        lookahead,
+        autoRefill: opts.refill,
         beats: status.beats.length,
       });
     } else {
@@ -5158,6 +5202,8 @@ program
       console.log(`  video:      ${status.model.t2v} (beat 1) then ${status.model.i2v} chained off each last frame @ ${status.resolution || 'default'}, ${status.duration}/beat`);
       console.log('  models:     switch the writer or the video model any time from the Stream tab; changes apply to the next beat.');
       console.log(`  direction:  ${opts.direction ?? '(none)'}`);
+      console.log(`  lookahead:  ${lookahead > 0 ? `${lookahead} beats authored ahead of the render${opts.refill ? ', kept topped up' : ', filled once then on demand'} (no writer latency between beats)` : 'serial — each beat is authored just before it renders'}`);
+      if (scriptedBeats?.length) console.log(`  beats-file: ${scriptedBeats.length} pre-written beat(s) render before the live writer takes over`);
       console.log(`  budget:     ${opts.unbounded ? 'unbounded (streams until you stop it)' : `$${budgetUsd.toFixed(2)} (Start authorizes another budget)`}`);
       console.log(`  beats:      ${status.beats.length} on disk`);
       console.log('  state:      PAUSED — click Start in the browser to continue the story. New beats then render back to back.');

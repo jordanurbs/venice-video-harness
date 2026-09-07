@@ -134,6 +134,12 @@ export interface StreamManifest {
   duration: string;
   budgetUsd: number | null;
   unbounded: boolean;
+  /** How many beats the writer authors ahead of the renderer (0 = serial). */
+  lookahead: number;
+  /** Keep the look-ahead buffer topped up as the renderer drains it. */
+  autoRefill: boolean;
+  /** Authored-but-not-yet-rendered beats waiting in the buffer, right now. */
+  buffered: number;
   spendUsd: number;
   running: boolean;
   status: StreamStatus;
