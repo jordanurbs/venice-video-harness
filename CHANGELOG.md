@@ -30,14 +30,16 @@
 
 ### Changed
 
-- **Default stream video family is now `minimax-h3-max`, not `-turbo`.** Turbo
-  (480P, ~30 s/beat) reads noticeably lower quality; the default is now MiniMax
-  H3 Max at 768P (~60 s/beat, $0.22 vs $0.11). It renders slower than playback,
-  but the look-ahead buffer takes the writer latency out of the picture and the
-  Stream tab shows the hold honestly. Turbo is still one dropdown away for a
-  faster, cheaper live watch. `STREAM_DEFAULT_VIDEO_FAMILY`, the default
-  `STREAM_MODEL_T2V` / `STREAM_MODEL_I2V` lanes, and the CLI `--video-family`
-  default all move to `minimax-h3-max`.
+- **Default stream video family is now `minimax-h3-max`, pinned to 480P.** Turbo
+  reads noticeably lower quality, so the default is the sharper MiniMax H3 Max
+  model — but kept at **480P** (not its 768P draft tier) so it still generates
+  fast: ~45 s/beat at $0.22 per 15 s (verified via `POST /video/quote`; 768P is
+  $0.36 and selectable). It renders slower than playback, but the look-ahead
+  buffer takes the writer latency out of the picture and the Stream tab shows
+  the hold honestly. Turbo ($0.11, ~30 s) is still one dropdown away for a
+  cheaper live watch. `STREAM_DEFAULT_VIDEO_FAMILY`, the default
+  `STREAM_MODEL_T2V` / `STREAM_MODEL_I2V` lanes, the H3 Max draft resolution,
+  and the CLI `--video-family` default all move to `minimax-h3-max` @ 480P.
 
 ### Fixed
 

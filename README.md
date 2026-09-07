@@ -1249,17 +1249,17 @@ Not offered, with the reason:
 ##### Video Family Matrix
 
 Speed is the wall time to render one 15 s beat. "Lag" is what the viewer
-feels: the default `minimax-h3-max` renders a 15 s beat in ~60 s, so the player
-holds ~45 s between beats once it has caught up; the faster Turbo lane cuts that
-to a ~20 s hold at lower quality. The look-ahead buffer takes the writer's time
-out of this — only the render remains. Every family other than Turbo holds for a
-minute or more. Cost is the quote for 15 s at the family's draft resolution.
-Quality is relative to what the harness knows about each family (see the model
-registry and AGENTS.md).
+feels: the default `minimax-h3-max` at 480P renders a 15 s beat in ~45 s, so the
+player holds ~30 s between beats once it has caught up; the faster Turbo lane
+cuts that to a ~20 s hold at lower quality. The look-ahead buffer takes the
+writer's time out of this — only the render remains. Every family other than
+Turbo holds for a minute or more. Cost is the quote for 15 s at the family's
+draft resolution. Quality is relative to what the harness knows about each
+family (see the model registry and AGENTS.md).
 
 | Family | Privacy | Speed (15 s beat) | Cost / 15 s | Quality | Faces on start frame | Verdict |
 |---|---|---|---|---|---|---|
-| `minimax-h3-max` **(default)** | ●●● private | ●●○ ~60 s | ●●● $0.22 | ●●● sharper than Turbo, same family, 768P | ✗ dies after billing; engine soft-resets | The default. Finish-quality picture; ~1-minute hold between beats. |
+| `minimax-h3-max` **(default)** | ●●● private | ●●○ ~45 s @ 480P | ●●● $0.22 | ●●● sharper than Turbo, same model | ✗ dies after billing; engine soft-resets | The default. H3 Max quality pinned to 480P for speed; ~30 s hold. 768P selectable at $0.36. |
 | `minimax-h3-max-turbo` | ●●● private | ●●● ~30 s | ●●● $0.11 | ●●○ good motion, native audio, lower quality | ✗ same limit | Fastest and cheapest, the only lane that nearly keeps pace. Draft look at 480P; pick when a live watch matters more than fidelity. |
 | `wan-3-0` | ●○○ anonymized | ●○○ ~120 s | ●●○ $0.68 | ●●● strong, up to 1080p, 30 s ladder | ✓ accepts faces | Best choice if the show is face-heavy and the camera rule is not enough. Slow. |
 | `grok-imagine` | ●○○ anonymized | ●○○ ~90 s | ●○○ $0.95 | ●●○ | ✓ | Faster than Wan, pricier, lower ceiling. |
@@ -1273,7 +1273,8 @@ registry and AGENTS.md).
 |---|---|---|---|
 | Watch it live, cheapest, private | `deepseek-v4-flash-0731-fast` | `minimax-h3-max-turbo` @ 480P | ~35 s per beat, ~20 s hold, ~$0.11/beat, ~$13/hour of story |
 | Watch it live, best sitcom writing | `mistral-small-2603` | `minimax-h3-max-turbo` | Same lag, warmer beats |
-| Sharper picture, still private | `deepseek-v4-flash-0731-fast` | `minimax-h3-max` @ 768P | ~65 s per beat, ~50 s hold, $0.22/beat |
+| Sharper picture, still fast (default) | `deepseek-v4-flash-0731-fast` | `minimax-h3-max` @ 480P | ~45 s per beat, ~30 s hold, $0.22/beat |
+| Max fidelity, will accept the wait | `deepseek-v4-flash-0731-fast` | `minimax-h3-max` @ 768P | ~65 s per beat, ~50 s hold, $0.36/beat |
 | Human faces fill the frame often | any fast writer | `wan-3-0` | Faces never kill the chain; ~2 min per beat |
 | Production look to export later | `kimi-k3` | `seedance-2-0` or `-2-5` | ~3.5 min per beat, $1.32-1.93/beat; run it overnight, do not watch it live |
 | Strict privacy for both text and pixels | `deepseek-v4-flash-0731-fast` or `mistral-small-2603` | `minimax-h3-max-turbo` or `minimax-h3-max` | The only fully private pairing; MiniMax is the sole private video family here |

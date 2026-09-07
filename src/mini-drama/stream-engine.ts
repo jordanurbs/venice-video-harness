@@ -47,10 +47,10 @@ export type RenderFn = (client: VeniceClient, options: RenderVideoOptions) => Pr
 /** The writer primitive, injectable so tests can author beats offline. */
 export type AuthorFn = (input: AuthorInput) => Promise<AuthoredBeat>;
 
-// Default lanes: MiniMax H3 Max — higher fidelity than the Turbo lane, at 768P
-// and ~60s per 15s beat (slower than playback; the look-ahead buffer hides the
-// writer latency, not the render). The cheaper/faster Turbo lane and other
-// families are selectable (see stream-choices.ts).
+// Default lanes: MiniMax H3 Max — higher fidelity than the Turbo lane, pinned
+// to 480P for speed (~45s per 15s beat; still slower than playback, but the
+// look-ahead buffer hides the writer latency, not the render). The cheaper
+// Turbo lane, 768P, and other families are selectable (see stream-choices.ts).
 export const STREAM_MODEL_T2V = 'minimax-h3-max-text-to-video';
 export const STREAM_MODEL_I2V = 'minimax-h3-max-image-to-video';
 export { STREAM_WRITER_CHOICES, STREAM_VIDEO_CHOICES, STREAM_DEFAULT_WRITER } from './stream-choices.js';

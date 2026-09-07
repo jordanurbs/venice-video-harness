@@ -106,8 +106,8 @@ export const STREAM_VIDEO_CHOICES: ReadonlyArray<StreamVideoChoice> = [
   {
     id: 'minimax-h3-max', label: 'MiniMax H3 Max (default)',
     t2v: 'minimax-h3-max-text-to-video', i2v: 'minimax-h3-max-image-to-video',
-    resolution: '768P', resolutions: ['480P', '768P'], usdPer15s: 0.22, renderSecApprox: 60, speed: 'falls behind',
-    note: 'The default. Higher fidelity at 768P; ~60s per 15s beat, so it renders slower than playback — the look-ahead buffer hides the writer latency but not the render. Native audio. i2v dies on a face-filled start frame (the engine soft-resets).',
+    resolution: '480P', resolutions: ['480P', '768P'], usdPer15s: 0.22, renderSecApprox: 45, speed: 'falls behind',
+    note: 'The default: sharper than the Turbo lane, pinned to 480P for speed (~45s per 15s beat, $0.22). Still renders slower than playback; the look-ahead buffer hides the writer latency, not the render. 768P is selectable at $0.36 (~60s). Native audio. i2v dies on a face-filled start frame (the engine soft-resets).',
   },
   {
     id: 'minimax-h3-max-turbo', label: 'MiniMax H3 Max Turbo',
