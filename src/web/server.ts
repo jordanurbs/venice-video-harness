@@ -424,7 +424,7 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
       }
       if (req.method !== 'POST') { sendJson(res, 405, { error: 'Method not allowed' }); return; }
 
-      let body: { budget?: number; unbounded?: boolean; writer?: string; videoFamily?: string; resolution?: string };
+      let body: { budget?: number; unbounded?: boolean; writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean };
       try {
         body = await readBody(req) as typeof body;
       } catch (err) {
@@ -434,10 +434,12 @@ export async function startWebServer(options: WebServerOptions): Promise<{ close
       try {
         if (action === 'config') {
           // Model switch from the Stream tab. Applies to the next beat.
-          const config: { writer?: string; videoFamily?: string; resolution?: string } = {};
+          const config: { writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean } = {};
           if (typeof body.writer === 'string' && body.writer.trim()) config.writer = body.writer.trim();
           if (typeof body.videoFamily === 'string' && body.videoFamily.trim()) config.videoFamily = body.videoFamily.trim();
           if (typeof body.resolution === 'string' && body.resolution.trim()) config.resolution = body.resolution.trim();
+          if (typeof body.lookahead === 'number' && Number.isFinite(body.lookahead)) config.lookahead = body.lookahead;
+          if (typeof body.autoRefill === 'boolean') config.autoRefill = body.autoRefill;
           sendJson(res, 200, await engine.configure(config));
           return;
         }

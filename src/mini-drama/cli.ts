@@ -5011,10 +5011,12 @@ program
   .option('--duration <dur>', 'Per-beat duration, snapped to the 5-15s ladder', '15s')
   .option('--budget <usd>', 'Stop after this much estimated spend (each Start authorizes another budget)', '2')
   .option('--unbounded', 'No budget cap — stream until stopped', false)
+  .option('--lookahead <n>', 'How many beats the writer authors AHEAD of the renderer so a render never waits on a writer call. 0 = serial (author each beat just before it renders).', '15')
+  .option('--no-refill', 'Fill the look-ahead buffer once at the start, then stop topping it up (author on demand after it drains). Default keeps the buffer full as it drains.')
   .option('--no-open', 'Do not open the browser automatically')
   .action(async (opts: {
     project: string; episode: string | number; direction?: string; writer?: string; beatsFile?: string; videoFamily?: string; port: string; host: string;
-    resolution?: string; duration: string; budget: string; unbounded: boolean; open: boolean;
+    resolution?: string; duration: string; budget: string; unbounded: boolean; lookahead: string; refill: boolean; open: boolean;
   }) => {
     const json = wantsJson();
     const port = Number.parseInt(opts.port, 10);
@@ -5043,6 +5045,11 @@ program
     }
 
     const budgetUsd = Number.parseFloat(opts.budget);
+    const lookahead = Number.parseInt(String(opts.lookahead), 10);
+    if (!Number.isFinite(lookahead) || lookahead < 0) {
+      failJson(json, `--lookahead must be a non-negative integer (0 = serial). Got "${opts.lookahead}".`);
+      process.exit(1);
+    }
     const slug = series.slug;
     const workspace = dirname(projectDir);
     if (basename(projectDir) !== slug) {
@@ -5146,6 +5153,8 @@ program
       unbounded: opts.unbounded,
       direction: opts.direction,
       scriptedBeats,
+      lookahead,
+      autoRefill: opts.refill,
       broadcaster: hub,
     });
     await engine.init();
@@ -5182,6 +5191,8 @@ program
         resolution: status.resolution,
         duration: status.duration,
         budget: opts.unbounded ? 'unbounded' : budgetUsd,
+        lookahead,
+        autoRefill: opts.refill,
         beats: status.beats.length,
       });
     } else {
@@ -5191,6 +5202,7 @@ program
       console.log(`  video:      ${status.model.t2v} (beat 1) then ${status.model.i2v} chained off each last frame @ ${status.resolution || 'default'}, ${status.duration}/beat`);
       console.log('  models:     switch the writer or the video model any time from the Stream tab; changes apply to the next beat.');
       console.log(`  direction:  ${opts.direction ?? '(none)'}`);
+      console.log(`  lookahead:  ${lookahead > 0 ? `${lookahead} beats authored ahead of the render${opts.refill ? ', kept topped up' : ', filled once then on demand'} (no writer latency between beats)` : 'serial — each beat is authored just before it renders'}`);
       if (scriptedBeats?.length) console.log(`  beats-file: ${scriptedBeats.length} pre-written beat(s) render before the live writer takes over`);
       console.log(`  budget:     ${opts.unbounded ? 'unbounded (streams until you stop it)' : `$${budgetUsd.toFixed(2)} (Start authorizes another budget)`}`);
       console.log(`  beats:      ${status.beats.length} on disk`);

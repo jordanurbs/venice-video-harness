@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.24.0 — 2026-09-07
+
+### Added
+
+- **Look-ahead writer buffer — the writer authors beats ahead of the render by
+  default.** The stream now runs the writer and the renderer as a
+  producer/consumer pair: the writer keeps up to `--lookahead` beats (default
+  **15**) authored and waiting in a buffer, so a render never blocks on a
+  writer-model call. Priming fills the buffer while the stream is paused, so
+  clicking Start renders back to back with no writer latency. This also lets a
+  slower, better writer keep pace as long as it stays ahead.
+  - `--lookahead <n>` sets the buffer depth. `0` restores the pre-2.24 serial
+    behaviour (author each beat just before it renders).
+  - `--no-refill` fills the buffer once, then authors on demand as it drains;
+    the default keeps the buffer topped up as the renderer consumes it.
+  - Both are switchable at runtime from the Stream tab (a **Look-ahead buffer**
+    control: depth input + "keep topped up" toggle) and via
+    `POST /stream/config` (`lookahead`, `autoRefill`). The Stream tab shows a
+    live `buffered / depth` meter.
+  - Switching the writer drops the beats the old writer had buffered (keeping
+    only the one on the wire) so the new writer takes over from the next beat.
+  - Budget still bounds it: the writer never authors beats the budget cannot
+    render. The buffer persists in the manifest (`pendingBeats`) so a resume
+    renders the pre-authored beats without paying for them again.
+  - Engine: `lookahead` / `autoRefill` on `StreamEngineOptions`, `lookahead` /
+    `autoRefill` / `buffered` / `pendingBeats` in the manifest, and
+    `STREAM_DEFAULT_LOOKAHEAD` (15), all exported.
+
+### Fixed
+
+- **Stream tab: switching projects no longer leaks the previous project's
+  beats or its disabled/attached controls.** The view is keyed by project, so
+  it remounts with fresh state on a project switch (the old project's beats
+  stayed under the player, and the writer/video/resolution selects stayed
+  greyed out because the engine was still bound to the other project).
+
 ## 2.23.0 — 2026-09-07
 
 ### Added

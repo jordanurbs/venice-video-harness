@@ -28,6 +28,8 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
   /** Beat number whose full video prompt is expanded in the list, if any. */
   const [promptOpen, setPromptOpen] = useState<number | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
+  /** Editable look-ahead depth; committed to the engine on blur / Enter. */
+  const [lookaheadDraft, setLookaheadDraft] = useState<string>('');
 
   const copyPrompt = async (b: StreamBeat) => {
     if (!b.render?.prompt) return;
@@ -77,6 +79,7 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
       const d = raw as {
         project?: string; episode?: number; status?: StreamStatus; running?: boolean;
         inFlight?: number; lastError?: string; spendUsd?: number; beat?: StreamBeat;
+        buffered?: number; lookahead?: number; autoRefill?: boolean;
       };
       if (d.project !== slug || (d.episode !== undefined && d.episode !== episodeNumber)) return;
       setAttached(true);
@@ -98,6 +101,9 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
           inFlight: d.inFlight,
           lastError: d.lastError,
           spendUsd: d.spendUsd ?? prev.spendUsd,
+          buffered: d.buffered ?? prev.buffered,
+          lookahead: d.lookahead ?? prev.lookahead,
+          autoRefill: d.autoRefill ?? prev.autoRefill,
         };
       });
     });
@@ -140,11 +146,22 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
   // Model switches apply to the NEXT beat. The engine keeps the manifest's
   // `model`/`videoFamily` as the source of truth; the selects are controlled
   // by it so a reload or an SSE snapshot never disagrees with the dropdowns.
-  const configure = async (payload: { writer?: string; videoFamily?: string; resolution?: string }) => {
+  const configure = async (payload: { writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean }) => {
     setError(null);
     const res = await streamControl(slug, 'config', payload);
     if ('error' in res) setError(res.error);
     else setStream(prev => prev ? { ...prev, ...res, beats: prev.beats.length >= res.beats.length ? prev.beats : res.beats } : res);
+  };
+
+  // Keep the depth input showing the engine's real value until the user edits it.
+  useEffect(() => {
+    if (stream && typeof stream.lookahead === 'number') setLookaheadDraft(String(stream.lookahead));
+  }, [stream?.lookahead]);
+
+  const commitLookahead = () => {
+    const n = Number.parseInt(lookaheadDraft, 10);
+    if (Number.isFinite(n) && n >= 0 && n !== (stream?.lookahead ?? -1)) configure({ lookahead: n });
+    else setLookaheadDraft(String(stream?.lookahead ?? 0)); // revert invalid / unchanged input
   };
 
   if (!episode) return <div className="empty">No episodes yet.</div>;
@@ -173,6 +190,14 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
           </span>
         )}
         <span className="dim small">{beats.length} beat{beats.length === 1 ? '' : 's'} so far</span>
+        {stream && (stream.lookahead ?? 0) > 0 && (
+          <span
+            className={`badge ${(stream.buffered ?? 0) > 0 ? 'pass' : 'none'}`}
+            title={`The writer authors beats ahead of the render so nothing waits on a writer call. ${stream.buffered ?? 0} authored and waiting; target depth ${stream.lookahead}${stream.autoRefill ? ', kept topped up' : ', fill once'}.`}
+          >
+            {stream.buffered ?? 0}/{stream.lookahead} buffered
+          </span>
+        )}
         <span style={{ flex: 1 }} />
         {stream && (
           <span className="dim small loop-meter">
@@ -249,6 +274,41 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
               );
             })()}
           </label>
+
+          <div className="small" style={{ display: 'grid', gap: 6 }}>
+            <span><strong>Look-ahead buffer</strong> <span className="dim">— beats authored before they render, so a render never waits on the writer.</span></span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span className="dim">depth</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={60}
+                  step={1}
+                  value={lookaheadDraft}
+                  disabled={!attached}
+                  onChange={ev => setLookaheadDraft(ev.target.value)}
+                  onBlur={commitLookahead}
+                  onKeyDown={ev => { if (ev.key === 'Enter') commitLookahead(); }}
+                  style={{ width: 64 }}
+                />
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }} title="Keep authoring to refill the buffer as the render drains it. Off = fill once, then author on demand.">
+                <input
+                  type="checkbox"
+                  checked={stream.autoRefill ?? true}
+                  disabled={!attached || (stream.lookahead ?? 0) === 0}
+                  onChange={ev => configure({ autoRefill: ev.target.checked })}
+                />
+                <span>keep topped up</span>
+              </label>
+            </div>
+            <span className="dim">
+              {(stream.lookahead ?? 0) === 0
+                ? 'Serial: each beat is authored just before it renders, so a render waits on the writer. Set a depth to author ahead.'
+                : `Writer stays up to ${stream.lookahead} beat(s) ahead${(stream.autoRefill ?? true) ? ', refilling as the render drains it' : '; fills once, then authors on demand after it drains'}. ${stream.buffered ?? 0} buffered now.`}
+            </span>
+          </div>
         </div>
       )}
 

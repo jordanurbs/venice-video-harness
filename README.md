@@ -1136,9 +1136,35 @@ venice-video stream -p <dir> \
   --video-family <family> \ # minimax-h3-max-turbo (default) | minimax-h3-max | wan-3-0 | grok-imagine | seedance-2-0 | seedance-2-5 | kling-o3-standard
   --resolution 480P \       # default: the family's draft tier
   --duration 15s \          # per-beat length, snapped to the 5-15s ladder
+  --lookahead 15 \          # beats authored AHEAD of the render (0 = serial)
   --budget 2                # stop after ~$2; Continue authorizes another budget
+# --no-refill               # fill the look-ahead buffer once, then author on demand
 # --unbounded               # no cap (streams until Ctrl-C)
 ```
+
+#### Look-ahead writer buffer
+
+By default the writer runs **ahead** of the render. It is a producer/consumer
+pair: the writer keeps up to `--lookahead` beats (default **15**) authored and
+waiting in a buffer, and the renderer pulls from it — so a render never blocks
+on a writer-model call. While the stream is paused after priming, the writer is
+already filling the buffer, so clicking Start renders back to back with no
+writer latency between beats. It also lets you run a slower, better writer
+without stalling playback, as long as the writer stays ahead of the render.
+
+- `--lookahead <n>` sets the depth. `0` is serial: each beat is authored just
+  before it renders (the pre-2.24 behaviour), so every beat pays the writer
+  latency.
+- `--no-refill` fills the buffer once and then authors on demand as it drains;
+  the default keeps it topped up to the depth as the renderer consumes it.
+- Both are switchable live from the Stream tab (the **Look-ahead buffer**
+  control — a depth field and a "keep topped up" toggle) and via
+  `POST /stream/config`. The tab shows a live `buffered / depth` meter.
+- Switching the writer drops the beats the old writer had queued (keeping only
+  the one on the wire) so the new writer takes over from the next beat.
+- The budget still bounds it — the writer never authors beats the budget cannot
+  render — and the buffer is saved in `stream-manifest.json` (`pendingBeats`),
+  so a resume renders the pre-authored beats without paying for them again.
 
 The stream is resumable: re-running `stream` continues from the last beat on
 disk and chains off it. After 3 consecutive failures (write, chain, or render)

@@ -120,6 +120,35 @@ async function waitForStop(engine, timeoutMs = 10000) {
   }
 }
 
+async function waitUntil(fn, timeoutMs = 8000) {
+  const start = Date.now();
+  while (!fn()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitUntil timed out');
+    await new Promise(r => setTimeout(r, 5));
+  }
+}
+
+/** A one-shot gate: the render awaits `p` until `release()` is called. */
+function makeGate() {
+  let release;
+  const p = new Promise(r => { release = r; });
+  return { p, release: () => release() };
+}
+
+/** A render that holds the FIRST call until the gate opens, so the writer can be seen filling ahead. */
+function gatedRender(gate) {
+  let calls = 0;
+  const render = async (_client, options) => {
+    calls += 1;
+    if (calls === 1) await gate.p;
+    await mkdir(join(options.outputPath, '..'), { recursive: true });
+    execFileSync('cp', [realMp4(), options.outputPath]);
+    return options.outputPath;
+  };
+  render.started = () => calls >= 1;
+  return render;
+}
+
 test('beat 1 is t2v, every later beat is i2v off the previous last frame, in order, never repeating', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'stream-chain-'));
   // A budget of exactly 3 beats at the default family's quoted per-beat price.
@@ -300,7 +329,7 @@ test('a failed chained render keeps the written beat and steps back through the 
   // 1 t2v + 1 failed i2v + 1 successful i2v = 3 render calls, 2 beats on disk.
   assert.equal(calls.length, 3);
   assert.equal(engine.state().beats.length, 2, 'beat 2 landed on the second try');
-  assert.equal(inputs.length, 2, 'the writer was NOT asked again for the retry — the text was kept');
+  assert.equal(inputs.filter(i => i.beatNumber === 2).length, 1, 'beat 2 was authored exactly once — the retry reused the buffered text, it did not re-ask the writer');
   assert.equal(engine.state().lastError, undefined, 'a recovered stream carries no error');
   assert.equal(engine.state().beats[1].lane, 'i2v', 'a step-back that works is still a chained beat');
 
@@ -345,7 +374,7 @@ test('when the chain keeps failing, the beat renders t2v as a soft reset instead
   assert.equal(st.beats.length, 2, 'the stream did not die and did not skip a beat');
   assert.deepEqual(st.beats.map(b => b.lane), ['t2v', 't2v-reset']);
   assert.equal(st.lastError, undefined);
-  assert.equal(inputs.length, 2, 'the writer was not asked again for the reset');
+  assert.equal(inputs.filter(i => i.beatNumber === 2).length, 1, 'beat 2 was authored exactly once — the t2v reset reused the buffered text, it did not re-ask the writer');
 });
 
 test('the writer is told to end every beat wide, never on a human face', () => {
@@ -536,4 +565,141 @@ test('makeScriptedAuthor falls through and logs past the last scripted beat', as
   assert.equal((await author({ beatNumber: 2, series: {}, storySoFar: '', recentBeats: [] })).description, 'Live 2.');
   assert.equal(lines.length, 1, 'the handover is logged once');
   assert.match(lines[0], /past the 1 pre-written beat/);
+});
+
+// ---- Look-ahead writer buffer ----------------------------------------------
+
+test('the look-ahead writer authors beats into the buffer ahead of the render', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-lookahead-'));
+  const gate = makeGate();
+  const render = gatedRender(gate);
+  const { engine } = makeEngine(dir, { unbounded: true, lookahead: 5, render });
+  await engine.init();
+  await engine.start();
+
+  // Beat 1 is held mid-render; the writer should fill the buffer to the depth.
+  await waitUntil(() => engine.state().buffered === 5 && render.started());
+  const mid = engine.state();
+  assert.equal(mid.beats.length, 0, 'nothing has finished rendering yet');
+  assert.equal(mid.buffered, 5, 'the writer authored 5 beats ahead while beat 1 renders');
+  assert.equal(mid.lookahead, 5);
+  assert.equal(mid.status, 'rendering');
+
+  gate.release();
+  await waitUntil(() => engine.state().beats.length >= 3);
+  const drained = engine.state();
+  assert.deepEqual(drained.beats.slice(0, 3).map(b => b.lane), ['t2v', 'i2v', 'i2v'], 'beat 1 is t2v, the buffered beats chain i2v');
+
+  await engine.stop();
+  await waitForStop(engine);
+});
+
+test('auto-refill keeps the buffer topped up as the renderer drains it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-refill-'));
+  // The render is slower than the (instant) writer, so the buffer sits at depth.
+  const slowRender = async (_client, options) => {
+    await new Promise(r => setTimeout(r, 15));
+    await mkdir(join(options.outputPath, '..'), { recursive: true });
+    execFileSync('cp', [realMp4(), options.outputPath]);
+    return options.outputPath;
+  };
+  const { engine } = makeEngine(dir, { unbounded: true, lookahead: 3, render: slowRender });
+  await engine.init();
+  await engine.start();
+
+  await waitUntil(() => engine.state().beats.length >= 3 && engine.state().buffered === 3);
+  const st = engine.state();
+  assert.equal(st.buffered, 3, 'the buffer is refilled to the target as the render drains it');
+  assert.equal(st.autoRefill, true);
+
+  await engine.stop();
+  await waitForStop(engine);
+});
+
+test('auto-refill off fills the buffer once, then authors on demand as it drains', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-fillonce-'));
+  const gate = makeGate();
+  const render = gatedRender(gate);
+  const { engine } = makeEngine(dir, { budgetUsd: budgetFor(4), lookahead: 3, autoRefill: false, render });
+  await engine.init();
+  await engine.start();
+
+  await waitUntil(() => engine.state().buffered === 3 && render.started());
+  assert.equal(engine.state().autoRefill, false);
+
+  gate.release();
+  await waitForStop(engine);
+  const st = engine.state();
+  // 3 buffered + 1 authored inline after the buffer drained = the whole budget.
+  assert.equal(st.beats.length, 4, 'the one-shot fill plus an inline-authored beat rendered');
+  assert.equal(st.buffered, 0);
+});
+
+test('lookahead 0 is serial: the writer never runs ahead and the buffer stays empty at rest', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-serial-'));
+  const { engine, inputs } = makeEngine(dir, { budgetUsd: budgetFor(3), lookahead: 0 });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  const st = engine.state();
+  assert.equal(st.lookahead, 0);
+  assert.equal(st.beats.length, 3);
+  assert.equal(st.buffered, 0, 'the buffer is empty at rest');
+  assert.equal(inputs.length, 3, 'each beat authored once, just before it rendered');
+  assert.deepEqual(st.beats.map(b => b.lane), ['t2v', 'i2v', 'i2v']);
+});
+
+test('switching the writer drops the beats the old writer buffered so the new one takes over', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-switch-drop-'));
+  const gate = makeGate();
+  const render = gatedRender(gate);
+  // autoRefill off so the writer does not immediately refill after the drop —
+  // that keeps the assertion deterministic.
+  const { engine } = makeEngine(dir, { budgetUsd: budgetFor(20), lookahead: 5, autoRefill: false, render });
+  await engine.init();
+  await engine.start();
+
+  await waitUntil(() => engine.state().buffered === 5 && render.started());
+  const st = await engine.configure({ writer: 'mistral-small-2603' });
+  assert.equal(st.model.writer, 'mistral-small-2603');
+  assert.equal(st.buffered, 1, 'the beat on the wire is kept; the 4 queued behind it are dropped for the new writer');
+
+  gate.release();
+  await engine.stop();
+  await waitForStop(engine);
+});
+
+test('a resumed stream restores the look-ahead buffer and renders it without re-authoring', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-resume-buffer-'));
+  // Render beat 1 for real (serial), so a valid manifest + mp4 exist on disk.
+  const first = makeEngine(dir, { budgetUsd: budgetFor(1), lookahead: 0 });
+  await first.engine.init();
+  await first.engine.start();
+  await waitForStop(first.engine);
+
+  // Inject two pre-authored beats into the manifest's buffer, as the look-ahead
+  // writer would have left them when the stream was paused.
+  const manifestPath = join(dir, 'episodes/episode-001/stream/stream-manifest.json');
+  const m = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+  assert.equal(m.beats.length, 1);
+  m.pendingBeats = [
+    { description: 'Buffered beat two.', characters: ['WALT'], dialogue: null, sfx: null, cameraMovement: 'static wide', summary: 'Buffered summary two.' },
+    { description: 'Buffered beat three.', characters: ['WALT'], dialogue: null, sfx: null, cameraMovement: 'static wide', summary: 'Buffered summary three.' },
+  ];
+  writeFileSync(manifestPath, JSON.stringify(m));
+
+  const second = makeEngine(dir, { budgetUsd: budgetFor(3) });
+  await second.engine.init();
+  assert.equal(second.engine.state().beats.length, 1, 'the prior beat loaded');
+  assert.equal(second.engine.state().buffered, 2, 'the buffered beats were restored from the manifest');
+
+  await second.engine.start();
+  await waitForStop(second.engine);
+
+  const st = second.engine.state();
+  assert.equal(st.beats.length, 3, 'the two buffered beats rendered');
+  assert.equal(st.beats[1].beat.summary, 'Buffered summary two.', 'rendered from the restored buffer, in order');
+  assert.equal(st.beats[2].beat.summary, 'Buffered summary three.');
+  assert.equal(second.inputs.length, 0, 'the restored beats rendered without ever calling the writer');
 });
