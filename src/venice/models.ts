@@ -819,10 +819,16 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 8, privacy: 'anonymized', offline: false,
   },
   // -- Seedance 2.0 --
+  // Resolution ladder corrected against live /video/quote (2026-09-07): the
+  // i2v/t2v/r2v lanes accept up to 4k (quote 200: 4k=$4.86, 1080p=$2.34 for
+  // a 5s clip). The harness previously capped these at 720p. Fast/mini stay
+  // 480p/720p. Kept ascending so buildModelParams' resolutions[0] fallback is
+  // the cheap draft, not 4k; renderVideoFile still pins 720p as the auto
+  // default and only sends a higher value when the user/engine picks one.
   {
     id: 'seedance-2-0-image-to-video', name: 'Seedance 2.0', type: 'image-to-video',
     durations: ['4s', '5s', '8s', '10s', '12s', '15s'],
-    resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
+    resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
@@ -830,7 +836,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   {
     id: 'seedance-2-0-text-to-video', name: 'Seedance 2.0', type: 'text-to-video',
     durations: ['4s', '5s', '8s', '10s', '12s', '15s'],
-    resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
+    resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
@@ -843,7 +849,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   {
     id: 'seedance-2-0-reference-to-video', name: 'Seedance 2.0 R2V', type: 'image-to-video',
     durations: ['4s', '5s', '8s', '10s', '12s', '15s'],
-    resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
+    resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
     audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
@@ -865,7 +871,10 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   // Not listed on GET /models but live on quote/queue — probed 2026-08-07.
   //   - Duration ladder: EVERY integer 4s-30s (quote enum). 30s single pass
   //     is the montage lane: one generation covering a whole scene of beats.
-  //   - Resolutions: 480p / 720p only (1080p/2K/4K rejected at quote).
+  //   - Resolutions: 480p / 720p / 1080p (re-probed live 2026-09-07: 1080p
+  //     quotes 200 at $2.56/5s on all three lanes — i2v, t2v, r2v. 2K/4K
+  //     still 400. The earlier "720p only" note was stale; harness had been
+  //     capping 2.5 a full tier below what the API accepts).
   //   - Aspect ratios: 21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16 (native scope!).
   //   - Quote accepted audio_url + reference_audio_urls + reference_video_urls
   //     together on the R2V variant. Reference ceilings per the Seedance 2.5
@@ -879,7 +888,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   {
     id: 'seedance-2-5-text-to-video', name: 'Seedance 2.5', type: 'text-to-video',
     durations: Array.from({ length: 27 }, (_, i) => `${i + 4}s`),
-    resolutions: ['480p', '720p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    resolutions: ['480p', '720p', '1080p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 30, privacy: 'anonymized', offline: false,
@@ -887,7 +896,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   {
     id: 'seedance-2-5-image-to-video', name: 'Seedance 2.5', type: 'image-to-video',
     durations: Array.from({ length: 27 }, (_, i) => `${i + 4}s`),
-    resolutions: ['480p', '720p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    resolutions: ['480p', '720p', '1080p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 30, privacy: 'anonymized', offline: false,
@@ -895,7 +904,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   {
     id: 'seedance-2-5-reference-to-video', name: 'Seedance 2.5 R2V', type: 'image-to-video',
     durations: Array.from({ length: 27 }, (_, i) => `${i + 4}s`),
-    resolutions: ['480p', '720p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    resolutions: ['480p', '720p', '1080p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
     audio: true, audioConfigurable: true, audioInput: true, videoInput: true,
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 30, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
@@ -1133,6 +1142,122 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     audio: false, audioConfigurable: false, audioInput: false, videoInput: true,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  // -- Live catalog sync 2026-09-07 --------------------------------------------
+  // Added from GET /models?type=video + confirmed on /video/quote. These are
+  // the high-resolution lanes the harness was missing entirely — the reason the
+  // resolution picker could not offer 4K / 1440p / 2K on anything but a hand-
+  // added Kling entry. Concrete aspect ratios only (the live 'auto'/'adaptive'
+  // sentinels are dropped so the aspect pre-flight compares against real values).
+
+  // LTX Video 2.5 — the true-4K fast lane. Fast: 720p→2160p, even-second
+  // ladder 6-20s (15s is NOT valid — snaps to 14s/16s). Pro: 720p/1080p, 6-10s.
+  {
+    id: 'ltx-2-5-fast-text-to-video', name: 'LTX Video 2.5 Fast', type: 'text-to-video',
+    durations: ['6s', '8s', '10s', '12s', '14s', '16s', '18s', '20s'],
+    resolutions: ['720p', '1080p', '1440p', '2160p'], aspectRatios: ['16:9', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 20, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'ltx-2-5-fast-image-to-video', name: 'LTX Video 2.5 Fast', type: 'image-to-video',
+    durations: ['6s', '8s', '10s', '12s', '14s', '16s', '18s', '20s'],
+    resolutions: ['720p', '1080p', '1440p', '2160p'], aspectRatios: ['16:9', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 20, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'ltx-2-5-pro-text-to-video', name: 'LTX Video 2.5 Pro', type: 'text-to-video',
+    durations: ['6s', '8s', '10s'], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'ltx-2-5-pro-image-to-video', name: 'LTX Video 2.5 Pro', type: 'image-to-video',
+    durations: ['6s', '8s', '10s'], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  // MiniMax Hailuo 03 — 2K only (like base H3), 5-15s, NO audio (audio:false,
+  // not configurable — omit the audio field, same as HappyHorse/H3).
+  {
+    id: 'minimax-hailuo-03-text-to-video', name: 'MiniMax Hailuo 03', type: 'text-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['2K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'minimax-hailuo-03-image-to-video', name: 'MiniMax Hailuo 03', type: 'image-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['2K'], aspectRatios: [],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'minimax-hailuo-03-reference-to-video', name: 'MiniMax Hailuo 03 R2V', type: 'image-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['2K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  // Wan 3.0 Prime — the premium Wan 3.0 lane, 480p→1080p, 2-30s ladder, audio.
+  {
+    id: 'wan-3-0-prime-text-to-video', name: 'Wan 3.0 Prime', type: 'text-to-video',
+    durations: ['2s', '5s', '10s', '15s', '20s', '25s', '30s'],
+    resolutions: ['480p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'wan-3-0-prime-image-to-video', name: 'Wan 3.0 Prime', type: 'image-to-video',
+    durations: ['2s', '5s', '10s', '15s', '20s', '25s', '30s'],
+    resolutions: ['480p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'wan-3-0-prime-reference-to-video', name: 'Wan 3.0 Prime R2V', type: 'image-to-video',
+    durations: ['2s', '5s', '10s', '15s', '20s', '25s', '30s'],
+    resolutions: ['480p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  // Seedance 2.0 "basic" — the live-listed IDs (the non-suffixed ones the
+  // harness sends are unlisted but still valid). Same 4K ceiling, 4-15s ladder.
+  {
+    id: 'seedance-2-0-text-to-video-basic', name: 'Seedance 2.0 (basic)', type: 'text-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'seedance-2-0-image-to-video-basic', name: 'Seedance 2.0 (basic)', type: 'image-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: [],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  {
+    id: 'seedance-2-0-reference-to-video-basic', name: 'Seedance 2.0 R2V (basic)', type: 'image-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
   },
 ];
 

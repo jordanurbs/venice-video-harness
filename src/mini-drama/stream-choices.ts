@@ -130,20 +130,36 @@ export const STREAM_VIDEO_CHOICES: ReadonlyArray<StreamVideoChoice> = [
   {
     id: 'seedance-2-0', label: 'Seedance 2.0',
     t2v: 'seedance-2-0-text-to-video', i2v: 'seedance-2-0-image-to-video',
-    resolution: '480p', resolutions: ['480p', '720p'], usdPer15s: 1.32, renderSecApprox: 180, speed: 'much slower',
-    note: 'The harness production default look, native dialogue and lip-sync. ~3 min per beat and 12x the Turbo price. The viewer will wait between every beat.',
+    resolution: '480p', resolutions: ['480p', '720p', '1080p', '4k'], usdPer15s: 1.32, renderSecApprox: 180, speed: 'much slower',
+    note: 'The harness production default look, native dialogue and lip-sync. ~3 min per beat at draft. Resolution goes to native 4K (quote 2026-09-07: 720p $2.64, 1080p $7.02, 4K $14.58 per 15s) — the highest-fidelity stream lane, but the viewer waits between beats and 4K costs ~66x Turbo.',
   },
   {
     id: 'seedance-2-5', label: 'Seedance 2.5',
     t2v: 'seedance-2-5-text-to-video', i2v: 'seedance-2-5-image-to-video',
-    resolution: '480p', resolutions: ['480p', '720p'], usdPer15s: 1.93, renderSecApprox: 180, speed: 'much slower',
-    note: 'Newest Seedance. ~3 min per beat and 17x the Turbo price.',
+    resolution: '480p', resolutions: ['480p', '720p', '1080p'], usdPer15s: 1.93, renderSecApprox: 180, speed: 'much slower',
+    note: 'Newest Seedance. Resolution to 1080p (quote 2026-09-07: 1080p $7.68 per 15s; 2K/4K rejected). ~3 min per beat.',
   },
   {
     id: 'kling-o3-standard', label: 'Kling O3 Standard',
     t2v: 'kling-o3-standard-text-to-video', i2v: 'kling-o3-standard-image-to-video',
     resolution: '', resolutions: [], usdPer15s: 1.84, renderSecApprox: 150, speed: 'much slower',
     note: 'Accepts face start frames. ~2.5 min per beat, 16x the Turbo price. No resolution parameter.',
+  },
+  // True-4K / high-res lanes (added 2026-09-07). Not built for keeping up with
+  // playback — they exist so the operator CAN pick real 4K/2160p when quality
+  // matters more than live pacing. Durations snap to each model's ladder
+  // (resolveDuration): LTX is even-second only, Veo caps at 8s.
+  {
+    id: 'ltx-2-5-fast', label: 'LTX Video 2.5 Fast (4K)',
+    t2v: 'ltx-2-5-fast-text-to-video', i2v: 'ltx-2-5-fast-image-to-video',
+    resolution: '720p', resolutions: ['720p', '1080p', '1440p', '2160p'], usdPer15s: 1.48, renderSecApprox: 150, speed: 'much slower',
+    note: 'True 4K (2160p) + 1440p. Even-second durations only (6-20s; 15s snaps to 16s). Quote 2026-09-07: 720p ~$1.48, 1080p ~$2.15, 2160p ~$4.95 per 15s. Audio.',
+  },
+  {
+    id: 'veo3-1-fast', label: 'Veo 3.1 Fast (4K)',
+    t2v: 'veo3.1-fast-text-to-video', i2v: 'veo3.1-fast-image-to-video',
+    resolution: '720p', resolutions: ['720p', '1080p', '4k'], usdPer15s: 2.48, renderSecApprox: 120, speed: 'much slower',
+    note: 'Up to 4K, but 8s max per beat (15s snaps to 8s). Quote 2026-09-07: 720p/1080p $1.32, 4K $3.08 per 8s beat. Audio.',
   },
 ];
 

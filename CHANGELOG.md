@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.25.0 — 2026-09-07
+
+### Fixed
+
+- **Resolution was silently capped far below what Venice accepts.** The registry
+  listed Seedance as `480p/720p` and `renderVideoFile` hard-pinned Seedance to
+  `720p`, rejecting any higher override against that stale list. Re-probed live
+  via `POST /video/quote` (2026-09-07): `seedance-2-0-*` accept **`4k`**
+  ($4.86/5s) and `seedance-2-5-*` accept **`1080p`** ($2.56/5s) on the exact
+  ids the harness already sends. Registry corrected; a chosen resolution up to
+  each model's real ceiling now reaches the queue body, and an unsupported
+  choice (e.g. Seedance 2.5 @ `4k`) safely falls back to the family default
+  instead of 400ing. This is why Stream/Loop output looked low-fidelity: the
+  MiniMax H3 Max/Turbo speed lanes render at a **480P draft** and top out at
+  768P (2K is a hard 400) — draft lanes for keeping up with live playback, not
+  a quality tier.
+
+### Added
+
+- **Full resolution control in the Stream tab, per each model's real ladder.**
+  The video-family dropdown's resolution selector is now fed by the live-
+  verified ladders: Seedance 2.0 → `480p/720p/1080p/4k`, Seedance 2.5 →
+  `480p/720p/1080p`. Two true high-res lanes added to the Stream choices:
+  **LTX Video 2.5 Fast** (up to 2160p, even-second durations) and **Veo 3.1
+  Fast** (up to 4K, 8s max). Defaults stay on the fast 480P draft lanes — you
+  opt up when quality matters more than live pacing. No UI rebuild required
+  (the selector already renders `choices.video[].resolutions`).
+- **Live catalog sync (2026-09-07).** Registered high-res models the harness
+  was missing: `ltx-2-5-fast-*` / `ltx-2-5-pro-*`, `minimax-hailuo-03-*` (2K),
+  `wan-3-0-prime-*`, and the live-listed `seedance-2-0-*-basic` (4K). Capability
+  sets in `series/types.ts` updated in lockstep (registry-coverage test).
+
 ## 2.24.0 — 2026-09-07
 
 ### Added

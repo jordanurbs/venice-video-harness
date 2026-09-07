@@ -1197,6 +1197,10 @@ export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   'minimax-h3-max-reference-to-video',
   'pixverse-c1-reference-to-video',
   'grok-imagine-reference-to-video',
+  // Live catalog sync 2026-09-07: R2V lanes of the newly-registered families.
+  'minimax-hailuo-03-reference-to-video',
+  'wan-3-0-prime-reference-to-video',
+  'seedance-2-0-reference-to-video-basic',
   // Wan 2.7 R2V uses per_reference_audio (elements[].audio_url) for lip-sync;
   // it still exposes reference_image_urls at the API level.
   'wan-2-7-reference-to-video',
@@ -1244,6 +1248,7 @@ export const MODELS_USING_IMAGE_TAGS = new Set([
   'seedance-2-0-reference-to-video',
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
+  'seedance-2-0-reference-to-video-basic',
   'grok-imagine-reference-to-video',
   // MiniMax H3 R2V REQUIRES pure reference mode: sending `image_url` alongside
   // `reference_image_urls` is a hard 400 ("image_url and end_image_url cannot
@@ -1296,6 +1301,9 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   'minimax-h3-reference-to-video',
   // MiniMax H3 Max R2V — same audio_input:true split (t2v/i2v report false).
   'minimax-h3-max-reference-to-video',
+  // Live catalog sync 2026-09-07: the live-listed Seedance 2.0 "basic" R2V id
+  // reports audio_input:true (matches the audioInput:true spec in models.ts).
+  'seedance-2-0-reference-to-video-basic',
 ]);
 
 /**
@@ -1327,6 +1335,7 @@ export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
   'seedance-2-0-reference-to-video',
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
+  'seedance-2-0-reference-to-video-basic',
   'happyhorse-1-1-reference-to-video',
 ]);
 
@@ -1347,6 +1356,9 @@ export const MAX_REFERENCE_IMAGES_BY_MODEL: Record<string, number> = {
   'seedance-2-0-reference-to-video': 9,
   'seedance-2-0-enhanced-reference-to-video': 9,
   'seedance-2-0-fast-reference-to-video': 9,
+  'seedance-2-0-reference-to-video-basic': 9,
+  'minimax-hailuo-03-reference-to-video': 9,
+  'wan-3-0-prime-reference-to-video': 9,
   'happyhorse-1-1-reference-to-video': 9,
   'minimax-h3-reference-to-video': 9,
   'minimax-h3-max-reference-to-video': 9,

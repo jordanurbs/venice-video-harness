@@ -184,8 +184,8 @@ The full model registry lives in `src/venice/models.ts` with typed specs for eve
 | `@Image` tags (flat ref prompt syntax) | Seedance 2.0 R2V, Grok Imagine R2V |
 | Native stereo audio with lip-sync | Seedance 2.0 (8+ languages) |
 | Native stereo audio, not toggleable | HappyHorse 1.1, MiniMax H3 (omit the `audio` field or the request 400s) |
-| 2K output | MiniMax H3 (2K is its ONLY resolution) |
-| 4K output | Veo 3.1, LTX 2.0 |
+| 2K output | MiniMax H3, MiniMax Hailuo 03 (2K is their ONLY resolution) |
+| 4K output | **Seedance 2.0** (i2v/t2v/r2v — re-probed live 2026-09-07: `resolution: '4k'` quotes 200), Veo 3.1, LTX 2.5 Fast (2160p), Kling O3/V3 4K. Seedance 2.5 tops out at **1080p** (2K/4K 400). The harness had been capping Seedance at 720p until 2026-09-07; the resolution picker (Stream) now offers each model's true ladder. |
 | 30s duration | Longcat |
 | 20s duration | LTX 2.0 Fast, LTX 2.0 v2.3 Fast |
 | 15s duration | Seedance 2.0, Kling O3/V3, Wan 2.6 |
@@ -222,7 +222,7 @@ Preferred defaults (overridable per-project via `series.json` → `videoDefaults
 
 | Role | Default Model | When Used |
 |------|--------------|-----------|
-| Character shots (up to ~6 characters) | `seedance-2-5-reference-to-video` | Default R2V — up to 30 `reference_image_urls` with `@Image` tags (chars + storyboard plate + location angles), pure reference mode (no start image), every integer 4-30s, 480p/720p (harness pins 720p), native stereo audio |
+| Character shots (up to ~6 characters) | `seedance-2-5-reference-to-video` | Default R2V — up to 30 `reference_image_urls` with `@Image` tags (chars + storyboard plate + location angles), pure reference mode (no start image), every integer 4-30s, **480p/720p/1080p** (harness auto-pins 720p; 1080p available on request — quote 2026-09-07), native stereo audio |
 | Character shots (budget overflow) | `kling-o3-standard-reference-to-video` | Auto-fallback — structured `elements` + `reference_image_urls`. Rare on 2.5's 30-ref budget; kept for extreme character counts / scene-image needs |
 | Native character dialogue | `seedance-2-5-reference-to-video` | Default. Generates the authored line in-frame; `reference_audio_urls` voice donors preserve timbre/accent/pacing. Native mouth sync is prompt-driven, not deterministic to an exact supplied recording. |
 | Exact lip-sync, low/medium motion | `resolveLipSyncModel(family)` | Only when `audioStrategy: lip-sync`. Venice speech drives mouth movement through `audio_url`; min 3s audio. Stays in-family on Seedance (`seedance-2-5-reference-to-video`) and MiniMax H3 (`minimax-h3-reference-to-video`), both of which accept a top-level `audio_url`. Other families fall back to `wan-2-7-image-to-video`, which needs a keyframe from a Seedance R2V identity pass (rule 32). |
