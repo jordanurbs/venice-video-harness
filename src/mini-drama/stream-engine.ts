@@ -432,6 +432,8 @@ export class StreamEngine {
   private lastError?: string;
   private inFlight?: number;
   private consecutiveErrors = 0;
+  /** Writer, renderer and configuration updates share one atomic manifest. */
+  private manifestWriteTail: Promise<void> = Promise.resolve();
   /** Resolves the worker's paused wait when Start is clicked. */
   private wake?: () => void;
   /** True while prime() renders beat 1 with the worker otherwise paused. */
@@ -1063,19 +1065,23 @@ export class StreamEngine {
   }
 
   private async persist(): Promise<void> {
-    try {
-      await mkdir(this.streamDir, { recursive: true });
-      const json = JSON.stringify(this.snapshot(), (_k, v) => (v === Infinity ? null : v), 2);
-      // Atomic write: a concurrent reader (a resuming engine, the web server)
-      // must never see a torn manifest. Write a temp file, then rename it over
-      // the real path — rename is atomic on the same filesystem, so a reader
-      // gets either the old complete file or the new one, never a partial parse.
-      const tmp = `${this.manifestPath()}.tmp`;
-      await writeFile(tmp, json, 'utf-8');
-      await rename(tmp, this.manifestPath());
-    } catch (err) {
-      this.log(`  ⚠ Could not write stream manifest: ${(err as Error).message}`);
-    }
+    // Atomic rename protects readers only if writers cannot concurrently
+    // truncate or rename the shared temp file. Queue the entire write, and
+    // snapshot when it runs so an older call cannot restore stale state.
+    const write = this.manifestWriteTail.then(async () => {
+      try {
+        await mkdir(this.streamDir, { recursive: true });
+        const json = JSON.stringify(this.snapshot(), (_k, v) => (v === Infinity ? null : v), 2);
+        const tmp = `${this.manifestPath()}.tmp`;
+        await writeFile(tmp, json, 'utf-8');
+        await rename(tmp, this.manifestPath());
+      } catch (err) {
+        this.log(`  ⚠ Could not write stream manifest: ${(err as Error).message}`);
+      }
+    });
+    // A failed callback must not prevent later persistence attempts.
+    this.manifestWriteTail = write.catch(() => {});
+    return write;
   }
 
   private async loadManifest(): Promise<void> {
