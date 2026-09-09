@@ -432,6 +432,24 @@ test('configure switches the writer and the video family for the NEXT beat, and 
   assert.ok(resumed.state().choices.writers.length > 3, 'choices ship in the manifest for the UI');
 });
 
+test('concurrent stream configuration persists an intact manifest and resumes the latest models', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-persist-'));
+  const logs = [];
+  const { engine } = makeEngine(dir, { log: line => logs.push(line) }, false);
+  await engine.init();
+  await Promise.all(Array.from({ length: 20 }, (_, i) => engine.configure({
+    writer: i % 2 ? 'mistral-small-2603' : STREAM_DEFAULT_WRITER,
+    videoFamily: i % 2 ? 'wan-3-0' : 'minimax-h3-max',
+  })));
+  assert.deepEqual(logs.filter(line => line.includes('Could not write stream manifest')), []);
+  const manifest = JSON.parse(readFileSync(join(dir, 'episodes', 'episode-001', 'stream', 'stream-manifest.json'), 'utf-8'));
+  assert.deepEqual(manifest.model, engine.state().model);
+  const { engine: resumed } = makeEngine(dir, {}, false);
+  await resumed.init();
+  assert.equal(resumed.state().model.writer, 'mistral-small-2603');
+  assert.equal(resumed.state().videoFamily, 'wan-3-0');
+});
+
 test('every beat records the exact video prompt; export renders it as JSON and Markdown', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'stream-export-'));
   const { engine, calls } = makeEngine(dir, { budgetUsd: budgetFor(2), direction: 'laugh track' });
