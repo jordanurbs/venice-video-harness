@@ -130,6 +130,33 @@ export interface VideoElement {
   video_url?: string;
 }
 
+/**
+ * One camera keyframe for `camera_trajectory` (MiniMax H3 Max Multi-Angle).
+ *
+ * The model orbits the subject in the start frame (`image_url`) along the path
+ * described by 2–12 keyframes. This is Venice's real shape for the feature the
+ * request framed as "horizontal/vertical angle degrees and camera distance for
+ * the start and finish frame": the 2-keyframe case (`time: 0` and `time: 1`) is
+ * exactly a start→finish move; `azimuth` is the horizontal angle and
+ * `elevation` the vertical angle. Extra keyframes let the rotation speed-ramp
+ * within a single shot (uneven angular velocity over even time).
+ *
+ * Confirmed against the live strict queue schema (2026-09-15):
+ *   POST /video/queue with a bad field name → "Unrecognized key(s) in object";
+ *   camera_trajectory with azimuth 99999 → "Camera azimuth travel must not
+ *   exceed 32 full turns". Source: GET /api/v1/swagger.yaml camera_trajectory.
+ */
+export interface CameraKeyframe {
+  /** Normalized position along the clip, 0–1. Strictly increasing across the array. */
+  time: number;
+  /** Horizontal orbit angle in degrees (signed). Total absolute travel ≤ 32 full turns (11520°). */
+  azimuth: number;
+  /** Vertical orbit angle in degrees, −90 to 90. */
+  elevation: number;
+  /** Camera distance relative to the start frame; must be > 0. 1 = unchanged, <1 dollies in, >1 out. */
+  distance: number;
+}
+
 export interface VideoQueueRequest {
   model: string;
   prompt: string;
@@ -153,6 +180,14 @@ export interface VideoQueueRequest {
    * least one reference image (audio-only is rejected at validation).
    */
   reference_audio_urls?: string[];
+  /**
+   * Camera-orbit keyframes for MiniMax H3 Max Multi-Angle
+   * (`minimax-h3-max-multi-angle`). 2–12 keyframes with strictly increasing
+   * normalized `time` (0–1). Requires `image_url`; aspect ratio follows that
+   * image. Omit to leave the camera path to the model. Rejected by every other
+   * model ("Unrecognized key(s) in object: 'camera_trajectory'").
+   */
+  camera_trajectory?: CameraKeyframe[];
   /**
    * Output encoding bitrate mode (Seedance 2.x). `'high'` encodes at ~5-6x the
    * bitrate for sharper output and far fewer compression artifacts (larger

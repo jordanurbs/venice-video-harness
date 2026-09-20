@@ -6,6 +6,9 @@
 // Last synced: 2026-03-18
 // ---------------------------------------------------------------------------
 
+import type { CameraKeyframe } from './types.js';
+export type { CameraKeyframe } from './types.js';
+
 // ---- Video Models ---------------------------------------------------------
 
 export type VideoModelType = 'image-to-video' | 'text-to-video';
@@ -69,6 +72,13 @@ export interface VideoModelSpec {
    * identity and look.
    */
   promptStyle?: 'simple' | 'directorial';
+  /**
+   * Accepts the `camera_trajectory` keyframe array — MiniMax H3 Max Multi-Angle
+   * only. When true, callers may pass a 2–12 keyframe camera orbit path
+   * (`buildOrbitTrajectory` / `buildStartEndTrajectory`); every other model
+   * rejects the field as an unrecognized key.
+   */
+  supportsCameraTrajectory?: boolean;
   privacy: 'private' | 'anonymized';
   offline: boolean;
 }
@@ -697,6 +707,38 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, promptStyle: 'simple', privacy: 'private', offline: false,
+  },
+  // -- MiniMax H3 Max Multi-Angle (live catalog + OpenAPI probe 2026-09-15) ----
+  // An i2v lane in the H3 Max family with ONE thing no other Venice model has:
+  // a `camera_trajectory` param. You give it the start frame (`image_url`) and
+  // a 2–12 keyframe camera path — normalized time (0–1), azimuth° (horizontal),
+  // elevation° (vertical, −90..90), and distance (1 = unchanged) — and it orbits
+  // the subject along that path. See buildOrbitTrajectory / buildStartEndTrajectory
+  // and MODELS_SUPPORTING_CAMERA_TRAJECTORY. Four things separate it from the
+  // rest of the H3 Max family, all load-bearing:
+  //
+  //   1. RESOLUTION goes to 1080P. Base H3 Max / Turbo cap at 768P and 400 on
+  //      2K; multi-angle's live constraints report ["480P","768P","1080P"], so
+  //      it is the ONE H3 Max lane with a true-HD finish tier. Highest-first so
+  //      resolutions[0] is the finish (1080P); the video-generator still pins a
+  //      cost-sane 768P auto-default and only sends 1080P on explicit override.
+  //   2. `camera_trajectory` is the payload. `prompt` is OPTIONAL for this model
+  //      (the camera path carries the shot); still `promptStyle: 'simple'`.
+  //   3. PRIVATE + uncensored, like the rest of H3 Max.
+  //   4. i2v only — no t2v/R2V multi-angle lane. aspect follows the start image
+  //      (empty aspect_ratios), audio is on and NOT configurable (field omitted).
+  //
+  // Pricing (live /video/quote 2026-09-15): 480P $0.06/s, 768P ~$0.096/s,
+  // 1080P ~$0.19/s ($1.54 for 8s at 1080P). Ladder 5–15s like the rest of H3 Max.
+  {
+    id: 'minimax-h3-max-multi-angle', name: 'MiniMax H3 Max Multi-Angle', type: 'image-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
+    // Highest first (finish tier is 1080P). Unlike base H3 Max, 1080P is valid.
+    resolutions: ['1080P', '768P', '480P'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, promptStyle: 'simple', supportsCameraTrajectory: true,
+    privacy: 'private', offline: false,
   },
   // -- Kling V3 --
   {
@@ -1520,14 +1562,153 @@ export function resolveBitrateMode(
   return undefined;
 }
 
+// ---- Camera trajectory (MiniMax H3 Max Multi-Angle) -----------------------
+
+/** Min / max keyframes the `camera_trajectory` array accepts (server-enforced). */
+export const CAMERA_TRAJECTORY_MIN_KEYFRAMES = 2;
+export const CAMERA_TRAJECTORY_MAX_KEYFRAMES = 12;
+/** Elevation bounds in degrees (server: elevation −90..90). */
+export const CAMERA_ELEVATION_MIN_DEG = -90;
+export const CAMERA_ELEVATION_MAX_DEG = 90;
+/** Total absolute azimuth travel ceiling: 32 full turns (server: "must not exceed 32 full turns"). */
+export const CAMERA_MAX_AZIMUTH_TURNS = 32;
+export const CAMERA_MAX_AZIMUTH_TRAVEL_DEG = CAMERA_MAX_AZIMUTH_TURNS * 360; // 11520
+
+/** True when the model accepts `camera_trajectory` (MiniMax H3 Max Multi-Angle). */
+export function supportsCameraTrajectory(modelId: string): boolean {
+  return getVideoModel(modelId)?.supportsCameraTrajectory === true;
+}
+
+/**
+ * Validate a `camera_trajectory` against the live server rules BEFORE queueing,
+ * so a malformed path fails fast client-side with a specific message instead of
+ * bouncing off the strict queue schema. Mirrors the OpenAPI item schema:
+ *   2–12 keyframes; each { time 0–1, azimuth°, elevation° −90..90, distance>0 };
+ *   time strictly increasing; total absolute azimuth travel ≤ 32 turns (11520°).
+ */
+export function validateCameraTrajectory(kfs: CameraKeyframe[]): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (!Array.isArray(kfs)) return { ok: false, errors: ['camera_trajectory must be an array'] };
+  if (kfs.length < CAMERA_TRAJECTORY_MIN_KEYFRAMES || kfs.length > CAMERA_TRAJECTORY_MAX_KEYFRAMES) {
+    errors.push(`camera_trajectory must have ${CAMERA_TRAJECTORY_MIN_KEYFRAMES}–${CAMERA_TRAJECTORY_MAX_KEYFRAMES} keyframes (got ${kfs.length})`);
+  }
+  let prevTime = -Infinity;
+  let travel = 0;
+  kfs.forEach((k, i) => {
+    if (!Number.isFinite(k.time) || k.time < 0 || k.time > 1) errors.push(`keyframe ${i}: time must be 0–1 (got ${k.time})`);
+    if (k.time <= prevTime) errors.push(`keyframe ${i}: time must strictly increase (${k.time} ≤ ${prevTime})`);
+    prevTime = k.time;
+    if (!Number.isFinite(k.azimuth)) errors.push(`keyframe ${i}: azimuth must be a number`);
+    if (!Number.isFinite(k.elevation) || k.elevation < CAMERA_ELEVATION_MIN_DEG || k.elevation > CAMERA_ELEVATION_MAX_DEG) {
+      errors.push(`keyframe ${i}: elevation must be ${CAMERA_ELEVATION_MIN_DEG}..${CAMERA_ELEVATION_MAX_DEG} (got ${k.elevation})`);
+    }
+    if (!Number.isFinite(k.distance) || k.distance <= 0) errors.push(`keyframe ${i}: distance must be > 0 (got ${k.distance})`);
+    if (i > 0 && Number.isFinite(k.azimuth) && Number.isFinite(kfs[i - 1].azimuth)) {
+      travel += Math.abs(k.azimuth - kfs[i - 1].azimuth);
+    }
+  });
+  if (travel > CAMERA_MAX_AZIMUTH_TRAVEL_DEG) {
+    errors.push(`total azimuth travel ${travel}° exceeds ${CAMERA_MAX_AZIMUTH_TRAVEL_DEG}° (${CAMERA_MAX_AZIMUTH_TURNS} turns)`);
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+const _clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+const _lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/** Rotation-speed profile for an orbit, applied by easing azimuth over even time. */
+export type CameraRamp = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
+function _ease(profile: CameraRamp, t: number): number {
+  switch (profile) {
+    case 'ease-in': return t * t;                                   // slow start → fast finish
+    case 'ease-out': return 1 - (1 - t) * (1 - t);                  // fast start → slow settle
+    case 'ease-in-out': return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    case 'linear': default: return t;
+  }
+}
+
+/**
+ * The minimal, literal form of the request's ask: horizontal/vertical angle and
+ * camera distance for the START frame and the FINISH frame → a 2-keyframe
+ * `camera_trajectory` (time 0 and 1). `azimuth` is the horizontal angle,
+ * `elevation` the vertical.
+ */
+export function buildStartEndTrajectory(
+  start: { azimuth: number; elevation: number; distance: number },
+  finish: { azimuth: number; elevation: number; distance: number },
+): CameraKeyframe[] {
+  return [
+    { time: 0, azimuth: start.azimuth, elevation: start.elevation, distance: start.distance },
+    { time: 1, azimuth: finish.azimuth, elevation: finish.elevation, distance: finish.distance },
+  ];
+}
+
+export interface OrbitTrajectoryOptions {
+  /** Total signed horizontal rotation over the clip, degrees. 360 = one full turn (default). Negative reverses. */
+  azimuthTravel?: number;
+  /** Starting horizontal angle, degrees. Default 0. */
+  startAzimuth?: number;
+  /** Elevation (vertical angle) at start / end, degrees. Defaults: flat 0° orbit. */
+  startElevation?: number;
+  endElevation?: number;
+  /** Distance at start / end (1 = unchanged). Set both to dolly across the orbit. Default 1 → 1. */
+  startDistance?: number;
+  endDistance?: number;
+  /**
+   * Rotation speed profile. Implemented by easing azimuth (and the elevation /
+   * distance moves) across EVENLY spaced time, so the camera covers the same arc
+   * at a ramping angular velocity — real in-shot speed ramping. Default 'linear'.
+   */
+  ramp?: CameraRamp;
+  /** Keyframe count (2–12). Linear defaults to 2; eased ramps default to 6 so the ramp is visible. */
+  keyframes?: number;
+}
+
+/**
+ * Build an orbit `camera_trajectory` around the start-frame subject. Covers the
+ * common "full 360° turn with an optional crane/dolly and a speed ramp" case
+ * used by the multi-angle demo reel. For a plain start→finish move use
+ * `buildStartEndTrajectory`.
+ */
+export function buildOrbitTrajectory(opts: OrbitTrajectoryOptions = {}): CameraKeyframe[] {
+  const {
+    azimuthTravel = 360,
+    startAzimuth = 0,
+    startElevation = 0,
+    endElevation = startElevation,
+    startDistance = 1,
+    endDistance = startDistance,
+    ramp = 'linear',
+  } = opts;
+  const n = _clamp(
+    Math.round(opts.keyframes ?? (ramp === 'linear' ? 2 : 6)),
+    CAMERA_TRAJECTORY_MIN_KEYFRAMES,
+    CAMERA_TRAJECTORY_MAX_KEYFRAMES,
+  );
+  const kfs: CameraKeyframe[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);           // even time → strictly increasing
+    const p = _ease(ramp, t);        // eased progress drives the whole move
+    kfs.push({
+      time: Number(t.toFixed(4)),
+      azimuth: Number((startAzimuth + azimuthTravel * p).toFixed(3)),
+      elevation: Number(_clamp(_lerp(startElevation, endElevation, p), CAMERA_ELEVATION_MIN_DEG, CAMERA_ELEVATION_MAX_DEG).toFixed(3)),
+      distance: Number(Math.max(1e-3, _lerp(startDistance, endDistance, p)).toFixed(4)),
+    });
+  }
+  return kfs;
+}
+
 /**
  * Build the model-specific parameters for a video queue request.
- * Handles resolution, aspect_ratio, and end_image_url based on model capabilities.
+ * Handles resolution, aspect_ratio, end_image_url, and camera_trajectory based
+ * on model capabilities.
  */
 export function buildModelParams(modelId: string, opts: {
   aspectRatio?: string;
   resolution?: string;
   endImageUrl?: string;
+  cameraTrajectory?: CameraKeyframe[];
 }): Record<string, unknown> {
   const model = getVideoModel(modelId);
   const params: Record<string, unknown> = {};
@@ -1549,6 +1730,18 @@ export function buildModelParams(modelId: string, opts: {
 
   if (opts.endImageUrl && model.supportsEndImage) {
     params.end_image_url = opts.endImageUrl;
+  }
+
+  // camera_trajectory: only for models that accept it, validated up front so a
+  // malformed path fails here rather than as a paid queue round-trip.
+  if (opts.cameraTrajectory && opts.cameraTrajectory.length > 0) {
+    if (model.supportsCameraTrajectory) {
+      const { ok, errors } = validateCameraTrajectory(opts.cameraTrajectory);
+      if (!ok) throw new Error(`Invalid camera_trajectory for ${modelId}: ${errors.join('; ')}`);
+      params.camera_trajectory = opts.cameraTrajectory;
+    } else {
+      console.warn(`  ⚠ Model ${modelId} does not support camera_trajectory; dropping it.`);
+    }
   }
 
   return params;

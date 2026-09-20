@@ -44,7 +44,8 @@ import {
 } from './voice-reference.js';
 import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
-import { getVideoModel, modelSupportsDuration, resolveBitrateMode, type BitrateMode } from '../venice/models.js';
+import { getVideoModel, modelSupportsDuration, resolveBitrateMode, validateCameraTrajectory, type BitrateMode } from '../venice/models.js';
+import type { CameraKeyframe } from '../venice/types.js';
 import { appendRecipePass } from '../venice/recipe.js';
 import {
   clearPendingJob,
@@ -591,6 +592,13 @@ export interface RenderVideoOptions {
    * selects (it forces `768P` for every `minimax-h3-max*` id).
    */
   resolution?: string;
+  /**
+   * Camera-orbit keyframes for MiniMax H3 Max Multi-Angle. Attached as
+   * `camera_trajectory` only when the effective model supports it; validated
+   * before the request goes out. Build with `buildOrbitTrajectory` /
+   * `buildStartEndTrajectory` from `../venice/models.js`.
+   */
+  cameraTrajectory?: CameraKeyframe[];
 }
 
 function fileToDataUri(filePath: string, mimeType = 'image/png'): string | undefined {
@@ -662,6 +670,19 @@ export async function renderVideoFile(
 
   if (endFrameImagePath && existsSync(endFrameImagePath) && MODELS_SUPPORTING_END_IMAGE.has(effectiveModel)) {
     body.end_image_url = imageToDataUri(endFrameImagePath);
+  }
+
+  // camera_trajectory: MiniMax H3 Max Multi-Angle only. Validate up front so a
+  // malformed orbit path fails here, not as a paid queue round-trip.
+  if (options.cameraTrajectory && options.cameraTrajectory.length > 0) {
+    if (getVideoModel(effectiveModel)?.supportsCameraTrajectory) {
+      const { ok, errors } = validateCameraTrajectory(options.cameraTrajectory);
+      if (!ok) throw new Error(`Invalid camera_trajectory for ${effectiveModel}: ${errors.join('; ')}`);
+      body.camera_trajectory = options.cameraTrajectory;
+      console.log(`  Camera trajectory: ${options.cameraTrajectory.length} keyframe(s), azimuth ${options.cameraTrajectory[0].azimuth}°→${options.cameraTrajectory[options.cameraTrajectory.length - 1].azimuth}°`);
+    } else {
+      console.warn(`  ⚠ Model ${effectiveModel} does not support camera_trajectory; dropping it.`);
+    }
   }
 
   // Explicit override wins, but only when the model actually lists it —

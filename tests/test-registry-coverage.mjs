@@ -16,6 +16,11 @@ import {
   getMusicModel,
   listMusicModels,
   modelWantsSimplePrompt,
+  supportsCameraTrajectory,
+  buildOrbitTrajectory,
+  buildStartEndTrajectory,
+  validateCameraTrajectory,
+  CAMERA_MAX_AZIMUTH_TRAVEL_DEG,
 } from '../dist/venice/models.js';
 import {
   MODELS_SUPPORTING_REFERENCE_IMAGES,
@@ -68,6 +73,8 @@ const REQUIRED_VIDEO_IDS = [
   'minimax-h3-max-reference-to-video',
   'minimax-h3-max-turbo-text-to-video',
   'minimax-h3-max-turbo-image-to-video',
+  // MiniMax H3 Max Multi-Angle (added 2026-09-15) — camera_trajectory lane
+  'minimax-h3-max-multi-angle',
   // PixVerse C1 (new) + v5.6 (legacy)
   'pixverse-c1-image-to-video',
   'pixverse-c1-reference-to-video',
@@ -172,6 +179,65 @@ ok('H3 Max Turbo has NO R2V lane in the registry',
 for (const id of ['minimax-h3-max-image-to-video', 'minimax-h3-max-turbo-image-to-video']) {
   ok(`${id} exposes no aspect ratios`, getVideoModel(id)?.aspectRatios.length === 0);
 }
+
+// ---- MiniMax H3 Max Multi-Angle: camera_trajectory lane (probe 2026-09-15) ----
+// Same H3 Max family (simple prompts, private, 5-15s), but two things differ and
+// both cost money if they drift: it is the ONLY H3 Max lane that renders 1080P
+// (base H3 Max caps at 768P), and it is the ONLY model that accepts
+// camera_trajectory.
+const MA = getVideoModel('minimax-h3-max-multi-angle');
+ok('multi-angle is registered', MA !== undefined);
+ok('multi-angle is image-to-video', MA?.type === 'image-to-video');
+ok('multi-angle offers 1080P/768P/480P (1080P finish tier)',
+  JSON.stringify(MA?.resolutions) === JSON.stringify(['1080P', '768P', '480P']));
+ok('multi-angle prefers 1080P finish tier first', MA?.resolutions[0] === '1080P');
+ok('multi-angle wants simple prompts', MA?.promptStyle === 'simple');
+ok('multi-angle is private', MA?.privacy === 'private');
+ok('multi-angle duration ladder starts at 5s and tops at 15s',
+  MA?.durations[0] === '5s' && MA?.maxDurationSec === 15);
+ok('multi-angle rejects sub-5s durations', !MA?.durations.includes('4s'));
+ok('multi-angle audio is on and not configurable',
+  MA?.audio === true && MA?.audioConfigurable === false);
+ok('multi-angle exposes no aspect ratios (inherited from image)', MA?.aspectRatios.length === 0);
+ok('multi-angle claims neither reference images nor audio input',
+  MA?.supportsReferenceImages === false && MA?.audioInput === false);
+ok('multi-angle carries supportsCameraTrajectory flag', MA?.supportsCameraTrajectory === true);
+
+// The camera_trajectory capability is exclusive to multi-angle.
+ok('supportsCameraTrajectory(multi-angle) is true', supportsCameraTrajectory('minimax-h3-max-multi-angle'));
+ok('supportsCameraTrajectory is false for base H3 Max and Seedance',
+  !supportsCameraTrajectory('minimax-h3-max-image-to-video')
+  && !supportsCameraTrajectory('seedance-2-5-reference-to-video'));
+ok('exactly one registry model supports camera_trajectory',
+  VIDEO_MODELS.filter(m => m.supportsCameraTrajectory).length === 1);
+
+// buildStartEndTrajectory maps the "start/finish frame angle+distance" ask.
+const se = buildStartEndTrajectory({ azimuth: 0, elevation: 0, distance: 1 }, { azimuth: 360, elevation: 12, distance: 0.8 });
+ok('buildStartEndTrajectory returns 2 keyframes at time 0 and 1',
+  se.length === 2 && se[0].time === 0 && se[1].time === 1 && se[1].azimuth === 360);
+ok('buildStartEndTrajectory validates', validateCameraTrajectory(se).ok);
+
+// buildOrbitTrajectory: a full 360° turn with a speed ramp is valid and eased.
+const orbit = buildOrbitTrajectory({ azimuthTravel: 360, ramp: 'ease-in-out', keyframes: 6 });
+ok('buildOrbitTrajectory yields 6 keyframes', orbit.length === 6);
+ok('orbit ends at a full turn', Math.round(orbit[orbit.length - 1].azimuth) === 360);
+ok('orbit time is strictly increasing 0..1',
+  orbit.every((k, i) => k.time >= 0 && k.time <= 1 && (i === 0 || k.time > orbit[i - 1].time)));
+ok('ease-in-out is non-linear (mid azimuth != 180 at t=0.4)',
+  buildOrbitTrajectory({ azimuthTravel: 360, ramp: 'ease-in', keyframes: 5 })[1].azimuth < 90);
+ok('buildOrbitTrajectory validates', validateCameraTrajectory(orbit).ok);
+
+// Validator catches the server-enforced limits.
+ok('validator rejects a single keyframe',
+  !validateCameraTrajectory([{ time: 0, azimuth: 0, elevation: 0, distance: 1 }]).ok);
+ok('validator rejects azimuth travel beyond 32 turns',
+  !validateCameraTrajectory([{ time: 0, azimuth: 0, elevation: 0, distance: 1 }, { time: 1, azimuth: CAMERA_MAX_AZIMUTH_TRAVEL_DEG + 361, elevation: 0, distance: 1 }]).ok);
+ok('validator rejects elevation out of [-90,90]',
+  !validateCameraTrajectory([{ time: 0, azimuth: 0, elevation: -120, distance: 1 }, { time: 1, azimuth: 90, elevation: 0, distance: 1 }]).ok);
+ok('validator rejects non-increasing time',
+  !validateCameraTrajectory([{ time: 0.5, azimuth: 0, elevation: 0, distance: 1 }, { time: 0.5, azimuth: 90, elevation: 0, distance: 1 }]).ok);
+ok('validator rejects distance <= 0',
+  !validateCameraTrajectory([{ time: 0, azimuth: 0, elevation: 0, distance: 0 }, { time: 1, azimuth: 90, elevation: 0, distance: 1 }]).ok);
 
 // ---- Capability sets are consistent with the registry ----
 // Every registry entry that has supportsReferenceImages: true must be in
