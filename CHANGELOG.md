@@ -26,7 +26,10 @@
   output audio IS the clip (waveform correlation 0.96 at zero lag), so the
   mouth follows the file. When the clip outruns the render, Wan re-performs
   it instead, and an unpadded tail gets invented words, so shorter clips are
-  padded with silence to the render length.
+  padded with silence to the render length. The clip is always sent as PCM
+  WAV: an MP3 padded to exactly 15.0s decodes to 15.047s once the encoder
+  delay is counted, and the provider rejected it (a paid 1080p render,
+  2026-09-28).
 - **`videoDefaults.resolution`.** Optional per-project output resolution for
   single-shot renders, validated against each model's ladder. Unset keeps
   every family's current behaviour.

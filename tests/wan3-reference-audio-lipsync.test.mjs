@@ -59,7 +59,7 @@ const SHOT = {
   dialogue: { character: 'SAM', line: 'One sentence. That is all I typed.', delivery: 'warm, direct to camera' },
 };
 
-async function capture(s, sceneDir) {
+async function capture(s, sceneDir, shot = SHOT) {
   const state = {};
   const client = {
     async post(path, body) {
@@ -69,10 +69,10 @@ async function capture(s, sceneDir) {
   };
   const plan = { units: [{
     unitId: 'unit-001', unitType: 'single', shotNumbers: [1], outputFile: 'shot-001.mp4', model: 'action',
-    duration: SHOT.duration, startFrameStrategy: 'panel', endFrameStrategy: 'none', decisionReasons: [], fallbackToSingles: false,
+    duration: shot.duration, startFrameStrategy: 'panel', endFrameStrategy: 'none', decisionReasons: [], fallbackToSingles: false,
   }] };
   try {
-    await generateEpisodeVideos(client, s, [SHOT], sceneDir, plan);
+    await generateEpisodeVideos(client, s, [shot], sceneDir, plan);
   } catch (err) {
     if (!String(err?.message).includes(SENTINEL)) throw err;
   }
@@ -106,7 +106,7 @@ test('Wan 3.0 R2V lip-sync: dialogue in reference_audio_urls, refs only, resolut
   assert.equal(body.audio_url, undefined);
   assert.equal(body.image_url, undefined);
   assert.equal(body.reference_audio_urls?.length, 1);
-  assert.match(body.reference_audio_urls[0], /^data:audio\/mpeg;base64,/);
+  assert.match(body.reference_audio_urls[0], /^data:audio\/wav;base64,/);
   assert.ok(body.reference_image_urls?.length >= 1);
   assert.equal(body.resolution, '1080p');
   assert.equal(body.aspect_ratio, '16:9');
@@ -120,16 +120,26 @@ const WAN_LIPSYNC = {
   audioStrategy: 'lip-sync', videoFamilyPreference: 'wan-3-0',
 };
 
-function durationOfDataUri(uri) {
-  const file = join(mkdtempSync(join(tmpdir(), 'venice-uri-')), 'a.mp3');
+// Decoded sample count, which is what the provider measures against the cap.
+function decodedSecondsOfDataUri(uri) {
+  const file = join(mkdtempSync(join(tmpdir(), 'venice-uri-')), 'a.wav');
   writeFileSync(file, Buffer.from(uri.split(',')[1], 'base64'));
-  return parseFloat(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file]).toString());
+  const pcm = execFileSync('ffmpeg', ['-v', 'error', '-i', file, '-f', 's16le', '-ac', '1', '-ar', '44100', '-'],
+    { maxBuffer: 64 * 1024 * 1024 });
+  return pcm.length / (44100 * 2);
 }
 
 test('short dialogue is padded with silence to the render length', async () => {
   const { dir, sceneDir } = project();
   const body = await capture(series(dir, WAN_LIPSYNC), sceneDir);
-  assert.ok(Math.abs(durationOfDataUri(body.reference_audio_urls[0]) - 5) < 0.1);
+  assert.ok(Math.abs(decodedSecondsOfDataUri(body.reference_audio_urls[0]) - 5) < 0.01);
+});
+
+test('a 15s render never sends more than 15.0s of decoded audio', async () => {
+  const { dir, sceneDir } = project({ audioSec: 14.97 });
+  const shot15 = { ...SHOT, duration: '15s' };
+  const body = await capture(series(dir, WAN_LIPSYNC), sceneDir, shot15);
+  assert.ok(decodedSecondsOfDataUri(body.reference_audio_urls[0]) <= 15.0);
 });
 
 test('dialogue over the 15s cap is refused before queueing', async () => {

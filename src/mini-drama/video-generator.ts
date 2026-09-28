@@ -27,7 +27,7 @@ import {
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   getMaxReferenceImages,
 } from '../series/types.js';
-import { padAudioForModel, padAudioWithTrailingSilence, probeAudioDurationSec } from '../venice/audio-preflight.js';
+import { padAudioForModel, probeAudioDurationSec } from '../venice/audio-preflight.js';
 import { generateSpeech } from '../venice/audio.js';
 import { getCharacterDir, getLocationDir, getLocation } from '../series/manager.js';
 import {
@@ -841,33 +841,36 @@ export async function renderVideoFile(
         );
       }
       const renderSec = parseInt(String(prompt.duration), 10);
-      let sendPath = audioPath;
+      // Unpadded tails get invented speech, so pad with silence to the render
+      // length. Always sent as PCM WAV: an MP3's encoder delay decodes ~50ms
+      // long on the provider side, which tips a 15.0s clip over the cap.
+      let targetSec = audioSec;
       if (Number.isFinite(renderSec)) {
         if (audioSec > renderSec + 0.05) {
           // Wan re-performs the reference instead of following it when the
           // clip outruns the render, so the mouth no longer matches the file.
           console.warn(`  ⚠ Lip-sync audio is ${audioSec.toFixed(2)}s but the render is ${renderSec}s; Wan will re-perform it rather than follow it.`);
         } else {
-          // Unpadded tails get invented speech; silence keeps the mouth closed.
-          const target = Math.min(renderSec, LIP_SYNC_REFERENCE_AUDIO_MAX_SEC);
-          if (audioSec < target - 0.05) {
-            const padded = await padAudioWithTrailingSilence({
-              inputPath: audioPath,
-              outputPath: join(dirname(audioPath), 'padded', basename(audioPath)),
-              targetSec: target,
-            });
-            sendPath = padded.outputPath;
-          }
+          targetSec = Math.min(renderSec, LIP_SYNC_REFERENCE_AUDIO_MAX_SEC);
           if (renderSec > LIP_SYNC_REFERENCE_AUDIO_MAX_SEC) {
             console.warn(`  ⚠ Render is ${renderSec}s but reference audio caps at ${LIP_SYNC_REFERENCE_AUDIO_MAX_SEC}s; the model may invent speech after it.`);
           }
         }
       }
-      const mime = sendPath.toLowerCase().endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
-      const uri = fileToDataUri(sendPath, mime);
+      const sendPath = join(dirname(audioPath), 'padded', basename(audioPath).replace(/\.[^.]+$/, '') + '.wav');
+      await mkdir(dirname(sendPath), { recursive: true });
+      const ff = spawnSync('ffmpeg', [
+        '-y', '-v', 'error', '-i', audioPath,
+        '-af', `apad=whole_dur=${targetSec.toFixed(3)}`, '-t', targetSec.toFixed(3),
+        '-ac', '1', '-ar', '44100', '-c:a', 'pcm_s16le', sendPath,
+      ]);
+      if (ff.status !== 0) {
+        throw new Error(`ffmpeg could not prepare lip-sync audio ${audioPath}: ${ff.stderr?.toString().trim()}`);
+      }
+      const uri = fileToDataUri(sendPath, 'audio/wav');
       if (uri) {
         body.reference_audio_urls = [uri];
-        console.log(`  Lip-sync audio (reference_audio_urls): ${audioSec.toFixed(2)}s${sendPath !== audioPath ? `, padded to ${Math.min(renderSec, LIP_SYNC_REFERENCE_AUDIO_MAX_SEC)}s` : ''}`);
+        console.log(`  Lip-sync audio (reference_audio_urls): ${audioSec.toFixed(2)}s, sent as ${targetSec.toFixed(2)}s WAV`);
       }
     }
   }
