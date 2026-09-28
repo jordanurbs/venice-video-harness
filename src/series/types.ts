@@ -117,6 +117,14 @@ export interface VideoModelDefaults {
    */
   resolution?: string;
   /**
+   * Takes per shot on the reference-audio lip-sync lane (Wan 3.0 R2V). Each
+   * take's audio is checked against the dialogue clip; a take that
+   * re-performed the line is set aside as `shot-NNN.rejected-K.mp4`. Default 1
+   * (check and set aside, never spend on a retry); raise it to re-roll
+   * automatically, each extra take billed.
+   */
+  lipSyncMaxAttempts?: number;
+  /**
    * Auto-generate + attach a per-character voice-donor reference clip
    * (`reference_audio_urls`, bound in-prompt as @AudioN) on dialogue shots
    * that route to a reference-audio-capable model (Seedance 2.0 R2V family,

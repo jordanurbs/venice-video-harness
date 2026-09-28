@@ -2,6 +2,7 @@ import { writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { join, dirname, basename, resolve as resolvePath } from 'node:path';
 import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { measureLipSyncFidelity, type LipSyncFidelity } from './lip-sync-fidelity.js';
 import type { VeniceClient } from '../venice/client.js';
 import { VeniceRequestError } from '../venice/client.js';
 import type {
@@ -1550,7 +1551,7 @@ async function renderSingleShotUnit(
     dialogueAudioPath = await ensureDialogueAudio(client, series, shot, audioDir);
   }
 
-  const savedPath = await renderVideoFile(client, {
+  const renderOptions: RenderVideoOptions = {
     prompt: videoPrompt,
     anchorImagePath,
     outputPath: videoPath,
@@ -1564,7 +1565,34 @@ async function renderSingleShotUnit(
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
     project: series.outputDir,
     resolution: series.videoDefaults.resolution,
-  });
+  };
+  let savedPath = await renderVideoFile(client, renderOptions);
+
+  // Reference-audio lip-sync takes sometimes re-perform the line instead of
+  // following the clip. Keep a take only when its audio matches the clip;
+  // set rejected takes aside so a re-run renders just those shots.
+  let lipSyncFidelity: LipSyncFidelity | undefined;
+  if (dialogueAudioPath && MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(videoPrompt.model)) {
+    const maxAttempts = Math.max(1, series.videoDefaults.lipSyncMaxAttempts ?? 1);
+    for (let attempt = 1; ; attempt++) {
+      lipSyncFidelity = measureLipSyncFidelity(savedPath, dialogueAudioPath);
+      const summary = `corr ${lipSyncFidelity.corr}, worst 1s window ${lipSyncFidelity.minWindowCorr}`;
+      if (lipSyncFidelity.ok) {
+        console.log(`  Lip-sync check: follows the clip (${summary})`);
+        break;
+      }
+      let k = 1;
+      while (existsSync(savedPath.replace(/\.mp4$/, `.rejected-${k}.mp4`))) k++;
+      const rejectedPath = savedPath.replace(/\.mp4$/, `.rejected-${k}.mp4`);
+      renameSync(savedPath, rejectedPath);
+      console.warn(`  ⚠ Lip-sync check: take re-performed the line (${summary}); set aside as ${rejectedPath.split('/').pop()}`);
+      if (attempt >= maxAttempts) {
+        console.warn(`  ⚠ Shot ${shotKey(shotId)} left unrendered after ${attempt} take(s); re-run generate-videos to try again.`);
+        return [];
+      }
+      savedPath = await renderVideoFile(client, { ...renderOptions, forceRequeue: true });
+    }
+  }
 
   const durationSec = getVideoDuration(savedPath);
   unit.renderedDurationSec = durationSec;
@@ -1576,6 +1604,7 @@ async function renderSingleShotUnit(
   }];
 
   const extraMetadata: Record<string, unknown> = { generationUnit: unit.unitId };
+  if (lipSyncFidelity) extraMetadata.lipSyncFidelity = lipSyncFidelity;
   if (keyframeArtifacts) {
     extraMetadata.seedanceKeyframe = {
       stageAVideo: relativeForMetadata(savedPath, keyframeArtifacts.stageAVideoPath),

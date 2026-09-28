@@ -30,6 +30,17 @@
   WAV: an MP3 padded to exactly 15.0s decodes to 15.047s once the encoder
   delay is counted, and the provider rejected it (a paid 1080p render,
   2026-09-28).
+- **Lip-sync fidelity check on that lane.** Identical requests do not always
+  follow the clip: 2 of 4 takes of one shot re-performed the line (a dropped
+  phrase, re-timed words), and their mouths no longer match the file. After
+  each take, `measureLipSyncFidelity` (`src/mini-drama/lip-sync-fidelity.ts`)
+  compares the render's audio with the clip (keep at overall correlation
+  >= 0.9 and every speech second >= 0.6; faithful takes score ~0.96). A failed
+  take is set aside as `shot-NNN.rejected-K.mp4` and the shot is left
+  unrendered, so re-running `generate-videos` re-rolls just those shots.
+  `videoDefaults.lipSyncMaxAttempts` (default 1) re-rolls automatically
+  instead; every extra take is billed. The verdict is written to the shot's
+  video metadata.
 - **`videoDefaults.resolution`.** Optional per-project output resolution for
   single-shot renders, validated against each model's ladder. Unset keeps
   every family's current behaviour.
