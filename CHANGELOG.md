@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased — 2026-09-28
+
+### Added
+
+- **Wan 3.0 R2V exact lip-sync, in-family.** `resolveLipSyncModel('wan-3-0')`
+  now returns `wan-3-0-reference-to-video` instead of falling out to Wan 2.7.
+  Wan 3.0 rejects `audio_url`, but it lip-syncs the reference face to a
+  dialogue MP3 sent as `reference_audio_urls` (paid render 2026-09-01, one
+  reference image + a 4.9s clip). GET /models still reports
+  `audio_input: false` for the family, which is why the registry missed it.
+  New spec flag `lipSyncViaReferenceAudio` and set
+  `MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO` (base R2V only; the prime, enhanced
+  and pro R2V lanes are unprobed). On that lane `renderVideoFile` attaches
+  the dialogue as the single `reference_audio_urls` entry and sends no start
+  frame (the proven request shape). The video prompt gains a "precise lip
+  sync to that audio" clause on this lane only. No Seedance keyframe
+  pre-pass.
+- **Probed limits of that lane (2026-09-28, paid 480p renders).** Reference
+  audio caps at **15s per render, summed across clips**: 10s and 14s render;
+  16s, 20s, 25s (at 44.1, 22.05 and 16 kHz, MP3 or WAV) and a 9.8s + 14.1s
+  two-clip split fail at retrieve with 422 "Maximum is 30 seconds" after the
+  queue accepted them. `LIP_SYNC_REFERENCE_AUDIO_MAX_SEC` now refuses over-cap
+  audio before queueing. When the render is at least as long as the clip, the
+  output audio IS the clip (waveform correlation 0.96 at zero lag), so the
+  mouth follows the file. When the clip outruns the render, Wan re-performs
+  it instead, and an unpadded tail gets invented words, so shorter clips are
+  padded with silence to the render length. The clip is always sent as PCM
+  WAV: an MP3 padded to exactly 15.0s decodes to 15.047s once the encoder
+  delay is counted, and the provider rejected it (a paid 1080p render,
+  2026-09-28).
+- **Lip-sync fidelity check on that lane.** Identical requests do not always
+  follow the clip: 2 of 4 takes of one shot re-performed the line (a dropped
+  phrase, re-timed words), and their mouths no longer match the file. After
+  each take, `measureLipSyncFidelity` (`src/mini-drama/lip-sync-fidelity.ts`)
+  compares the render's audio with the clip (keep at overall correlation
+  >= 0.9 and every speech second >= 0.6; faithful takes score ~0.96). A failed
+  take is set aside as `shot-NNN.rejected-K.mp4` and the shot is left
+  unrendered, so re-running `generate-videos` re-rolls just those shots.
+  `videoDefaults.lipSyncMaxAttempts` (default 1) re-rolls automatically
+  instead; every extra take is billed. The verdict is written to the shot's
+  video metadata.
+- **`videoDefaults.resolution`.** Optional per-project output resolution for
+  single-shot renders, validated against each model's ladder. Unset keeps
+  every family's current behaviour.
+- `capabilities.json` gains `capabilitySets.lipSyncViaReferenceAudio`. The
+  field is additive and clients ignore unknown keys, so `schemaVersion` stays
+  at 1 (a bump would make shipped clients reject the manifest).
+
 ## 2.25.0 — 2026-09-07
 
 ### Fixed

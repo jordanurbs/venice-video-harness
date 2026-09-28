@@ -48,6 +48,15 @@ export interface VideoModelSpec {
    */
   supportsReferenceAudio?: boolean;
   /**
+   * Exact lip-sync is driven by a `reference_audio_urls` entry instead of
+   * `audio_url`: the model animates the reference face to the supplied
+   * recording. Wan 3.0 R2V rejects `audio_url` ("does not support audio
+   * input") but accepts the dialogue MP3 here, while GET /models still
+   * reports `audio_input: false`. Needs ≥1 reference image, like every
+   * reference-audio request.
+   */
+  lipSyncViaReferenceAudio?: boolean;
+  /**
    * Minimum allowed duration (seconds) for `audio_url` input.
    * Wan 2.7 rejects audio shorter than 3 seconds. Use the pre-flight
    * helper in `src/venice/audio-preflight.ts` to pad shorter clips.
@@ -206,10 +215,14 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   // The successor to 2.7, and the first family on Venice with a duration
   // ladder past 15s: 5/10/15/20/25/30s at 480p/720p/1080p, native audio on
   // by default and not configurable. Notes:
-  //   - NO audio input. `audio_input` and `per_reference_audio` are both
-  //     false across the whole family, so 3.0 cannot lip-sync to a supplied
-  //     recording the way Wan 2.7 i2v does. Exact lip-sync stays on 2.7 or on
-  //     a reference-audio R2V lane; 3.0 is for native in-frame dialogue.
+  //   - `audio_input` and `per_reference_audio` are false across the whole
+  //     family in GET /models, and `audio_url` is rejected. But
+  //     `wan-3-0-reference-to-video` DOES lip-sync the reference face to a
+  //     dialogue MP3 sent as `reference_audio_urls` (paid render, 2026-09-01,
+  //     one reference image + a 4.9s clip). That is its exact lip-sync lane
+  //     (`lipSyncViaReferenceAudio`), capped at 15s of reference audio per
+  //     render (LIP_SYNC_REFERENCE_AUDIO_MAX_SEC). The prime / enhanced / pro
+  //     R2V lanes have not been probed for it and are left out until they are.
   //   - i2v and R2V accept `adaptive` aspect (inherit from the input image)
   //     plus the five concrete ratios. Only the concrete ratios are listed
   //     here so the aspect pre-flight has real values to compare against.
@@ -238,6 +251,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     resolutions: ['1080p', '720p', '480p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
     audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    lipSyncViaReferenceAudio: true,
     maxDurationSec: 30, privacy: 'anonymized', offline: false,
   },
   {

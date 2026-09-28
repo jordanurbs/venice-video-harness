@@ -110,6 +110,21 @@ export interface VideoModelDefaults {
    */
   videoFamilyPreference?: VideoFamilyPreference;
   /**
+   * Output resolution for single-shot renders (e.g. `'1080p'`). Honored only
+   * when the shot's model lists it; otherwise the family pin in
+   * `renderVideoFile` applies. Unset keeps each family's default, which for
+   * Wan 3.0 means no `resolution` field at all (Venice's default tier).
+   */
+  resolution?: string;
+  /**
+   * Takes per shot on the reference-audio lip-sync lane (Wan 3.0 R2V). Each
+   * take's audio is checked against the dialogue clip; a take that
+   * re-performed the line is set aside as `shot-NNN.rejected-K.mp4`. Default 1
+   * (check and set aside, never spend on a retry); raise it to re-roll
+   * automatically, each extra take billed.
+   */
+  lipSyncMaxAttempts?: number;
+  /**
    * Auto-generate + attach a per-character voice-donor reference clip
    * (`reference_audio_urls`, bound in-prompt as @AudioN) on dialogue shots
    * that route to a reference-audio-capable model (Seedance 2.0 R2V family,
@@ -1096,8 +1111,13 @@ export function resolveLipSyncModel(family: VideoFamilyPreference): string {
       // Same split on H3 Max: only the R2V lane reports audio_input:true, and
       // it is also the only R2V in the pair (Turbo has none).
       return 'minimax-h3-max-reference-to-video';
-    case 'happyhorse':
     case 'wan-3-0':
+      // Wan 3.0 R2V lip-syncs the reference face to a dialogue MP3 sent as
+      // `reference_audio_urls` (it rejects `audio_url`). Staying in-family
+      // keeps the 30s duration ladder and the reference stack, and skips the
+      // Wan 2.7 keyframe pre-pass (rule 32).
+      return 'wan-3-0-reference-to-video';
+    case 'happyhorse':
     case 'grok-imagine':
     case 'kling-o3':
     default:
@@ -1338,6 +1358,27 @@ export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
   'seedance-2-0-reference-to-video-basic',
   'happyhorse-1-1-reference-to-video',
 ]);
+
+/**
+ * Models whose exact lip-sync takes the dialogue MP3 as a
+ * `reference_audio_urls` entry rather than `audio_url`. The clip is the
+ * performance to follow (the render's audio is that file, verbatim, when the
+ * render is at least as long as the clip), not a voice donor. Mirror of
+ * `lipSyncViaReferenceAudio: true` in models.ts.
+ */
+export const MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO = new Set([
+  'wan-3-0-reference-to-video',
+]);
+
+/**
+ * Reference-audio ceiling per render on the lip-sync-via-reference-audio lane,
+ * summed across clips. Probed 2026-09-28 on Wan 3.0 R2V: 10s and 14s clips
+ * render; 16s, 20s, 25s, and 9.8s + 14.1s split across two clips all fail at
+ * retrieve with 422 "Audio duration exceeds the maximum allowed. Maximum is 30
+ * seconds." (the message overstates the cap). Queue accepts the job first,
+ * so the harness refuses over-cap audio before queueing.
+ */
+export const LIP_SYNC_REFERENCE_AUDIO_MAX_SEC = 15;
 
 /**
  * Per-model reference_image_urls budget. The Venice API cap is 9 (per the
