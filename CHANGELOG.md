@@ -13,12 +13,20 @@
   New spec flag `lipSyncViaReferenceAudio` and set
   `MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO` (base R2V only; the prime, enhanced
   and pro R2V lanes are unprobed). On that lane `renderVideoFile` attaches
-  the dialogue as the single `reference_audio_urls` entry, sends no start
-  frame (the proven request shape), and warns when the clip outruns the
-  render. The clip is the performance, not a voice donor, so the 2-15s donor
-  budget does not apply. The video prompt gains a "precise lip sync to that
-  audio" clause on this lane only. One render per shot up to 30s, no Seedance
-  keyframe pre-pass.
+  the dialogue as the single `reference_audio_urls` entry and sends no start
+  frame (the proven request shape). The video prompt gains a "precise lip
+  sync to that audio" clause on this lane only. No Seedance keyframe
+  pre-pass.
+- **Probed limits of that lane (2026-09-28, paid 480p renders).** Reference
+  audio caps at **15s per render, summed across clips**: 10s and 14s render;
+  16s, 20s, 25s (at 44.1, 22.05 and 16 kHz, MP3 or WAV) and a 9.8s + 14.1s
+  two-clip split fail at retrieve with 422 "Maximum is 30 seconds" after the
+  queue accepted them. `LIP_SYNC_REFERENCE_AUDIO_MAX_SEC` now refuses over-cap
+  audio before queueing. When the render is at least as long as the clip, the
+  output audio IS the clip (waveform correlation 0.96 at zero lag), so the
+  mouth follows the file. When the clip outruns the render, Wan re-performs
+  it instead, and an unpadded tail gets invented words, so shorter clips are
+  padded with silence to the render length.
 - **`videoDefaults.resolution`.** Optional per-project output resolution for
   single-shot renders, validated against each model's ladder. Unset keeps
   every family's current behaviour.

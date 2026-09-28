@@ -23,7 +23,7 @@ import { VIDEO_MODELS, getVideoModel } from '../dist/venice/models.js';
 const SENTINEL = '__CAPTURED_QUEUE__';
 const PNG = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]);
 
-function project({ charImage = 'front.png' } = {}) {
+function project({ charImage = 'front.png', audioSec = 4 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'venice-wan3-lipsync-'));
   const sceneDir = join(dir, 'episodes', 'ep1', 'scene-01');
   mkdirSync(sceneDir, { recursive: true });
@@ -34,7 +34,7 @@ function project({ charImage = 'front.png' } = {}) {
   }
   const audioDir = join(dir, 'episodes', 'ep1', 'audio');
   mkdirSync(audioDir, { recursive: true });
-  execFileSync('ffmpeg', ['-f', 'lavfi', '-i', 'sine=frequency=220:duration=4', '-ac', '1', '-y',
+  execFileSync('ffmpeg', ['-f', 'lavfi', '-i', `sine=frequency=220:duration=${audioSec}`, '-ac', '1', '-y',
     join(audioDir, 'dialogue-shot-001.mp3')], { stdio: 'ignore' });
   return { dir, sceneDir };
 }
@@ -112,6 +112,29 @@ test('Wan 3.0 R2V lip-sync: dialogue in reference_audio_urls, refs only, resolut
   assert.equal(body.aspect_ratio, '16:9');
   assert.match(body.prompt, /precise lip sync to that audio/);
   assert.match(body.prompt, /One sentence\. That is all I typed\./);
+});
+
+const WAN_LIPSYNC = {
+  actionModel: 'wan-3-0-image-to-video', atmosphereModel: 'wan-3-0-image-to-video',
+  characterConsistencyModel: 'wan-3-0-reference-to-video', lipSyncModel: 'wan-3-0-reference-to-video',
+  audioStrategy: 'lip-sync', videoFamilyPreference: 'wan-3-0',
+};
+
+function durationOfDataUri(uri) {
+  const file = join(mkdtempSync(join(tmpdir(), 'venice-uri-')), 'a.mp3');
+  writeFileSync(file, Buffer.from(uri.split(',')[1], 'base64'));
+  return parseFloat(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file]).toString());
+}
+
+test('short dialogue is padded with silence to the render length', async () => {
+  const { dir, sceneDir } = project();
+  const body = await capture(series(dir, WAN_LIPSYNC), sceneDir);
+  assert.ok(Math.abs(durationOfDataUri(body.reference_audio_urls[0]) - 5) < 0.1);
+});
+
+test('dialogue over the 15s cap is refused before queueing', async () => {
+  const { dir, sceneDir } = project({ audioSec: 16 });
+  await assert.rejects(capture(series(dir, WAN_LIPSYNC), sceneDir), /at most 15s of reference audio/);
 });
 
 test('anchor.png alone is enough for the reference stack on a non-@Image R2V lane', async () => {

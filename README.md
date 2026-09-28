@@ -1413,7 +1413,7 @@ Which model handles exact lip-sync depends on the family, because only some lane
 |--------|----------------|---------------|
 | `seedance`, `auto` | In-family on `seedance-2-0-enhanced-reference-to-video`, which accepts a top-level `audio_url` | One render — the reference stack already anchors identity |
 | `minimax-h3` | In-family on `minimax-h3-reference-to-video`, the one H3 lane with `audio_input` | One render |
-| `wan-3-0` | In-family on `wan-3-0-reference-to-video`, with the dialogue MP3 sent as `reference_audio_urls` (it rejects `audio_url`) and no start frame | One render, up to 30s. The clip may run as long as the render; it is not held to the 2-15s voice-donor budget |
+| `wan-3-0` | In-family on `wan-3-0-reference-to-video`, with the dialogue MP3 sent as `reference_audio_urls` (it rejects `audio_url`) and no start frame | One render per line. Reference audio caps at 15s per render (summed across clips), so script lip-sync shots at 5, 10 or 15s; the harness refuses longer audio before queueing and pads shorter audio with silence to the render length |
 | `happyhorse`, `grok-imagine`, `kling-o3` | Out to `wan-2-7-image-to-video` | Two renders (~$0.85) — Wan 2.7 i2v takes no reference images, so a Seedance R2V pass supplies its keyframe first. See AGENTS.md rule 32 |
 
 Override the choice per project with `series.json` → `videoDefaults.lipSyncModel`.

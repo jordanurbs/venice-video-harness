@@ -1,5 +1,5 @@
 import { writeFile, mkdir, appendFile } from 'node:fs/promises';
-import { join, dirname, resolve as resolvePath } from 'node:path';
+import { join, dirname, basename, resolve as resolvePath } from 'node:path';
 import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import type { VeniceClient } from '../venice/client.js';
@@ -21,12 +21,13 @@ import {
   MODELS_SUPPORTING_PER_REFERENCE_AUDIO,
   MODELS_SUPPORTING_REFERENCE_AUDIO,
   MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO,
+  LIP_SYNC_REFERENCE_AUDIO_MAX_SEC,
   MODELS_USING_IMAGE_TAGS,
   isSeedanceVideoModel,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   getMaxReferenceImages,
 } from '../series/types.js';
-import { padAudioForModel, probeAudioDurationSec } from '../venice/audio-preflight.js';
+import { padAudioForModel, padAudioWithTrailingSilence, probeAudioDurationSec } from '../venice/audio-preflight.js';
 import { generateSpeech } from '../venice/audio.js';
 import { getCharacterDir, getLocationDir, getLocation } from '../series/manager.js';
 import {
@@ -833,15 +834,40 @@ export async function renderVideoFile(
       console.warn(`  ⚠ Lip-sync audio missing on disk, rendering without it: ${audioPath}`);
     } else {
       const audioSec = await probeAudioDurationSec(audioPath);
-      const renderSec = parseInt(String(prompt.duration), 10);
-      if (Number.isFinite(renderSec) && audioSec > renderSec + 0.05) {
-        console.warn(`  ⚠ Lip-sync audio is ${audioSec.toFixed(2)}s but the render is ${renderSec}s; the tail will be cut.`);
+      if (audioSec > LIP_SYNC_REFERENCE_AUDIO_MAX_SEC) {
+        throw new Error(
+          `Lip-sync audio ${audioPath} is ${audioSec.toFixed(2)}s; ${effectiveModel} accepts at most ` +
+          `${LIP_SYNC_REFERENCE_AUDIO_MAX_SEC}s of reference audio per render (split the line). Not queued.`,
+        );
       }
-      const mime = audioPath.toLowerCase().endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
-      const uri = fileToDataUri(audioPath, mime);
+      const renderSec = parseInt(String(prompt.duration), 10);
+      let sendPath = audioPath;
+      if (Number.isFinite(renderSec)) {
+        if (audioSec > renderSec + 0.05) {
+          // Wan re-performs the reference instead of following it when the
+          // clip outruns the render, so the mouth no longer matches the file.
+          console.warn(`  ⚠ Lip-sync audio is ${audioSec.toFixed(2)}s but the render is ${renderSec}s; Wan will re-perform it rather than follow it.`);
+        } else {
+          // Unpadded tails get invented speech; silence keeps the mouth closed.
+          const target = Math.min(renderSec, LIP_SYNC_REFERENCE_AUDIO_MAX_SEC);
+          if (audioSec < target - 0.05) {
+            const padded = await padAudioWithTrailingSilence({
+              inputPath: audioPath,
+              outputPath: join(dirname(audioPath), 'padded', basename(audioPath)),
+              targetSec: target,
+            });
+            sendPath = padded.outputPath;
+          }
+          if (renderSec > LIP_SYNC_REFERENCE_AUDIO_MAX_SEC) {
+            console.warn(`  ⚠ Render is ${renderSec}s but reference audio caps at ${LIP_SYNC_REFERENCE_AUDIO_MAX_SEC}s; the model may invent speech after it.`);
+          }
+        }
+      }
+      const mime = sendPath.toLowerCase().endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
+      const uri = fileToDataUri(sendPath, mime);
       if (uri) {
         body.reference_audio_urls = [uri];
-        console.log(`  Lip-sync audio (reference_audio_urls): ${audioSec.toFixed(2)}s`);
+        console.log(`  Lip-sync audio (reference_audio_urls): ${audioSec.toFixed(2)}s${sendPath !== audioPath ? `, padded to ${Math.min(renderSec, LIP_SYNC_REFERENCE_AUDIO_MAX_SEC)}s` : ''}`);
       }
     }
   }

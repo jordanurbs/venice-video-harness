@@ -220,8 +220,9 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   //     `wan-3-0-reference-to-video` DOES lip-sync the reference face to a
   //     dialogue MP3 sent as `reference_audio_urls` (paid render, 2026-09-01,
   //     one reference image + a 4.9s clip). That is its exact lip-sync lane
-  //     (`lipSyncViaReferenceAudio`). The prime / enhanced / pro R2V lanes
-  //     have not been probed for it and are left out until they are.
+  //     (`lipSyncViaReferenceAudio`), capped at 15s of reference audio per
+  //     render (LIP_SYNC_REFERENCE_AUDIO_MAX_SEC). The prime / enhanced / pro
+  //     R2V lanes have not been probed for it and are left out until they are.
   //   - i2v and R2V accept `adaptive` aspect (inherit from the input image)
   //     plus the five concrete ratios. Only the concrete ratios are listed
   //     here so the aspect pre-flight has real values to compare against.

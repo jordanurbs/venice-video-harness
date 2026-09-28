@@ -1354,13 +1354,23 @@ export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
 /**
  * Models whose exact lip-sync takes the dialogue MP3 as a
  * `reference_audio_urls` entry rather than `audio_url`. The clip is the
- * performance to follow, not a 2-15s voice donor, so the voice-donor budget
- * does not apply; it may run as long as the render. Mirror of
+ * performance to follow (the render's audio is that file, verbatim, when the
+ * render is at least as long as the clip), not a voice donor. Mirror of
  * `lipSyncViaReferenceAudio: true` in models.ts.
  */
 export const MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO = new Set([
   'wan-3-0-reference-to-video',
 ]);
+
+/**
+ * Reference-audio ceiling per render on the lip-sync-via-reference-audio lane,
+ * summed across clips. Probed 2026-09-28 on Wan 3.0 R2V: 10s and 14s clips
+ * render; 16s, 20s, 25s, and 9.8s + 14.1s split across two clips all fail at
+ * retrieve with 422 "Audio duration exceeds the maximum allowed. Maximum is 30
+ * seconds." (the message overstates the cap). Queue accepts the job first,
+ * so the harness refuses over-cap audio before queueing.
+ */
+export const LIP_SYNC_REFERENCE_AUDIO_MAX_SEC = 15;
 
 /**
  * Per-model reference_image_urls budget. The Venice API cap is 9 (per the
