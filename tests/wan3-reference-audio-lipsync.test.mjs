@@ -23,12 +23,12 @@ import { VIDEO_MODELS, getVideoModel } from '../dist/venice/models.js';
 const SENTINEL = '__CAPTURED_QUEUE__';
 const PNG = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]);
 
-function project() {
+function project({ charImage = 'front.png' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'venice-wan3-lipsync-'));
   const sceneDir = join(dir, 'episodes', 'ep1', 'scene-01');
   mkdirSync(sceneDir, { recursive: true });
   mkdirSync(join(dir, 'characters', 'sam'), { recursive: true });
-  for (const img of [join(dir, 'characters', 'sam', 'front.png'), join(sceneDir, 'shot-001.png')]) {
+  for (const img of [join(dir, 'characters', 'sam', charImage), join(sceneDir, 'shot-001.png')]) {
     writeFileSync(img, PNG);
     writeFileSync(img.replace(/\.png$/, '.provenance.json'), JSON.stringify({ generationModel: 'grok-imagine-image-2-0', hasFace: true }));
   }
@@ -112,6 +112,18 @@ test('Wan 3.0 R2V lip-sync: dialogue in reference_audio_urls, refs only, resolut
   assert.equal(body.aspect_ratio, '16:9');
   assert.match(body.prompt, /precise lip sync to that audio/);
   assert.match(body.prompt, /One sentence\. That is all I typed\./);
+});
+
+test('anchor.png alone is enough for the reference stack on a non-@Image R2V lane', async () => {
+  const { dir, sceneDir } = project({ charImage: 'anchor.png' });
+  const body = await capture(series(dir, {
+    actionModel: 'wan-3-0-image-to-video', atmosphereModel: 'wan-3-0-image-to-video',
+    characterConsistencyModel: 'wan-3-0-reference-to-video', lipSyncModel: 'wan-3-0-reference-to-video',
+    audioStrategy: 'lip-sync', videoFamilyPreference: 'wan-3-0',
+  }), sceneDir);
+  assert.equal(body.reference_image_urls?.length, 1);
+  assert.equal(body.reference_audio_urls?.length, 1);
+  assert.equal(body.image_url, undefined);
 });
 
 test('Seedance lip-sync still uses audio_url', async () => {

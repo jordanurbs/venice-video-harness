@@ -1188,11 +1188,13 @@ function resolveCharacterElements(
   if ((shot.useReferenceImages || autoRefs)
     && MODELS_SUPPORTING_REFERENCE_IMAGES.has(prompt.model)) {
     const budget = getMaxReferenceImages(prompt.model);
+    // anchor.png (harvest-anchor, or an operator-locked frame) leads, as it
+    // does in the slot planner (rule 53).
     const paths = resolvedChars
       .slice(0, budget)
       .flatMap(c => {
         const dir = charDirFn(c.name);
-        return ['front.png', 'three-quarter.png']
+        return ['anchor.png', 'front.png', 'three-quarter.png']
           .map(f => join(dir, f))
           .filter(p => existsSync(p));
       })
