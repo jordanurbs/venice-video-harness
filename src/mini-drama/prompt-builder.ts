@@ -17,6 +17,7 @@ import {
   MODELS_SUPPORTING_REFERENCE_IMAGES,
   MODELS_SUPPORTING_SCENE_IMAGES,
   MODELS_SUPPORTING_REFERENCE_AUDIO,
+  MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO,
   MODELS_USING_IMAGE_TAGS,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   getMaxReferenceImages,
@@ -614,6 +615,13 @@ export function buildVideoPrompt(
     const improviseDialogue = shouldImproviseDialogue(modelId, series);
     parts.push(formatDialogueLine(who, shot.dialogue.line, improviseDialogue));
     if (improviseDialogue) parts.push(IMPROV_DIALOGUE_NOTE);
+    if (MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(modelId)
+      && series.videoDefaults.audioStrategy === 'lip-sync') {
+      parts.push(
+        'The supplied reference audio is this line, already recorded: precise lip sync to that audio, ' +
+        'the mouth follows every word, natural blinking and subtle head movement, no other voices.',
+      );
+    }
 
     // Bind the voice-donor clip. @AudioN carries voice identity ONLY; the
     // model should still render clean studio dialogue for the line above.

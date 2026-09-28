@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — 2026-09-28
+
+### Added
+
+- **Wan 3.0 R2V exact lip-sync, in-family.** `resolveLipSyncModel('wan-3-0')`
+  now returns `wan-3-0-reference-to-video` instead of falling out to Wan 2.7.
+  Wan 3.0 rejects `audio_url`, but it lip-syncs the reference face to a
+  dialogue MP3 sent as `reference_audio_urls` (paid render 2026-09-01, one
+  reference image + a 4.9s clip). GET /models still reports
+  `audio_input: false` for the family, which is why the registry missed it.
+  New spec flag `lipSyncViaReferenceAudio` and set
+  `MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO` (base R2V only; the prime, enhanced
+  and pro R2V lanes are unprobed). On that lane `renderVideoFile` attaches
+  the dialogue as the single `reference_audio_urls` entry, sends no start
+  frame (the proven request shape), and warns when the clip outruns the
+  render. The clip is the performance, not a voice donor, so the 2-15s donor
+  budget does not apply. The video prompt gains a "precise lip sync to that
+  audio" clause on this lane only. One render per shot up to 30s, no Seedance
+  keyframe pre-pass.
+- **`videoDefaults.resolution`.** Optional per-project output resolution for
+  single-shot renders, validated against each model's ladder. Unset keeps
+  every family's current behaviour.
+- `capabilities.json` gains `capabilitySets.lipSyncViaReferenceAudio`. The
+  field is additive and clients ignore unknown keys, so `schemaVersion` stays
+  at 1 (a bump would make shipped clients reject the manifest).
+
 ## 2.25.0 — 2026-09-07
 
 ### Fixed

@@ -110,6 +110,13 @@ export interface VideoModelDefaults {
    */
   videoFamilyPreference?: VideoFamilyPreference;
   /**
+   * Output resolution for single-shot renders (e.g. `'1080p'`). Honored only
+   * when the shot's model lists it; otherwise the family pin in
+   * `renderVideoFile` applies. Unset keeps each family's default, which for
+   * Wan 3.0 means no `resolution` field at all (Venice's default tier).
+   */
+  resolution?: string;
+  /**
    * Auto-generate + attach a per-character voice-donor reference clip
    * (`reference_audio_urls`, bound in-prompt as @AudioN) on dialogue shots
    * that route to a reference-audio-capable model (Seedance 2.0 R2V family,
@@ -1096,8 +1103,13 @@ export function resolveLipSyncModel(family: VideoFamilyPreference): string {
       // Same split on H3 Max: only the R2V lane reports audio_input:true, and
       // it is also the only R2V in the pair (Turbo has none).
       return 'minimax-h3-max-reference-to-video';
-    case 'happyhorse':
     case 'wan-3-0':
+      // Wan 3.0 R2V lip-syncs the reference face to a dialogue MP3 sent as
+      // `reference_audio_urls` (it rejects `audio_url`). Staying in-family
+      // keeps the 30s duration ladder and the reference stack, and skips the
+      // Wan 2.7 keyframe pre-pass (rule 32).
+      return 'wan-3-0-reference-to-video';
+    case 'happyhorse':
     case 'grok-imagine':
     case 'kling-o3':
     default:
@@ -1337,6 +1349,17 @@ export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
   'seedance-2-0-fast-reference-to-video',
   'seedance-2-0-reference-to-video-basic',
   'happyhorse-1-1-reference-to-video',
+]);
+
+/**
+ * Models whose exact lip-sync takes the dialogue MP3 as a
+ * `reference_audio_urls` entry rather than `audio_url`. The clip is the
+ * performance to follow, not a 2-15s voice donor, so the voice-donor budget
+ * does not apply; it may run as long as the render. Mirror of
+ * `lipSyncViaReferenceAudio: true` in models.ts.
+ */
+export const MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO = new Set([
+  'wan-3-0-reference-to-video',
 ]);
 
 /**

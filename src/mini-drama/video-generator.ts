@@ -20,6 +20,7 @@ import {
   MODELS_SUPPORTING_AUDIO_INPUT,
   MODELS_SUPPORTING_PER_REFERENCE_AUDIO,
   MODELS_SUPPORTING_REFERENCE_AUDIO,
+  MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO,
   MODELS_USING_IMAGE_TAGS,
   isSeedanceVideoModel,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
@@ -625,9 +626,14 @@ export async function renderVideoFile(
   // no references at all (rare: no characters, no location, no storyboard)
   // still anchor on the panel.
   const hasSlotPlan = (prompt.referenceSlots?.length ?? 0) > 0;
-  const refsOnly = hasSlotPlan
-    && MODELS_USING_IMAGE_TAGS.has(effectiveModel)
-    && Boolean(referenceImagePaths && referenceImagePaths.length > 0);
+  const hasReferenceImages = Boolean(referenceImagePaths && referenceImagePaths.length > 0);
+  // Reference-audio lip-sync (Wan 3.0 R2V) is sent in the only shape probed
+  // live: reference image(s) + the dialogue clip, no start frame.
+  const lipSyncViaReferenceAudio = MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(effectiveModel)
+    && Boolean(audioPath)
+    && hasReferenceImages;
+  const refsOnly = lipSyncViaReferenceAudio
+    || (hasSlotPlan && MODELS_USING_IMAGE_TAGS.has(effectiveModel) && hasReferenceImages);
 
   const body: Record<string, unknown> = {
     model: effectiveModel,
@@ -743,6 +749,8 @@ export async function renderVideoFile(
     } else if (audioUrl) {
       body.audio_url = audioUrl;
     }
+  } else if (MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(effectiveModel) && audioPath) {
+    // Attached as reference_audio_urls after the reference images are set.
   } else if (audioPath || audioUrl) {
     // Model doesn't accept audio_url — drop quietly rather than 400.
     // For per-reference-audio R2V models, the audio attaches per element below.
@@ -816,6 +824,26 @@ export async function renderVideoFile(
       .map(p => p.startsWith('data:') ? p : (fileToDataUri(p) ?? p))
       .filter(Boolean);
     console.log(`  Scene images: ${(body.scene_image_urls as string[]).length}`);
+  }
+
+  if (MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(effectiveModel) && audioPath) {
+    if (!lipSyncViaReferenceAudio) {
+      console.warn('  ⚠ Lip-sync audio present but no reference image — dropping it (Venice rejects audio-only reference audio).');
+    } else if (!existsSync(audioPath)) {
+      console.warn(`  ⚠ Lip-sync audio missing on disk, rendering without it: ${audioPath}`);
+    } else {
+      const audioSec = await probeAudioDurationSec(audioPath);
+      const renderSec = parseInt(String(prompt.duration), 10);
+      if (Number.isFinite(renderSec) && audioSec > renderSec + 0.05) {
+        console.warn(`  ⚠ Lip-sync audio is ${audioSec.toFixed(2)}s but the render is ${renderSec}s; the tail will be cut.`);
+      }
+      const mime = audioPath.toLowerCase().endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
+      const uri = fileToDataUri(audioPath, mime);
+      if (uri) {
+        body.reference_audio_urls = [uri];
+        console.log(`  Lip-sync audio (reference_audio_urls): ${audioSec.toFixed(2)}s`);
+      }
+    }
   }
 
   // Voice-donor reference audio (@Audio1, @Audio2, …). Gated on model support
@@ -1477,14 +1505,15 @@ async function renderSingleShotUnit(
     }
   }
 
-  // Exact lip-sync: wire the dialogue MP3 into `audio_url` so the model
-  // follows the real recording instead of synthesizing a voice. This is the
-  // step that actually produces the lip-sync, so it runs for every
-  // audio-input-capable route — the keyframed Wan 2.7 i2v path and the
-  // in-family R2V path (Seedance 2.x, MiniMax H3) alike.
+  // Exact lip-sync: wire the dialogue MP3 into the model so it follows the
+  // real recording instead of synthesizing a voice. This is the step that
+  // actually produces the lip-sync, so it runs for every audio-driven route —
+  // `audio_url` on the keyframed Wan 2.7 i2v path and the in-family R2V path
+  // (Seedance 2.x, MiniMax H3), `reference_audio_urls` on Wan 3.0 R2V.
   if (!stageAFailed
     && mustRenderAsExactLipSync(shot, series.videoDefaults)
-    && MODELS_SUPPORTING_AUDIO_INPUT.has(videoPrompt.model)) {
+    && (MODELS_SUPPORTING_AUDIO_INPUT.has(videoPrompt.model)
+      || MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(videoPrompt.model))) {
     const audioDir = join(dirname(sceneDir), 'audio');
     console.log(`  Locating dialogue audio for ${videoPrompt.model} lip-sync`);
     dialogueAudioPath = await ensureDialogueAudio(client, series, shot, audioDir);
@@ -1503,6 +1532,7 @@ async function renderSingleShotUnit(
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
     project: series.outputDir,
+    resolution: series.videoDefaults.resolution,
   });
 
   const durationSec = getVideoDuration(savedPath);

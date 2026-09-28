@@ -70,15 +70,15 @@ function ok(label, cond, detail) {
   ok('turbo lipSyncModel is the H3 Max R2V lane', s.videoDefaults.lipSyncModel === 'minimax-h3-max-reference-to-video');
 }
 
-// Family 'wan-3-0' → Wan 3.0 i2v + R2V. No audio input anywhere in the
-// family, so exact lip-sync falls back to Wan 2.7.
+// Family 'wan-3-0' → Wan 3.0 i2v + R2V. Exact lip-sync stays in-family on
+// Wan 3.0 R2V, which takes the dialogue as reference_audio_urls.
 {
   const s = createSeries('Wan3 Series', 'concept', 'drama', 'somewhere', {
     videoFamilyPreference: 'wan-3-0',
   });
   ok('wan-3-0 actionModel', s.videoDefaults.actionModel === 'wan-3-0-image-to-video');
   ok('wan-3-0 characterConsistencyModel', s.videoDefaults.characterConsistencyModel === 'wan-3-0-reference-to-video');
-  ok('wan-3-0 lipSyncModel falls back to Wan 2.7', s.videoDefaults.lipSyncModel === 'wan-2-7-image-to-video');
+  ok('wan-3-0 lipSyncModel stays on Wan 3.0 R2V', s.videoDefaults.lipSyncModel === 'wan-3-0-reference-to-video');
 }
 
 // Family 'grok-imagine' → Grok i2v + Grok R2V (Grok now ships R2V).

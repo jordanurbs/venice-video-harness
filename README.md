@@ -554,7 +554,7 @@ Live catalog (synced against `GET /api/v1/models?type=video` — 103 entries). F
 | **MiniMax H3** | i2v, R2V (up to 9 refs) | t2v | 15s (**5s floor**) | Yes (native stereo, not toggleable) | Open-weight omni-modal model — one net covers T2V/I2V/reference. **2K is the only resolution** (no draft tier) at ~1/3 the per-second cost of other families; 24fps, 2500-char prompts. The `minimax-h3` video-family routes here. Sub-5s durations are a hard 400. |
 | **MiniMax H3 Max** | i2v, R2V (up to 9 refs) | t2v | 15s (**5s floor**) | Yes (native, not toggleable) | **Simple prompts — the model stages its own coverage.** Registry `promptStyle: 'simple'`, so the prompt builder strips blocking, locked location descriptions, and geography-hold clauses; say the intent in a sentence or two. Best for montages and beats where the model telling its own story is the point. **768P max — 2K is a hard 400**, the inverse of base H3 (480P is the draft tier). `private` tier, uncensored, 10000-char prompts. $0.024/s. The `minimax-h3-max` video-family routes here. |
 | **MiniMax H3 Max Turbo** | i2v | t2v | 15s (**5s floor**) | Yes (native, not toggleable) | Same model and constraints at **$0.012/s — the cheapest lane in the registry**, which makes 15s takes cheap enough to render several and pick. **No R2V lane** (`-turbo-reference-to-video` does not exist), so the `minimax-h3-max-turbo` family routes identity shots to `minimax-h3-max-reference-to-video`. |
-| **Wan 3.0** | i2v, R2V (up to 9 refs), Enhanced | t2v | **30s** | Yes (always on, not toggleable) | **Longest shots on Venice** — 5/10/15/20/25/30s at 480p/720p/1080p, five aspect ratios plus adaptive, 5000-char prompts. The `wan-3-0` video-family routes here. No audio input anywhere in the family, so it can't lip-sync to a supplied recording. `*-enhanced-*` variants are beta. |
+| **Wan 3.0** | i2v, R2V (up to 9 refs), Enhanced | t2v | **30s** | Yes (always on, not toggleable) | **Longest shots on Venice** — 5/10/15/20/25/30s at 480p/720p/1080p, five aspect ratios plus adaptive, 5000-char prompts. The `wan-3-0` video-family routes here. `audio_url` is rejected family-wide, but Wan 3.0 R2V lip-syncs the reference face to a recording sent as `reference_audio_urls`, which is its exact lip-sync lane. `*-enhanced-*` variants are beta. |
 | **Wan 2.7** | i2v, R2V, V2V, Spicy | t2v | 15s | Wan i2v has no audio; lip-syncs via `audio_url` input | **The audio-driven fallback for exact lip-sync.** R2V exposes per-element `audio_url` for multi-speaker. Spicy = uncensored i2v variant. Seedance 2.x R2V and MiniMax H3 R2V also accept a top-level `audio_url`, so those families never route here. |
 | **Wan 2.6** | Standard, Flash, R2V | Standard | 15s | Yes (i2v/t2v); R2V capped at 10s | Now has R2V variant with `audio_url` input. 1080p. |
 | **Wan 2.5 Preview** | i2v | t2v | 10s | Yes | `audio_url` input. |
@@ -1413,14 +1413,15 @@ Which model handles exact lip-sync depends on the family, because only some lane
 |--------|----------------|---------------|
 | `seedance`, `auto` | In-family on `seedance-2-0-enhanced-reference-to-video`, which accepts a top-level `audio_url` | One render — the reference stack already anchors identity |
 | `minimax-h3` | In-family on `minimax-h3-reference-to-video`, the one H3 lane with `audio_input` | One render |
-| `happyhorse`, `wan-3-0`, `grok-imagine`, `kling-o3` | Out to `wan-2-7-image-to-video` | Two renders (~$0.85) — Wan 2.7 i2v takes no reference images, so a Seedance R2V pass supplies its keyframe first. See AGENTS.md rule 32 |
+| `wan-3-0` | In-family on `wan-3-0-reference-to-video`, with the dialogue MP3 sent as `reference_audio_urls` (it rejects `audio_url`) and no start frame | One render, up to 30s. The clip may run as long as the render; it is not held to the 2-15s voice-donor budget |
+| `happyhorse`, `grok-imagine`, `kling-o3` | Out to `wan-2-7-image-to-video` | Two renders (~$0.85) — Wan 2.7 i2v takes no reference images, so a Seedance R2V pass supplies its keyframe first. See AGENTS.md rule 32 |
 
 Override the choice per project with `series.json` → `videoDefaults.lipSyncModel`.
 
 | Family | Picks | Trade-off |
 |--------|-------|-----------|
 | `seedance` | Seedance 2.0 Enhanced R2V for all three lanes | The default. Strongest identity anchoring, 720p drafts, 4-15s. |
-| `wan-3-0` | Wan 3.0 i2v (action/atmosphere) + Wan 3.0 R2V (identity) | The only family that renders past 15s: 5-30s at 480p/720p/1080p, native audio always on, 9-image reference stack. Takes no audio input, so exact lip-sync leaves the family. |
+| `wan-3-0` | Wan 3.0 i2v (action/atmosphere) + Wan 3.0 R2V (identity) | The only family that renders past 15s: 5-30s at 480p/720p/1080p, native audio always on, 9-image reference stack. Exact lip-sync stays in-family: Wan 3.0 R2V takes the dialogue as `reference_audio_urls`. |
 | `minimax-h3` | H3 i2v (action/atmosphere) + H3 R2V (identity) | 2K with native stereo audio at ~1/3 the per-second cost. But 2K is the only resolution, so there's no cheap draft pass, and the 5s floor means 3-4s beats have to be re-scripted. |
 | `happyhorse` | HappyHorse 1.1 i2v + R2V | Best native lip-sync (7 languages, phoneme-level), 3-15s, 720p/1080p. |
 | `grok-imagine` | Grok Imagine i2v + R2V | Atmosphere-forward look; R2V durations stepped at 5s/8s/10s. |
