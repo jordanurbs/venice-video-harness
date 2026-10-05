@@ -19,8 +19,8 @@ import {
   getTextModel,
   resolveIntelligence,
   selectableTextModels,
-} from '../dist/venice/text-models.js';
-import { INTELLIGENCE_CHOICES } from '../dist/mini-drama/choices.js';
+} from '../packages/core/dist/venice/text-models.js';
+import { INTELLIGENCE_CHOICES } from '../packages/core/dist/mini-drama/choices.js';
 import { createSeries } from '../dist/series/manager.js';
 import { describeApiError, extractJsonBlock } from '../dist/venice/client.js';
 import { renderWorkshopHtml } from '../dist/mini-drama/workshop.js';

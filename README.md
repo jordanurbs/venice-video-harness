@@ -35,6 +35,19 @@ The upstream-first rule: every new capability, model integration, routing rule, 
 
 See [AGENTS.md](AGENTS.md) > "Contract For Downstream Apps (SSOT)" for the full contract, the consumption patterns, and the pointer map. To request a feature or report a bug, open a GitHub issue with the matching template in [.github/ISSUE_TEMPLATE/](.github/ISSUE_TEMPLATE/).
 
+### `venice-video-harness/core` — the pure core, for browsers too
+
+The pure half of the harness ships as `venice-video-harness/core`: the model registry and capability predicates, the series schema (`SeriesState`, `EpisodeScript`, `ShotScript`) with its defaults and capability sets, the text-model catalogue, silent-reject thresholds, the capabilities-manifest builder, and the wizard/stream choice tables. It imports nothing from Node and nothing outside itself, so a browser app bundles the same code the CLI runs instead of a hand copy of it:
+
+```ts
+import { getVideoModel, VIDEO_MODELS, DEFAULT_CHARACTER_CONSISTENCY_MODEL } from 'venice-video-harness/core';
+import { resolveMontageModel } from 'venice-video-harness/core/series/types.js'; // per-module entries too
+
+const spec = getVideoModel(DEFAULT_CHARACTER_CONSISTENCY_MODEL);
+```
+
+The sources live in `packages/core/` (an npm workspace); `tests/core-purity.test.mjs` fails the build if anything Node-specific creeps in. The transport (`VeniceClient`), filesystem layout, `sharp`/ffmpeg work and the CLI stay in the root package.
+
 ## Installing the CLI
 
 For a human at a terminal. (Driving it from an agent instead? See the next section.)
@@ -532,7 +545,7 @@ Anti-Patterns" (30 entries). If you can only carry a few, carry these:
 11. **Archive prior renders; never delete generated shot assets.**
 12. **Validate model capabilities before sending** `elements`,
     `reference_image_urls`, `scene_image_urls`, `end_image_url`, or `audio_url`.
-    The registry is `src/venice/models.ts` in a clone; from a global install use
+    The registry is `packages/core/src/venice/models.ts` in a clone; from a global install use
     `.agents/skills/venice-video-model-routing/SKILL.md` or the model tables
     below.
 13. **Ask before burning in subtitles**, and derive caption timings from

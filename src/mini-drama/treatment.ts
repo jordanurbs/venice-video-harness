@@ -19,10 +19,10 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getEpisodeDir, loadEpisodeScript } from '../series/manager.js';
-import type { EpisodeScript, SeriesState, ShotScript } from '../series/types.js';
+import type { EpisodeScript, SeriesState, ShotScript } from 'venice-video-harness/core/series/types.js';
 import { collectProjectStatus, qualifyCommand, type EpisodeStatus } from '../session/status.js';
 import { PANEL_THUMBNAIL_PX, ThumbnailCache } from './thumbnails.js';
-import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence } from '../venice/text-models.js';
+import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence } from 'venice-video-harness/core/venice/text-models.js';
 import {
   buildEntityArt,
   buildReferenceThumbnails,

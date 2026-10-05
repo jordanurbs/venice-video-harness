@@ -2,7 +2,7 @@ import { readdir, mkdir } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
 import { existsSync, writeFileSync, unlinkSync, rmSync, copyFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import type { ShotScript, MusicCueSpec } from '../series/types.js';
+import type { ShotScript, MusicCueSpec } from 'venice-video-harness/core/series/types.js';
 import {
   renderMusicCuesTrack,
   resolveMusicCues,
@@ -12,7 +12,7 @@ import {
 } from './music-cues.js';
 import { loudnessNormalize, resolveAudioMix } from './audio-mix.js';
 import { renameSync } from 'node:fs';
-import type { AudioMixDefaults } from '../series/types.js';
+import type { AudioMixDefaults } from 'venice-video-harness/core/series/types.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
 
 export interface ShotTrim {

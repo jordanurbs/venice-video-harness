@@ -27,8 +27,8 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile, appendFile, rename } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { VeniceClient } from '../venice/client.js';
-import type { SeriesState, ShotScript } from '../series/types.js';
-import { closestValidDuration } from '../venice/models.js';
+import type { SeriesState, ShotScript } from 'venice-video-harness/core/series/types.js';
+import { closestValidDuration } from 'venice-video-harness/core/venice/models.js';
 import { buildVideoPrompt, type MiniDramaVideoPrompt } from './prompt-builder.js';
 import { renderVideoFile, extractLastFrame, type RenderVideoOptions } from './video-generator.js';
 import {
@@ -39,7 +39,7 @@ import {
   resolveStreamVideoFamily,
   writerDisablesThinking,
   type StreamVideoChoice,
-} from './stream-choices.js';
+} from 'venice-video-harness/core/mini-drama/stream-choices.js';
 
 /** The render primitive, injectable so tests can drive the engine offline. */
 export type RenderFn = (client: VeniceClient, options: RenderVideoOptions) => Promise<string>;
@@ -53,7 +53,7 @@ export type AuthorFn = (input: AuthorInput) => Promise<AuthoredBeat>;
 // Turbo lane, 768P, and other families are selectable (see stream-choices.ts).
 export const STREAM_MODEL_T2V = 'minimax-h3-max-text-to-video';
 export const STREAM_MODEL_I2V = 'minimax-h3-max-image-to-video';
-export { STREAM_WRITER_CHOICES, STREAM_VIDEO_CHOICES, STREAM_DEFAULT_WRITER } from './stream-choices.js';
+export { STREAM_WRITER_CHOICES, STREAM_VIDEO_CHOICES, STREAM_DEFAULT_WRITER } from 'venice-video-harness/core/mini-drama/stream-choices.js';
 export const STREAM_DEFAULT_DURATION = '15s';
 export const STREAM_DEFAULT_BUDGET_USD = 2.0;
 export const STREAM_DEFAULT_RESOLUTION = '480P';

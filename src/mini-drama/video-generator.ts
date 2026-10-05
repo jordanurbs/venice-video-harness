@@ -11,7 +11,7 @@ import type {
   SeriesState,
   ShotScript,
   VideoElement,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import {
   MODELS_SUPPORTING_ELEMENTS,
   MODELS_SUPPORTING_REFERENCE_IMAGES,
@@ -24,7 +24,7 @@ import {
   isSeedanceVideoModel,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   getMaxReferenceImages,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import { padAudioForModel, probeAudioDurationSec } from '../venice/audio-preflight.js';
 import { generateSpeech } from '../venice/audio.js';
 import { getCharacterDir, getLocationDir, getLocation } from '../series/manager.js';
@@ -44,7 +44,7 @@ import {
 } from './voice-reference.js';
 import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
-import { getVideoModel, modelSupportsDuration, resolveBitrateMode, type BitrateMode } from '../venice/models.js';
+import { getVideoModel, modelSupportsDuration, resolveBitrateMode, type BitrateMode } from 'venice-video-harness/core/venice/models.js';
 import { assertFacesOffCompatible } from '../venice/seedance-preflight.js';
 import { appendRecipePass } from '../venice/recipe.js';
 import { classifyVideoRetrieveStatus, VideoGenerationFailedError } from '../venice/video.js';
@@ -1471,7 +1471,7 @@ async function renderSingleShotUnit(
   previousRenderedShotPath: string | undefined,
   nextShotNumber: number | undefined,
   previousShot?: ShotScript,
-  episodeAudioMix?: import('../series/types.js').AudioMixDefaults,
+  episodeAudioMix?: import('venice-video-harness/core/series/types.js').AudioMixDefaults,
 ): Promise<string[]> {
   // Suffixed inserts ("3b") must key their own panel/video files — using the
   // bare shotNumber here made every suffixed shot collide with its base shot
@@ -2062,7 +2062,7 @@ export function assertShotDurationsValid(
   );
   throw new Error(
     `Shot duration preflight failed for ${violations.length} shot(s):\n${lines.join('\n')}\n` +
-    `Edit script.json and re-run, or update the model registry in src/venice/models.ts if the ceiling has changed.`,
+    `Edit script.json and re-run, or update the model registry in packages/core/src/venice/models.ts if the ceiling has changed.`,
   );
 }
 
@@ -2072,7 +2072,7 @@ export async function generateEpisodeVideos(
   shots: ShotScript[],
   sceneDir: string,
   plan: GenerationPlan,
-  episodeAudioMix?: import('../series/types.js').AudioMixDefaults,
+  episodeAudioMix?: import('venice-video-harness/core/series/types.js').AudioMixDefaults,
 ): Promise<GenerateEpisodeVideosResult> {
   // Fail fast on duration / model mismatches before any Venice queue call.
   assertShotDurationsValid(shots, plan);

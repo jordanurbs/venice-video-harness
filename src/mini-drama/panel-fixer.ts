@@ -2,10 +2,10 @@ import { writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { VeniceClient } from '../venice/client.js';
-import type { MultiEditModel } from '../venice/types.js';
+import type { MultiEditModel } from 'venice-video-harness/core/venice/types.js';
 import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
-import type { SeriesState, ShotScript, ShotEnvironment, MiniDramaCharacter } from '../series/types.js';
-import { FEMALE_BASE_TRAITS, MALE_BASE_TRAITS, DAYTIME_ENVIRONMENTS, DEFAULT_IMAGE_EDIT_MODEL } from '../series/types.js';
+import type { SeriesState, ShotScript, ShotEnvironment, MiniDramaCharacter } from 'venice-video-harness/core/series/types.js';
+import { FEMALE_BASE_TRAITS, MALE_BASE_TRAITS, DAYTIME_ENVIRONMENTS, DEFAULT_IMAGE_EDIT_MODEL } from 'venice-video-harness/core/series/types.js';
 import { getCharacterDir } from '../series/manager.js';
 import { appendRecipePass } from '../venice/recipe.js';
 // Multi-edit post-processing (WebP fix + 1:1→target aspect restore) is shared

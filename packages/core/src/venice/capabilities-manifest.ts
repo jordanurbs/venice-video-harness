@@ -16,8 +16,6 @@
 // https://raw.githubusercontent.com/jordanurbs/venice-video-harness/main/capabilities.json
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 import {
   VIDEO_MODELS,
@@ -93,25 +91,27 @@ export interface CapabilitiesManifest {
   ttsModels: string[];
 }
 
-function harnessVersion(): string {
-  try {
-    const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url));
-    return JSON.parse(readFileSync(pkgPath, 'utf-8')).version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
+export interface ManifestOptions {
+  /**
+   * The harness version to stamp on the manifest. Core cannot read
+   * `package.json` (it must run in a browser), so the host passes it in:
+   * the CLI and `scripts/write-capabilities-manifest.ts` read the root
+   * package version. Defaults to `'0.0.0'` when omitted.
+   */
+  harnessVersion?: string;
+  /**
+   * Pin the timestamp (the snapshot script does, so the committed
+   * capabilities.json only changes when the DATA changes).
+   */
+  generatedAt?: string;
 }
 
-/**
- * Build the manifest from the live registry constants.
- * Pass `generatedAt` to pin the timestamp (the snapshot script does, so the
- * committed capabilities.json only changes when the DATA changes).
- */
-export function buildCapabilitiesManifest(generatedAt?: string): CapabilitiesManifest {
+/** Build the manifest from the live registry constants. */
+export function buildCapabilitiesManifest(options: ManifestOptions = {}): CapabilitiesManifest {
   return {
     schemaVersion: CAPABILITIES_SCHEMA_VERSION,
-    harnessVersion: harnessVersion(),
-    generatedAt: generatedAt ?? new Date().toISOString(),
+    harnessVersion: options.harnessVersion ?? '0.0.0',
+    generatedAt: options.generatedAt ?? new Date().toISOString(),
     videoModels: VIDEO_MODELS,
     capabilitySets: {
       elements: [...MODELS_SUPPORTING_ELEMENTS].sort(),
@@ -147,6 +147,6 @@ export function buildCapabilitiesManifest(generatedAt?: string): CapabilitiesMan
 }
 
 /** Deterministic JSON (stable for diffing snapshot commits). */
-export function renderCapabilitiesManifest(generatedAt?: string): string {
-  return JSON.stringify(buildCapabilitiesManifest(generatedAt), null, 2) + '\n';
+export function renderCapabilitiesManifest(options: ManifestOptions = {}): string {
+  return JSON.stringify(buildCapabilitiesManifest(options), null, 2) + '\n';
 }

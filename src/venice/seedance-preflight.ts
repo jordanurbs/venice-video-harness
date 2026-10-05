@@ -24,7 +24,7 @@
 // ---------------------------------------------------------------------------
 
 import type { VeniceClient } from './client.js';
-import { faceCapableTwinId, getVideoModel, isFacesOffModel } from './models.js';
+import { faceCapableTwinId, getVideoModel, isFacesOffModel } from 'venice-video-harness/core/venice/models.js';
 import { readImageProvenance } from './provenance.js';
 
 // ---- Types ----------------------------------------------------------------
@@ -41,7 +41,7 @@ export interface SeedanceInputImagePaths {
 
 export interface PreflightOptions {
   /** @deprecated The provenance gate is neutralized; this option is ignored. */
-  mode?: import('../series/types.js').SeedanceCompatibilityMode;
+  mode?: import('venice-video-harness/core/series/types.js').SeedanceCompatibilityMode;
   /** @deprecated The provenance gate is neutralized; this option is ignored. */
   nonInteractive?: boolean;
 }

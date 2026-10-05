@@ -28,7 +28,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
 import type { VeniceClient } from './client.js';
 import { pollVideoResult, completeVideo } from './video.js';
-import type { VideoQueueResponse } from './types.js';
+import type { VideoQueueResponse } from 'venice-video-harness/core/venice/types.js';
 
 export const TOPAZ_VIDEO_UPSCALE_MODEL = 'topaz-video-upscale';
 

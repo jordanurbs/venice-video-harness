@@ -28,8 +28,8 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { VeniceClient } from '../venice/client.js';
-import type { EpisodeScript, SeriesState, ShotScript, VideoElement } from '../series/types.js';
-import { getVideoModel, closestValidDuration, i2vRejectsFaceStartFrame } from '../venice/models.js';
+import type { EpisodeScript, SeriesState, ShotScript, VideoElement } from 'venice-video-harness/core/series/types.js';
+import { getVideoModel, closestValidDuration, i2vRejectsFaceStartFrame } from 'venice-video-harness/core/venice/models.js';
 import { buildVideoPrompt, type MiniDramaVideoPrompt } from './prompt-builder.js';
 import {
   renderVideoFile,

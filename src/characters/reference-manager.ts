@@ -11,7 +11,7 @@ import type { CharacterDescription } from "./describer.js";
 import type {
   ImageGenerateRequest,
   ImageGenerateResponse,
-} from "../venice/types.js";
+} from "venice-video-harness/core/venice/types.js";
 import type { AestheticProfile } from "../storyboard/prompt-builder.js";
 import type { VeniceClient } from "../venice/client.js";
 import { generateImage } from "../venice/generate.js";

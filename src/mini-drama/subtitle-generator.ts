@@ -2,7 +2,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import type { ShotScript } from '../series/types.js';
+import type { ShotScript } from 'venice-video-harness/core/series/types.js';
 
 export interface SubtitleEntry {
   index: number;

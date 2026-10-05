@@ -13,22 +13,10 @@ import type { CharacterLock } from "../characters/reference-manager.js";
 
 // ---- Public types ---------------------------------------------------------
 
-export interface AestheticProfile {
-  /** Overall visual style, e.g. "Cinematic photography". */
-  style: string;
-
-  /** Color palette, e.g. "warm amber palette". */
-  palette: string;
-
-  /** Lighting approach, e.g. "natural lighting with film grain". */
-  lighting: string;
-
-  /** Lens rendering traits, e.g. "anamorphic lens characteristics". */
-  lensCharacteristics: string;
-
-  /** Emulated film stock, e.g. "35mm Kodak Vision3 500T". */
-  filmStock: string;
-}
+// AestheticProfile now lives in core (series/types.ts) so the schema has no
+// dependency on this lane; re-exported here for existing importers.
+export type { AestheticProfile } from 'venice-video-harness/core/series/types.js';
+import type { AestheticProfile } from 'venice-video-harness/core/series/types.js';
 
 export interface PromptResult {
   /** The assembled text prompt ready for the generation API. */

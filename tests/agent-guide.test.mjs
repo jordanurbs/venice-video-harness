@@ -9,8 +9,8 @@ import test from 'node:test';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 
-import { PIPELINE_STAGES, PIPELINE_BRANCHES, formatPipeline } from '../dist/agent/pipeline.js';
-import { AGENT_GUIDE, formatGuide } from '../dist/agent/guide.js';
+import { PIPELINE_STAGES, PIPELINE_BRANCHES, formatPipeline } from '../packages/core/dist/agent/pipeline.js';
+import { AGENT_GUIDE, formatGuide } from '../packages/core/dist/agent/guide.js';
 
 const repoRoot = new URL('..', import.meta.url).pathname;
 const cli = join(repoRoot, 'dist', 'mini-drama', 'cli.js');

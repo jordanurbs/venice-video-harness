@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { buildImagePrompt, buildVideoPrompt, buildMultiShotPrompt, buildKlingMultiShotPrompt } from '../dist/mini-drama/prompt-builder.js';
 import { planStoryboardBeats } from '../dist/mini-drama/storyboard-reference-generator.js';
 import { buildWorkshopSystemPrompt } from '../dist/mini-drama/workshop.js';
-import { DEFAULT_MULTISHOT_MODEL, resolveMultiShotModel } from '../dist/series/types.js';
+import { DEFAULT_MULTISHOT_MODEL, resolveMultiShotModel } from '../packages/core/dist/series/types.js';
 
 let failed = 0;
 function ok(label, cond) {

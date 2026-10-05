@@ -1,4 +1,26 @@
-import type { AestheticProfile } from '../storyboard/prompt-builder.js';
+/**
+ * The locked visual identity of a series. Five short phrases the prompt
+ * builders fold into every image and video call. Lives in core so the schema
+ * has no dependency on the storyboard lane; `src/storyboard/prompt-builder.ts`
+ * re-exports it for its existing importers.
+ */
+export interface AestheticProfile {
+  /** Overall visual style, e.g. "Cinematic photography". */
+  style: string;
+
+  /** Color palette, e.g. "warm amber palette". */
+  palette: string;
+
+  /** Lighting approach, e.g. "natural lighting with film grain". */
+  lighting: string;
+
+  /** Lens rendering traits, e.g. "anamorphic lens characteristics". */
+  lensCharacteristics: string;
+
+  /** Emulated film stock, e.g. "35mm Kodak Vision3 500T". */
+  filmStock: string;
+}
+
 import { getVideoModel } from '../venice/models.js';
 
 // ---------------------------------------------------------------------------

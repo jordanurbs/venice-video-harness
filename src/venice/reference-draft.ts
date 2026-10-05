@@ -27,7 +27,7 @@
 import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import type { VeniceClient } from './client.js';
-import type { MultiEditModel } from './types.js';
+import type { MultiEditModel } from 'venice-video-harness/core/venice/types.js';
 import { multiEditImage, loadImageAsDataUri } from './multi-edit.js';
 import { ensureRealPng, restoreAspectRatio, aspectRatioToDimensions } from './edit-post.js';
 import { appendRecipePass } from './recipe.js';

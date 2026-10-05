@@ -3,7 +3,7 @@
 import { buildGenerationPlan } from '../src/mini-drama/generation-planner.js';
 import { buildMontagePrompt } from '../src/mini-drama/prompt-builder.js';
 import { groupShotsIntoScenes, layoutMontageBeats } from '../src/mini-drama/montage.js';
-import type { EpisodeScript, SeriesState, ShotScript } from '../src/series/types.js';
+import type { EpisodeScript, SeriesState, ShotScript } from 'venice-video-harness/core/series/types.js';
 
 function shot(n: number, over: Partial<ShotScript> = {}): ShotScript {
   return {

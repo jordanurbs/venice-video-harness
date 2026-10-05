@@ -21,7 +21,7 @@ import {
   defaultLoopResolution,
 } from '../dist/mini-drama/loop-engine.js';
 import { renderVideoFile, extractLastFrame } from '../dist/mini-drama/video-generator.js';
-import { getVideoModel, closestValidDuration, i2vRejectsFaceStartFrame } from '../dist/venice/models.js';
+import { getVideoModel, closestValidDuration, i2vRejectsFaceStartFrame } from '../packages/core/dist/venice/models.js';
 
 function makeSeries() {
   return {

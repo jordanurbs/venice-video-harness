@@ -5,7 +5,7 @@ import type {
   ShotEnvironment,
   MiniDramaCharacter,
   VideoElement,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import {
   VIDEO_NO_MUSIC_SUFFIX,
   FEMALE_BASE_TRAITS,
@@ -21,10 +21,10 @@ import {
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   getMaxReferenceImages,
   resolveMultiShotModel,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { parseShotDuration } from './generation-planner.js';
-import { faceCapableTwinId, getMaxPositivePromptChars, modelWantsSimplePrompt } from '../venice/models.js';
+import { faceCapableTwinId, getMaxPositivePromptChars, modelWantsSimplePrompt } from 'venice-video-harness/core/venice/models.js';
 import { getLocation } from '../series/manager.js';
 import { buildReferenceSlotPlan, type ReferenceSlot } from './reference-slots.js';
 
@@ -472,7 +472,7 @@ export function buildVideoPrompt(
   shot: ShotScript,
   series: SeriesState,
   previousShot?: ShotScript,
-  episodeAudioMix?: import('../series/types.js').AudioMixDefaults,
+  episodeAudioMix?: import('venice-video-harness/core/series/types.js').AudioMixDefaults,
 ): MiniDramaVideoPrompt {
   if (!series.aesthetic) {
     throw new Error('Series aesthetic must be set before generating videos.');

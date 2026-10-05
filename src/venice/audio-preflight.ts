@@ -22,7 +22,7 @@ import { execFile } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { getVideoModel } from './models.js';
+import { getVideoModel } from 'venice-video-harness/core/venice/models.js';
 
 const execFileAsync = promisify(execFile);
 

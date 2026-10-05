@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { VIDEO_FAMILY_CHOICES } from '../dist/mini-drama/choices.js';
+import { VIDEO_FAMILY_CHOICES } from '../packages/core/dist/mini-drama/choices.js';
 
 test('wizard model families follow the intended order', () => {
   assert.deepEqual(

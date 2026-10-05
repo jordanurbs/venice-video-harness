@@ -9,10 +9,12 @@ import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { renderCapabilitiesManifest, buildCapabilitiesManifest } from '../src/venice/capabilities-manifest.js';
+import { renderCapabilitiesManifest, buildCapabilitiesManifest } from 'venice-video-harness/core/venice/capabilities-manifest.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const outPath = resolve(repoRoot, 'capabilities.json');
+// Core cannot read package.json (it runs in a browser too); the host stamps the version.
+const harnessVersion: string = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf-8')).version ?? '0.0.0';
 
 function pinnedTimestamp(): string | undefined {
   // Keep the previous generatedAt when the data hasn't changed.
@@ -20,7 +22,7 @@ function pinnedTimestamp(): string | undefined {
     try {
       const prev = JSON.parse(readFileSync(outPath, 'utf-8'));
       const prevBody = { ...prev, generatedAt: 'X' };
-      const nextBody = { ...buildCapabilitiesManifest('X') };
+      const nextBody = { ...buildCapabilitiesManifest({ harnessVersion, generatedAt: 'X' }) };
       if (JSON.stringify(prevBody) === JSON.stringify(nextBody)) return prev.generatedAt;
     } catch {
       // fall through — regenerate with a fresh timestamp
@@ -33,5 +35,5 @@ function pinnedTimestamp(): string | undefined {
   }
 }
 
-writeFileSync(outPath, renderCapabilitiesManifest(pinnedTimestamp()));
+writeFileSync(outPath, renderCapabilitiesManifest({ harnessVersion, generatedAt: pinnedTimestamp() }));
 console.log(`Wrote ${outPath}`);

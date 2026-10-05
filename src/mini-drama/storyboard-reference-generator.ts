@@ -22,7 +22,7 @@ import { join, basename } from 'node:path';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, rename } from 'node:fs/promises';
 import type { VeniceClient } from '../venice/client.js';
-import type { SeriesState, StoryboardReference, EpisodeScript, ShotScript } from '../series/types.js';
+import type { SeriesState, StoryboardReference, EpisodeScript, ShotScript } from 'venice-video-harness/core/series/types.js';
 import {
   getCharacterDir,
   getLocationDir,
@@ -34,8 +34,8 @@ import { generateImage } from '../venice/generate.js';
 import { draftPanelWithReferences, type ReferenceDraftCharacter } from '../venice/reference-draft.js';
 import { writeImageBytesSmart } from '../venice/image-bytes.js';
 import { appendRecipePass } from '../venice/recipe.js';
-import { DEFAULT_IMAGE_GENERATION_MODEL, DEFAULT_IMAGE_EDIT_MODEL } from '../series/types.js';
-import type { MultiEditModel } from '../venice/types.js';
+import { DEFAULT_IMAGE_GENERATION_MODEL, DEFAULT_IMAGE_EDIT_MODEL } from 'venice-video-harness/core/series/types.js';
+import type { MultiEditModel } from 'venice-video-harness/core/venice/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 
 function buildAestheticString(aesthetic: AestheticProfile): string {

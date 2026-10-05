@@ -7,7 +7,7 @@ import type {
   EpisodeMeta,
   EpisodeScript,
   Location,
-} from './types.js';
+} from 'venice-video-harness/core/series/types.js';
 import {
   DEFAULT_ACTION_MODEL,
   DEFAULT_ATMOSPHERE_MODEL,
@@ -18,8 +18,8 @@ import {
   resolveVideoFamilyDefaults,
   type AudioStrategy,
   type VideoFamilyPreference,
-} from './types.js';
-import { resolveIntelligence } from '../venice/text-models.js';
+} from 'venice-video-harness/core/series/types.js';
+import { resolveIntelligence } from 'venice-video-harness/core/venice/text-models.js';
 
 function slugify(name: string): string {
   return name

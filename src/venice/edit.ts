@@ -14,7 +14,7 @@ import type { VeniceClient } from "./client.js";
 import type {
   ImageEditRequest,
   ImageEditResponse,
-} from "./types.js";
+} from "venice-video-harness/core/venice/types.js";
 
 // ---- Constants ------------------------------------------------------------
 

@@ -8,7 +8,7 @@ import type {
   ShotScript,
   SeriesState,
   VideoModelDefaults,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import {
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   DEFAULT_LIP_SYNC_MODEL,
@@ -17,7 +17,7 @@ import {
   lipSyncModelNeedsKeyframe,
   resolveMontageMode,
   resolveMultiShotModel,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import { planMontageUnits } from './montage.js';
 
 const CHAIN_TRANSITIONS = new Set([

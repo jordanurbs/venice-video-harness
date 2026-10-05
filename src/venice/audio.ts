@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import type { VeniceClient } from './client.js';
 import { clearPendingJob, findPendingJob, recordPendingJob, touchPendingJob } from './job-store.js';
 import { abortableSleep, reportProgress, throwIfAborted } from './operation-context.js';
-import { getMusicModel } from './models.js';
+import { getMusicModel } from 'venice-video-harness/core/venice/models.js';
 
 const execFileAsync = promisify(execFile);
 

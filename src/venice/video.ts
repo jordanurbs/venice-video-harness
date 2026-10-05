@@ -16,7 +16,7 @@ import type {
   VideoRetrieveStatus,
   VideoQuoteRequest,
   VideoQuoteResponse,
-} from './types.js';
+} from 'venice-video-harness/core/venice/types.js';
 import {
   getVideoModel,
   buildModelParams,
@@ -24,9 +24,9 @@ import {
   validateVideoRequest,
   type BitrateMode,
   type VideoRequestIssue,
-} from './models.js';
-import { MODELS_SUPPORTING_REFERENCE_AUDIO } from '../series/types.js';
-import { assertNotSilentRejectVideo } from './rejection.js';
+} from 'venice-video-harness/core/venice/models.js';
+import { MODELS_SUPPORTING_REFERENCE_AUDIO } from 'venice-video-harness/core/series/types.js';
+import { assertNotSilentRejectVideo } from 'venice-video-harness/core/venice/rejection.js';
 
 const VIDEO_QUEUE_PATH = '/api/v1/video/queue';
 const VIDEO_RETRIEVE_PATH = '/api/v1/video/retrieve';

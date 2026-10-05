@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildScriptWorkshopPrompt, getProjectLanguage } from '../dist/series/project-language.js';
+import { buildScriptWorkshopPrompt, getProjectLanguage } from '../packages/core/dist/series/project-language.js';
 
 const film = { name: 'Long Horizon', projectType: 'film', concept: 'A long ocean crossing', genre: 'adventure', setting: 'open ocean' };
 const series = { name: 'Night Watch', projectType: 'series', concept: 'Night-shift mysteries', genre: 'drama', setting: 'a city hospital' };

@@ -42,14 +42,15 @@ Open a GitHub issue with the Bug Report template (`.github/ISSUE_TEMPLATE/bug_re
 
 ### How To Consume The Harness
 
-Two patterns are sanctioned:
+Three patterns are sanctioned, in order of preference:
 
-1. Depend on the published package or the repository. Import from `src/` or call the CLI (`venice-video`).
-2. Copy-and-adapt. Transform harness code into the app's native stack.
+1. **Import `venice-video-harness/core`.** The pure half of the harness ships as a workspace package (`packages/core`, exported from the root package as the `venice-video-harness/core` subpath, with per-module entries under `venice-video-harness/core/<path>.js`). It is plain data in, plain data out: the model registry and capability predicates (`venice/models`), the series schema and capability sets (`series/types`), the text-model catalogue, silent-reject thresholds, the capabilities-manifest builder, the agent pipeline/guide text, and the wizard/stream choice tables. It imports no Node builtins, no npm packages and nothing outside itself, never reads `process.env`, `Buffer` or `import.meta.url`, and builds in a browser bundler with no polyfills — `tests/core-purity.test.mjs` enforces that on every run. A browser app takes the same code the CLI runs instead of a hand copy of it. More of the harness moves into core as the pure halves of the planning modules are split from their IO (see `plan-to-update.md`).
+2. Depend on the published package or the repository. Import from `src/` or call the CLI (`venice-video`).
+3. Copy-and-adapt. Transform harness code into the app's native stack. Prefer (1) wherever core already covers it.
 
 When you transform code, preserve these semantics:
 
-- The model registry capability flags in `src/venice/models.ts`.
+- The model registry capability flags in `packages/core/src/venice/models.ts`.
 - The reference-slot ordering contract in `src/mini-drama/reference-slots.ts`.
 - The provenance and recipe sidecars (`src/venice/provenance.ts`, `src/venice/recipe.ts`).
 - The routing tables and the numbered rules in this file.
@@ -60,8 +61,10 @@ Do not transform selectively in ways that drop safety gates (pre-flight checks, 
 
 - `AGENTS.md` (this file) — orchestration rules and the agent contract.
 - `README.md` — user-facing docs.
-- `src/venice/models.ts` — the model registry.
-- `src/agent/guide.ts` — the condensed operating rules shipped inside the CLI.
+- `packages/core/` — the pure core (`venice-video-harness/core`): registry, schema, capability sets, choices. Keep it pure; the purity test will tell you if you did not.
+- `packages/core/src/venice/models.ts` — the model registry.
+- `packages/core/src/series/types.ts` — the series schema (`SeriesState`, `EpisodeScript`, `ShotScript`), defaults and capability sets.
+- `packages/core/src/agent/guide.ts` — the condensed operating rules shipped inside the CLI.
 - `.agents/commands/` — workflow playbooks.
 - `.agents/skills/` — production knowledge.
 
@@ -145,7 +148,7 @@ on whatever the user happens to have selected.
 
 ## Model Registry
 
-The full model registry lives in `src/venice/models.ts` with typed specs for every model. Key categories:
+The full model registry lives in `packages/core/src/venice/models.ts` with typed specs for every model. Key categories:
 
 ### Video Models (50+ models)
 
@@ -348,7 +351,7 @@ The full request schema for `POST /api/v1/video/queue`:
 }
 ```
 
-**Parameter availability is model-dependent.** The harness automatically skips unsupported params per model. Use `getVideoModel()` from `src/venice/models.ts` to check capabilities.
+**Parameter availability is model-dependent.** The harness automatically skips unsupported params per model. Use `getVideoModel()` from `venice-video-harness/core` (`packages/core/src/venice/models.ts`) to check capabilities.
 
 ## Editing Pipeline
 
@@ -469,7 +472,7 @@ Use `POST /video/quote` (via `quoteVideo()`) to estimate costs before committing
 4. Prefer reusable harness patterns over one-off hacks.
 5. Preserve generated shot assets by archiving prior versions instead of deleting them.
 6. Keep secrets out of source control.
-7. Use the model registry (`src/venice/models.ts`) to validate model capabilities before making API calls.
+7. Use the model registry (`packages/core/src/venice/models.ts`) to validate model capabilities before making API calls.
 8. Check model support for `elements`, `reference_image_urls`, `scene_image_urls`, `end_image_url`, and `audio_url` before including them in requests.
 9. **Never group shots with different characters into multi-shot units.** Multi-shot grouping requires pairwise character overlap between consecutive shots — shots cutting between different speakers (e.g., host → guest) must be separate singles so each gets R2V identity anchoring.
 10. **Always validate durations against model specs, but PREFER 15s.** Seedance 2.0 accepts every integer 4-15s and HappyHorse 1.1 accepts 3-15s natively (confirmed against `GET /api/v1/models?type=video`). For any beat that could be 15s, default to 15s — 2x15s shots beat 5x6s on identity stability (no inter-shot drift), motion completion (gestures and expressions land), continuity (fewer cuts to police), and cost. Only use shorts (3-8s) for deliberate quick beats: hard cuts, sight gags, single-frame reactions, the closing title card. The `insert-shot` CLI defaults `--duration` to `15s` for this reason. The `workshop-episode` system prompt also instructs the script LLM to prefer 12-15s shots; if the LLM ignores it, the post-condition advisory in stdout flags the draft. The video queue function still auto-snaps invalid durations to the nearest valid value as a safety net.

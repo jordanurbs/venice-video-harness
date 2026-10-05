@@ -23,14 +23,14 @@ import {
   resolveVideoFamilyDefaults,
   SEEDANCE_COMPATIBILITY_BY_IMAGE_MODEL,
   type VideoFamilyPreference,
-} from '../series/types.js';
-import { VIDEO_MODELS } from '../venice/models.js';
+} from 'venice-video-harness/core/series/types.js';
+import { VIDEO_MODELS } from 'venice-video-harness/core/venice/models.js';
 import {
   DEFAULT_INTELLIGENCE_MODEL,
   resolveIntelligence,
   selectableTextModels,
-} from '../venice/text-models.js';
-import { INTELLIGENCE_CHOICES, VIDEO_FAMILY_CHOICES } from '../mini-drama/choices.js';
+} from 'venice-video-harness/core/venice/text-models.js';
+import { INTELLIGENCE_CHOICES, VIDEO_FAMILY_CHOICES } from 'venice-video-harness/core/mini-drama/choices.js';
 
 export interface ModelOption {
   value: string;

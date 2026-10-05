@@ -2,7 +2,7 @@
 // Run scripts/smoke-montage-plan.ts's sibling setup first (see shell), then:
 //   npx tsx scripts/smoke-montage-cut.ts
 import { cutMontageIntoShots } from '../src/mini-drama/montage.js';
-import type { GenerationUnit, ShotScript } from '../src/series/types.js';
+import type { GenerationUnit, ShotScript } from 'venice-video-harness/core/series/types.js';
 
 const sceneDir = '/tmp/montage-cut-test/episode-1/scene-001';
 const episodeDir = '/tmp/montage-cut-test/episode-1';

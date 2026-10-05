@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveBitrateMode, isSeedance25VideoModel } from '../dist/venice/models.js';
+import { resolveBitrateMode, isSeedance25VideoModel } from '../packages/core/dist/venice/models.js';
 import { queueVideo } from '../dist/venice/video.js';
 
 const SEEDANCE_25 = [

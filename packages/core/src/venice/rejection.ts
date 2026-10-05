@@ -85,7 +85,7 @@ export class VeniceRejectionError extends Error {
  * calibrated for 1K outputs; smaller resolutions may need an override.
  */
 export function assertNotSilentRejectImage(
-  buf: Buffer | Uint8Array,
+  buf: Uint8Array,
   ctx: { model: string; prompt?: string; threshold?: number },
 ): void {
   const threshold = ctx.threshold ?? SILENT_REJECT_THRESHOLD_IMAGE;
@@ -107,7 +107,7 @@ export function assertNotSilentRejectImage(
  * very short or low-resolution clips may need an override.
  */
 export function assertNotSilentRejectVideo(
-  buf: Buffer | Uint8Array,
+  buf: Uint8Array,
   ctx: { model: string; prompt?: string; threshold?: number },
 ): void {
   const threshold = ctx.threshold ?? SILENT_REJECT_THRESHOLD_VIDEO;
@@ -123,14 +123,28 @@ export function assertNotSilentRejectVideo(
 }
 
 /**
+ * Decode base64 to bytes without Node's `Buffer`, so this module runs in a
+ * browser as well as the CLI. `atob` is available in Node >= 16 and every
+ * browser.
+ */
+export function base64ToBytes(b64: string): Uint8Array {
+  const clean = b64.replace(/^data:[^,]*,/, '');
+  const binary = atob(clean);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+/**
  * Decode a base64 image and assert it is not a silent rejection.
- * Returns the decoded buffer for downstream use.
+ * Returns the decoded bytes for downstream use. Callers in Node that need a
+ * `Buffer` can wrap with `Buffer.from(bytes)` (zero-copy).
  */
 export function decodeAndAssertImage(
   b64: string,
   ctx: { model: string; prompt?: string; threshold?: number },
-): Buffer {
-  const buf = Buffer.from(b64, 'base64');
-  assertNotSilentRejectImage(buf, ctx);
-  return buf;
+): Uint8Array {
+  const bytes = base64ToBytes(b64);
+  assertNotSilentRejectImage(bytes, ctx);
+  return bytes;
 }

@@ -1,0 +1,26 @@
+{
+  "name": "@venice-video-harness/core",
+  "version": "2.26.0",
+  "private": true,
+  "description": "Pure core of venice-video-harness: model registry, capability sets, series schema, choices. No Node APIs, no network, no filesystem. Bundled by the root package and exported as venice-video-harness/core.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*.js": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -b"
+  }
+}

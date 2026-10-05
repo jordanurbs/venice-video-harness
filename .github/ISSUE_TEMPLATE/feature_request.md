@@ -16,7 +16,7 @@ assignees: ""
 
 ## Harness Command/Module Involved
 
-<!-- The command, module, or playbook this feature touches. Example: add-location, src/venice/models.ts. -->
+<!-- The command, module, or playbook this feature touches. Example: add-location, packages/core/src/venice/models.ts. -->
 
 ## Expected Behavior
 

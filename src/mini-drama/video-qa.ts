@@ -35,7 +35,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { VeniceClient } from '../venice/client.js';
-import type { SeriesState, EpisodeScript } from '../series/types.js';
+import type { SeriesState, EpisodeScript } from 'venice-video-harness/core/series/types.js';
 import { getCharacterDir } from '../series/manager.js';
 
 export type VideoQaVerdict = 'PASS' | 'FLAG-CRITICAL' | 'FLAG-MODERATE' | 'FLAG-LOW';
