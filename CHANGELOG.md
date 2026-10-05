@@ -7,6 +7,26 @@
 ### Fixed
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+- **`/video/queue` refusals are classified instead of surfaced raw.** New pure
+  module `src/venice/refusal.ts`: `parseProviderRefusal` reads the
+  `error.type: provider_content_policy` body (`credits_refunded`,
+  `recommended_model`); `classifyVideoQueueRefusal` decides what a failed
+  queue call means. Policy, applied in a new `submitVideoQueue` helper in
+  `video-generator.ts` (which also owns the existing 409 `needs_consent`
+  handshake): a **refunded** provider refusal is retried exactly once with
+  the identical body (the filter is not deterministic); a second refusal or
+  an unrefunded one throws `VideoRefusalError` naming `recommended_model`
+  when Venice gave one. A 422 "content policy" with no structured body on a
+  **face-capable** Seedance id with images in the request is reported as a
+  **face-screening refusal of an image**, not a prompt problem (nothing was
+  queued or charged; the same images fail every time; live tests 2026-10-01
+  refused one image 5× under 3 prompts). `-basic` twins, text-only requests
+  and other families keep Venice's own wording. The multi-shot retry loop no
+  longer re-submits a classified refusal. Test:
+  `tests/refusal-classification.test.mjs`.
+>>>>>>> reallybeard/fix/refusal-classification
 - **`POST /video/queue` is no longer auto-retried.** `VeniceClient.post`
   retried 429/5xx on every path, including the queue call. Venice can accept
   and bill a job before a 5xx (or dropped connection) reaches the client, so

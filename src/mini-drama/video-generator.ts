@@ -60,6 +60,7 @@ import {
   reportProgress,
   throwIfAborted,
 } from '../venice/operation-context.js';
+import { classifyVideoQueueRefusal, type VideoRefusal } from '../venice/refusal.js';
 
 const VIDEO_QUEUE_PATH = '/api/v1/video/queue';
 const VIDEO_RETRIEVE_PATH = '/api/v1/video/retrieve';
@@ -607,6 +608,101 @@ function fileToDataUri(filePath: string, mimeType = 'image/png'): string | undef
   return `data:${mimeType};base64,${buffer.toString('base64')}`;
 }
 
+/**
+ * Thrown when `/video/queue` refused the request and no retry is warranted.
+ * `refusal.kind` tells a face-screening refusal (an image problem: nothing
+ * queued or charged, the same images fail every time) from a provider
+ * content-policy refusal (carries `credits_refunded` / `recommended_model`).
+ */
+export class VideoRefusalError extends VeniceRequestError {
+  public readonly refusal: VideoRefusal;
+
+  constructor(refusal: VideoRefusal, status: number, body: unknown) {
+    super(refusal.message, status, body);
+    this.name = 'VideoRefusalError';
+    this.refusal = refusal;
+  }
+}
+
+/**
+ * POST the queue body once, with the two Venice handshakes layered on top:
+ *
+ *  - 409 `needs_consent` (Seedance face media): non-charging; resubmit the
+ *    identical body with `consents.seedance` attesting the policy text.
+ *    https://docs.venice.ai/guides/media/seedance-face-consent
+ *  - Refusals (`src/venice/refusal.ts`): a refunded `provider_content_policy`
+ *    is retried exactly once; a second refusal, an unrefunded one, or a
+ *    face-screening 422 throws `VideoRefusalError` with a message that says
+ *    what actually went wrong (and names `recommended_model` when given).
+ *
+ * The queue call itself is never auto-retried for 5xx (see `PostOptions.retry`).
+ */
+async function submitVideoQueue(
+  client: VeniceClient,
+  model: string,
+  body: Record<string, unknown>,
+  outputPath: string,
+): Promise<QueueResponse> {
+  let refusals = 0;
+  let consented = false;
+  let current = body;
+
+  while (true) {
+    try {
+      // retry:false — a 5xx can arrive after Venice already queued and billed
+      // the job; a blind retry would pay for the shot twice (see PostOptions).
+      return await client.post<QueueResponse>(VIDEO_QUEUE_PATH, current, { retry: false });
+    } catch (err) {
+      if (!(err instanceof VeniceRequestError)) {
+        await logFailedRequest(outputPath, current, err);
+        throw err;
+      }
+
+      const isNeedsConsent = err.status === 409
+        && (err.body as { error?: { code?: string } } | undefined)?.error?.code === 'needs_consent';
+      if (isNeedsConsent && !consented) {
+        console.log('  Seedance face consent requested (409 needs_consent) — resubmitting with attestation.');
+        consented = true;
+        current = {
+          ...current,
+          consents: {
+            seedance: {
+              confirmed_terms_and_privacy: true,
+              confirmed_legal_right: true,
+              confirmed_screening_acknowledged: true,
+            },
+          },
+        };
+        continue;
+      }
+
+      const refusal = classifyVideoQueueRefusal({
+        status: err.status,
+        message: err.message,
+        body: err.body,
+        model,
+        requestBody: current,
+        priorRefusals: refusals,
+      });
+      if (refusal) {
+        refusals += 1;
+        if (refusal.retryable) {
+          console.warn(`  ⚠ ${refusal.message}`);
+          continue;
+        }
+        console.error(`  ✖ ${refusal.message}`);
+        await logFailedRequest(outputPath, current, err);
+        throw new VideoRefusalError(refusal, err.status, err.body);
+      }
+
+      console.error(`  Venice queue error${consented ? ' after consent' : ''} (HTTP ${err.status}): ${err.message}`);
+      console.error(`  Error body: ${JSON.stringify(err.body, null, 2)}`);
+      await logFailedRequest(outputPath, current, err);
+      throw err;
+    }
+  }
+}
+
 export async function renderVideoFile(
   client: VeniceClient,
   options: RenderVideoOptions,
@@ -918,51 +1014,7 @@ export async function renderVideoFile(
     });
   }
 
-  let queueResponse: QueueResponse;
-  try {
-    // retry:false — a 5xx can arrive after Venice already queued and billed the
-    // job; a blind retry would pay for the shot twice. Resume via the job store.
-    queueResponse = await client.post<QueueResponse>(VIDEO_QUEUE_PATH, body, { retry: false });
-  } catch (err) {
-    // Seedance face-media consent flow (two-call attestation).
-    // A 409 needs_consent is non-charging; resubmitting the identical body
-    // with consents.seedance (all three booleans true) accepts the
-    // policy_text returned in the 409. See
-    // https://docs.venice.ai/guides/media/seedance-face-consent
-    const isNeedsConsent = err instanceof VeniceRequestError
-      && err.status === 409
-      && (err.body as { error?: { code?: string } } | undefined)?.error?.code === 'needs_consent';
-    if (isNeedsConsent) {
-      console.log('  Seedance face consent requested (409 needs_consent) — resubmitting with attestation.');
-      const consentBody = {
-        ...body,
-        consents: {
-          seedance: {
-            confirmed_terms_and_privacy: true,
-            confirmed_legal_right: true,
-            confirmed_screening_acknowledged: true,
-          },
-        },
-      };
-      try {
-        queueResponse = await client.post<QueueResponse>(VIDEO_QUEUE_PATH, consentBody, { retry: false });
-      } catch (consentErr) {
-        if (consentErr instanceof VeniceRequestError) {
-          console.error(`  Venice queue error after consent (HTTP ${consentErr.status}): ${consentErr.message}`);
-          console.error(`  Error body: ${JSON.stringify(consentErr.body, null, 2)}`);
-        }
-        await logFailedRequest(outputPath, consentBody, consentErr);
-        throw consentErr;
-      }
-    } else {
-      if (err instanceof VeniceRequestError) {
-        console.error(`  Venice queue error (HTTP ${err.status}): ${err.message}`);
-        console.error(`  Error body: ${JSON.stringify(err.body, null, 2)}`);
-      }
-      await logFailedRequest(outputPath, body, err);
-      throw err;
-    }
-  }
+  const queueResponse = await submitVideoQueue(client, effectiveModel, body, outputPath);
 
   const { queue_id, model } = queueResponse;
   console.log(`  Queue ID: ${queue_id}`);
@@ -1891,6 +1943,11 @@ async function renderMultiShotUnitUntilSuccess(
         nextShotNumber,
       );
     } catch (err) {
+      // A classified refusal is final: a face-screening refusal fails on the
+      // same images every time, and a provider refusal has already had its one
+      // refunded retry inside submitVideoQueue. Looping here would only bill
+      // (or spam the queue endpoint, anti-pattern 27b).
+      if (err instanceof VideoRefusalError) throw err;
       if (err instanceof VeniceRequestError) {
         console.warn(`  ${unit.unitId}: multi-shot attempt ${attempt} failed (HTTP ${err.status}): ${err.message}`);
         console.warn(`  Error body: ${JSON.stringify(err.body, null, 2)}`);
