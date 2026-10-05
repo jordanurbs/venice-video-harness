@@ -27,6 +27,14 @@ Most Venice integrations are thin wrappers around API calls. This package is the
 - **Comprehensive model registry** covering Venice video, image, audio, and music models
 - **Optional agent orchestration** in `AGENTS.md` and `.agents/` for users who want natural-language operation
 
+## Building Apps On This Harness
+
+This repository is the single source of truth (SSOT) for Venice video functionality. App UIs build on top of it. They do not re-implement harness functionality.
+
+The upstream-first rule: every new capability, model integration, routing rule, or bug fix lands in this repository first. If an app needs something the harness does not do, the builder agent requests the feature here instead of building a local variant. Local variants fork behavior and drift.
+
+See [AGENTS.md](AGENTS.md) > "Contract For Downstream Apps (SSOT)" for the full contract, the consumption patterns, and the pointer map. To request a feature or report a bug, open a GitHub issue with the matching template in [.github/ISSUE_TEMPLATE/](.github/ISSUE_TEMPLATE/).
+
 ## Installing the CLI
 
 For a human at a terminal. (Driving it from an agent instead? See the next section.)
@@ -1629,8 +1637,8 @@ Bug reports are how we'll catch the gaps — the test fixture confirms structure
 | `lock-character` | Lock a character's voice (add `--voice-reference <file>` to import a voice-donor clip) |
 | `lock-characters` | Batch voice locking |
 | `generate-voice-reference` | Generate/import a character voice-donor clip (`reference_audio_urls` / @AudioN, Seedance & HappyHorse R2V) |
-| `add-location` | Add a location with generated reference images (wide / medium / detail) |
-| `generate-location-references` | Regenerate a location's reference images |
+| `add-location` | Add a location with 4 wide reference plates (north / south / east / west) |
+| `generate-location-references` | Regenerate a location's reference plates |
 | `set-aesthetic` | Set or derive series aesthetic |
 | `explore-aesthetic` | Generate aesthetic comparison samples |
 | `workshop-episode` | Collaborative episode scripting |

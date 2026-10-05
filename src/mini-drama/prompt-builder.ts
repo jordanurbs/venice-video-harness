@@ -75,7 +75,7 @@ export interface MiniDramaVideoPrompt {
   /**
    * Location environment reference slot for @Image-tag models (Seedance /
    * HappyHorse, which lack scene_image_urls). The video generator folds the
-   * location wide.png into `reference_image_urls` at this 1-based index —
+   * location north.png into `reference_image_urls` at this 1-based index —
    * one image per character first, then the location — so @ImageN in the
    * prompt matches the request array. Undefined for Kling (scene_image_urls),
    * when the shot has no location, when refs don't exist on disk, or when the

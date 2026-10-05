@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "harnessVersion": "2.25.0",
-  "generatedAt": "2026-09-07T14:27:22-03:00",
+  "harnessVersion": "2.26.0",
+  "generatedAt": "2026-09-07T15:22:36-03:00",
   "videoModels": [
     {
       "id": "wan-2.6-image-to-video",

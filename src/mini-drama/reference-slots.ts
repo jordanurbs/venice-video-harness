@@ -62,15 +62,17 @@ interface CandidateSlot {
   roleClause: string;
 }
 
-// Wide (the hero plate) first, then the derived same-room angles, then the
-// legacy distance-ladder names (only present on pre-2026-08-13 projects). The
-// derived angles are all multi-edits of the wide plate, so they depict ONE
-// coherent space — safe to send together as "same place, different angle".
+// North (the hero plate) first, then the derived same-wall plates
+// (south/east/west), then the legacy names (only present on pre-2026-10-05
+// projects). The derived plates are all multi-edits of the north plate, so
+// they depict ONE coherent space — safe to send together as "same place,
+// different wall".
 const LOCATION_ANGLE_ORDER_DEFAULT = [
+  'north.png', 'south.png', 'east.png', 'west.png',
   'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png',
 ];
 // Closer shot types no longer prefer a "medium" distance angle (the ladder is
-// gone); the same wide-first order applies. Kept as a named constant so the
+// gone); the same north-first order applies. Kept as a named constant so the
 // call site reads clearly.
 const LOCATION_ANGLE_ORDER_CLOSER = LOCATION_ANGLE_ORDER_DEFAULT;
 
@@ -144,6 +146,10 @@ export function buildReferenceSlotPlan(
       const closer = shot.type === 'close-up' || shot.type === 'reaction' || shot.type === 'insert';
       const order = closer ? LOCATION_ANGLE_ORDER_CLOSER : LOCATION_ANGLE_ORDER_DEFAULT;
       const angleRole: Record<string, string> = {
+        'north.png': 'a wide establishing plate of the location, facing the north wall',
+        'south.png': 'the south wall of the same location',
+        'east.png': 'the east wall of the same location',
+        'west.png': 'the west wall of the same location',
         'wide.png': 'a wide establishing angle of the location',
         'angle-2.png': 'another angle of the same location',
         'angle-3.png': 'another angle of the same location',
@@ -152,10 +158,11 @@ export function buildReferenceSlotPlan(
         'detail.png': 'a third angle of the same location (detail)',
       };
       // Custom angles (operator-generated extra coverage beyond the canonical
-      // set, e.g. reverse-angle.png) queue after the canonical angles, in
+      // set, e.g. reverse-angle.png) queue after the canonical plates, in
       // stable name order. Archives and sidecar-less strays are excluded by
       // pattern.
       const canonical = new Set([
+        'north.png', 'south.png', 'east.png', 'west.png',
         'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png',
       ]);
       let customAngles: string[] = [];

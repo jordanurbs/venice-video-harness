@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.26.0 — 2026-10-05
+
+### Changed
+
+- **Location reference plates are now the compass set N/S/E/W — four wide
+  shots, one per wall, 360 degrees of visual information.** The default plate
+  set is `north.png` (hero, the only from-scratch t2i — a wide shot facing
+  the north wall) plus `south.png` (reverse angle), `east.png` (right-hand
+  wall), and `west.png` (left-hand wall), each derived from the north plate
+  by multi-edit (anchor→derive unchanged). All four plates are wide shots;
+  the harness never generates wide/medium/close-up ladders for locations.
+  The compass names give the video model explicit 360-degree orientation
+  material and give downstream apps a fixed four-file contract. Legacy names
+  (`wide`, `angle-2/3/4`, `medium`, `detail`) remain readable on old projects
+  and requestable via `generate-location-references --angles`; a legacy
+  `wide.png` still resolves as the hero when `north.png` is absent. Touched:
+  `location-generator.ts`, `reference-slots.ts`, `video-generator.ts`,
+  `storyboard-reference-generator.ts`, `workshop.ts`, `cli.ts`,
+  `web/state.ts`, CastView copy, AGENTS.md rules 41/42/56 + new rule 61.
+
+### Added
+
+- **SSOT contract for downstream apps.** AGENTS.md gains a "Contract For
+  Downstream Apps (SSOT)" section: the upstream-first rule, how builder
+  agents request features and report bugs, the two sanctioned consumption
+  patterns (dependency vs copy-and-adapt), and the pointer map. README gains
+  a matching "Building Apps On This Harness" section, and
+  `.github/ISSUE_TEMPLATE/` adds agent-oriented Feature Request and Bug
+  Report templates.
+- **`add-location` playbook** (`.agents/commands/add-location.md`) and a
+  compass-plate test (`tests/location-plates.test.mjs`).
+
 ## 2.25.0 — 2026-09-07
 
 ### Fixed

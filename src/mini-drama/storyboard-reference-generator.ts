@@ -8,7 +8,7 @@
 // with a role clause restricting it to composition/blocking authority.
 //
 // Composition strategy (2026-08-11): plates are drafted via /image/multi-edit
-// with the location wide.png as the BASE image and character references as
+// with the location north.png as the BASE image and character references as
 // layers (draftPanelWithReferences). The location's geography is inherited
 // pixel-for-pixel and each character's face comes from real reference bytes.
 // The old path used generateWithReferences, which silently dropped every
@@ -131,7 +131,7 @@ export async function generateStoryboardReference(
         locationSpatialAnchors = ` Fixed location layout (never rearrange): ${loc.spatialAnchors}.`;
       }
       const locDir = getLocationDir(series, loc.slug);
-      locationBasePath = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png']
+      locationBasePath = ['north.png', 'south.png', 'east.png', 'west.png', 'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png']
         .map(f => join(locDir, f))
         .find(p => existsSync(p));
     }

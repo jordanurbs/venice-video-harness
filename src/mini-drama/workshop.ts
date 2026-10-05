@@ -141,7 +141,7 @@ export type EntityArt = Map<string, string[]>;
 
 /** Reference angles to show per entity, in display order. */
 const CHARACTER_ART_ANGLES = ['front.png', 'full-body.png'];
-const LOCATION_ART_ANGLES = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
+const LOCATION_ART_ANGLES = ['north.png', 'south.png', 'east.png', 'west.png', 'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
 
 export async function buildEntityArt(
   series: SeriesState,

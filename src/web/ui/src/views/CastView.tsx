@@ -79,8 +79,8 @@ function RegenerateDialog({
 }
 
 /**
- * Add extra coverage of a location beyond the canonical wide/medium/detail
- * ladder — a named custom angle with a required prompt describing the view.
+ * Add extra coverage of a location beyond the canonical north/south/east/west
+ * plates — a named custom angle with a required prompt describing the view.
  * The slot allocator feeds every generated angle to the video model
  * automatically (canonical first, then customs, within the model's budget).
  */
@@ -137,8 +137,8 @@ function AddAngleDialog({
         </div>
         <div className="dim small" style={{ marginTop: 6 }}>
           Saved as {name.trim() ? `${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}.png` : '<name>.png'} beside
-          wide/medium/detail, and included as an extra location reference on
-          every shot in this location. Billed image pass.
+          the north/south/east/west plates, and included as an extra location
+          reference on every shot in this location. Billed image pass.
         </div>
         {error && <div className="error-banner" style={{ marginTop: 10 }}>{error}</div>}
         <div className="actions">

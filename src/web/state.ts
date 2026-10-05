@@ -268,7 +268,7 @@ async function collectEpisodeState(
 const ART_PATTERN = /\.(png|webp|jpg|jpeg)$/i;
 
 export interface AngleArt {
-  /** Angle name: front/three-quarter/profile/full-body or wide/medium/detail. */
+  /** Angle name: front/three-quarter/profile/full-body or north/south/east/west. */
   angle: string;
   /** Project-relative image path, when the angle has been generated. */
   image?: string;
@@ -283,9 +283,9 @@ export interface AngleArt {
 }
 
 const CHARACTER_ANGLES = ['front', 'three-quarter', 'profile', 'full-body'];
-// wide (hero plate) + derived same-room angles; legacy ladder names kept so
-// pre-2026-08-13 projects still show their art.
-const LOCATION_ANGLES = ['wide', 'angle-2', 'angle-3', 'angle-4', 'medium', 'detail'];
+// north (hero plate) + derived same-room plates; legacy names kept so
+// pre-2026-10-05 projects still show their art.
+const LOCATION_ANGLES = ['north', 'south', 'east', 'west', 'wide', 'angle-2', 'angle-3', 'angle-4', 'medium', 'detail'];
 
 /**
  * Staleness: was this art generated from the entity's CURRENT description?

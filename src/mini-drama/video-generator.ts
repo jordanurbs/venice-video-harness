@@ -356,9 +356,9 @@ function getLocationRefPath(series: SeriesState, shot: ShotScript): string | und
   const loc = getLocation(series, shot.location);
   if (!loc) return undefined;
   const dir = getLocationDir(series, loc.slug);
-  // Wide (hero plate) first, then the derived same-room angles, then legacy
-  // ladder names for pre-2026-08-13 projects.
-  const order = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
+  // North (hero plate) first, then the derived same-room plates, then legacy
+  // names for pre-2026-10-05 projects.
+  const order = ['north.png', 'south.png', 'east.png', 'west.png', 'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
   for (const f of order) {
     const p = join(dir, f);
     if (existsSync(p)) return p;

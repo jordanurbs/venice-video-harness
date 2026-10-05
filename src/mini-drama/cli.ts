@@ -316,7 +316,7 @@ async function mergeAndGenerateEpisodeLocations(
     addLocation(series, merged);
 
     const dir = getLocationDir(series, slug);
-    const hasRefs = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'].some(f => existsSync(join(dir, f)));
+    const hasRefs = ['north.png', 'south.png', 'east.png', 'west.png', 'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'].some(f => existsSync(join(dir, f)));
     if (!hasRefs) toGenerate.push(merged);
   }
 
@@ -351,9 +351,9 @@ function resolveLocationRefForShot(
   const location = getLocation(series, shot.location);
   if (!location) return { note: '' };
   const dir = getLocationDir(series, location.slug);
-  // Wide (hero plate) first, then the derived same-room angles, then legacy
-  // ladder names for pre-2026-08-13 projects.
-  const order = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
+  // North (hero plate) first, then the derived same-room plates, then legacy
+  // names for pre-2026-10-05 projects.
+  const order = ['north.png', 'south.png', 'east.png', 'west.png', 'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
   const refPath = order.map(f => join(dir, f)).find(p => existsSync(p));
   const note = ` Location: ${location.description}`
     + (location.lightingNotes ? ` Lighting: ${location.lightingNotes}.` : '')
@@ -731,7 +731,7 @@ program
         }
         for (const location of series.locations ?? []) {
           const locDir = getLocationDir(series, location.slug);
-          const hasAngles = ['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png']
+          const hasAngles = ['north.png', 'south.png', 'east.png', 'west.png', 'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png']
             .some(f => existsSync(join(locDir, f)));
           if (hasAngles) continue;
           console.log(`Generating location references for ${location.name}...`);
@@ -1472,7 +1472,7 @@ program
 // ── add-location ──────────────────────────────────────────────────────
 program
   .command('add-location')
-  .description('Add and generate reference images for a location (wide hero plate + derived angle-2/angle-3/angle-4)')
+  .description('Add and generate reference plates for a location (north hero plate + derived south/east/west — 4 wide plates, 360-degree coverage)')
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('--name <name>', 'Location name')
   .requiredOption('--description <desc>', 'Locked prose description of the environment')
@@ -1524,7 +1524,7 @@ program
   .requiredOption('-l, --location <slugOrName>', 'Location slug or name')
   .option('--model <model>', 'Override the image-generation model')
   .option('--force', 'Regenerate angles that already exist (archives prior versions)', false)
-  .option('--angles <list>', 'Comma-separated angles to (re)generate. Canonical: wide,angle-2,angle-3,angle-4 (wide is generated from scratch; the rest are DERIVED by multi-editing wide). Any other name creates a CUSTOM angle (extra coverage, e.g. "reverse-angle,behind-the-desk") and requires --prompt describing the view. Default: wide + angle-2/angle-3/angle-4.')
+  .option('--angles <list>', 'Comma-separated plates to (re)generate. Canonical: north,south,east,west (north is generated from scratch; the rest are DERIVED by multi-editing north). Any other name creates a CUSTOM angle (extra coverage, e.g. "reverse-angle,behind-the-desk") and requires --prompt describing the view. Default: north + south/east/west.')
   .option('--prompt <text>', 'Inline positive-prompt override applied verbatim to every angle in this run (required for custom angles)')
   .action(async (opts: { project: string; location: string; model?: string; force: boolean; angles?: string; prompt?: string }) => {
     const series = await loadSeries(resolve(opts.project));
@@ -2040,7 +2040,7 @@ program
         const loc = getLocation(series, slug);
         if (!loc) return false; // unknown slug is a script problem, not a refs problem
         const dir = getLocationDir(series, loc.slug);
-        return !['wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'].some(f => existsSync(join(dir, f)));
+        return !['north.png', 'south.png', 'east.png', 'west.png', 'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'].some(f => existsSync(join(dir, f)));
       });
       if (missingChars.length > 0 || missingLocs.length > 0) {
         console.error('Blocked: reference images are missing. Storyboarding without them wastes a full render pass.');
