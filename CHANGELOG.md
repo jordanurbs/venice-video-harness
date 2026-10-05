@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Video polls fail fast on a terminal status.** Both `/video/retrieve`
+  loops (`pollVideoResult` in `video.ts`, `pollRenderedVideo` in
+  `video-generator.ts`) special-cased only `PROCESSING`; a `FAILED` body was
+  treated as "still running" and the shot surfaced as a timeout at the
+  deadline (30 min on the mini-drama path) with the pending-job record still
+  pointing at the dead queue id. New `classifyVideoRetrieveStatus` treats any
+  non-`PROCESSING` JSON body as terminal; both loops throw
+  `VideoGenerationFailedError` (model, queue id, status, body, detail) on
+  that poll and clear the pending job so the next run queues fresh.
+  `VideoRetrieveStatus.status` widens accordingly. Test:
+  `tests/poll-fail-fast.test.mjs`.
+
 ## 2.26.0 — 2026-10-05
 
 ### Changed
