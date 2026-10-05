@@ -2,13 +2,53 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 ### Fixed
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
+- **Stream manifest writes are serialized per engine (PR #33).** Concurrent
+  `persist()` calls (look-ahead writer, renderer, `configure()`) shared one
+  temp file, so one write could truncate another or rename its temp file
+  away, producing `ENOENT` warnings and unreliable resume state. The whole
+  mkdir/write/rename now queues on a per-`StreamEngine` promise tail, the
+  snapshot is taken when the queued write runs (so an older call cannot
+  restore stale state), and the tail recovers from rejection. Test:
+  `tests/stream-engine.test.mjs`.
+- **`POST /video/queue` is no longer auto-retried.** `VeniceClient.post`
+  retried 429/5xx on every path, including the queue call. Venice can accept
+  and bill a job before a 5xx (or dropped connection) reaches the client, so
+  a blind retry could queue — and pay for — the same shot twice. `post` gains
+  `{ retry?: boolean }` (default `true`); the three queue callers
+  (`video.ts` `queueVideo`, `video-generator.ts` `renderVideoFile` incl. the
+  409 consent resubmit, `upscale.ts`) pass `retry: false`. A transient
+  failure on the queue call now surfaces after one attempt; `venice-video
+  queue` re-attaches to anything that did land. Quote, retrieve and complete
+  keep their back-off. Test: `tests/queue-no-retry.test.mjs`.
+- **Video polls fail fast on a terminal status.** Both `/video/retrieve`
+  loops (`pollVideoResult` in `video.ts`, `pollRenderedVideo` in
+  `video-generator.ts`) special-cased only `PROCESSING`; a `FAILED` body was
+  treated as "still running" and the shot surfaced as a timeout at the
+  deadline (30 min on the mini-drama path) with the pending-job record still
+  pointing at the dead queue id. New `classifyVideoRetrieveStatus` treats any
+  non-`PROCESSING` JSON body as terminal; both loops throw
+  `VideoGenerationFailedError` (model, queue id, status, body, detail) on
+  that poll and clear the pending job so the next run queues fresh.
+  `VideoRetrieveStatus.status` widens accordingly. Test:
+  `tests/poll-fail-fast.test.mjs`.
+- **`-basic` Seedance ids are faces-off twins and are blocked on shots with
+  people before submit (rule 62).** Venice lists each Seedance lane twice;
+  the `-basic` twin runs without face handling and refuses any input image
+  of a person (422 `provider_content_policy`, refunded) with an error that
+  blames the prompt. In one downstream project 31 of 32 takes with a
+  character reference failed on a `-basic` id. The three
+  `seedance-2-0-*-basic` specs gain `facesOff: true` (`VideoModelSpec`,
+  exported in `capabilities.json`); new `isFacesOffModel` /
+  `faceCapableTwinId` in `models.ts`. Routing (`resolveVideoModel`,
+  `buildMultiShotPrompt`, `buildMontagePrompt`) swaps a faces-off
+  consistency / lip-sync / unit model for its face-capable twin whenever the
+  shot has characters. `renderVideoFile` runs `assertFacesOffCompatible`
+  (`seedance-preflight.ts`) before building the body: it reads the `hasFace`
+  provenance sidecars of every image the request would send and throws
+  `FacesOffModelError` naming the twin. Text-only and faceless-image renders
+  on a `-basic` id are unaffected. Test: `tests/faces-off-models.test.mjs`.
 - **`/video/queue` refusals are classified instead of surfaced raw.** New pure
   module `src/venice/refusal.ts`: `parseProviderRefusal` reads the
   `error.type: provider_content_policy` body (`credits_refunded`,
@@ -26,31 +66,20 @@
   and other families keep Venice's own wording. The multi-shot retry loop no
   longer re-submits a classified refusal. Test:
   `tests/refusal-classification.test.mjs`.
->>>>>>> reallybeard/fix/refusal-classification
-- **`POST /video/queue` is no longer auto-retried.** `VeniceClient.post`
-  retried 429/5xx on every path, including the queue call. Venice can accept
-  and bill a job before a 5xx (or dropped connection) reaches the client, so
-  a blind retry could queue — and pay for — the same shot twice. `post` gains
-  `{ retry?: boolean }` (default `true`); the three queue callers
-  (`video.ts` `queueVideo`, `video-generator.ts` `renderVideoFile` incl. the
-  409 consent resubmit, `upscale.ts`) pass `retry: false`. A transient
-  failure on the queue call now surfaces after one attempt; `venice-video
-  queue` re-attaches to anything that did land. Quote, retrieve and complete
-  keep their back-off. Test: `tests/queue-no-retry.test.mjs`.
-=======
-- **Video polls fail fast on a terminal status.** Both `/video/retrieve`
-  loops (`pollVideoResult` in `video.ts`, `pollRenderedVideo` in
-  `video-generator.ts`) special-cased only `PROCESSING`; a `FAILED` body was
-  treated as "still running" and the shot surfaced as a timeout at the
-  deadline (30 min on the mini-drama path) with the pending-job record still
-  pointing at the dead queue id. New `classifyVideoRetrieveStatus` treats any
-  non-`PROCESSING` JSON body as terminal; both loops throw
-  `VideoGenerationFailedError` (model, queue id, status, body, detail) on
-  that poll and clear the pending job so the next run queues fresh.
-  `VideoRetrieveStatus.status` widens accordingly. Test:
-  `tests/poll-fail-fast.test.mjs`.
->>>>>>> reallybeard/fix/poll-fail-fast
-=======
+- **QA approval is bound to the panels a human reviewed (rule 63).**
+  `qa-approved.json` was `{ episode, approvedAt, notes }` and
+  `generate-videos` only checked that it existed, so a panel regenerated or
+  a prompt / reference / image-model change after approval still unblocked
+  a billed render nobody had looked at. `qa-approve` now records per shot a
+  `panelSha256` of the panel bytes and a `settingsDigest` of the inputs the
+  panel depends on (image prompt + location note, reference image paths,
+  image models, aspect ratio, scene refs). `generate-videos` recomputes both
+  before reading the API key and refuses the run when any shot differs,
+  naming each mismatch and the re-approve command. Legacy artifacts without
+  bindings are refused as `not-recorded`. `--skip-qa` still bypasses it.
+  New `src/mini-drama/panel-approval.ts` (pure `settingsDigest` /
+  `compareApproval`). Test: `tests/panel-approval.test.mjs`.
+
 ### Changed
 
 - **Duration and resolution are validated before the paid call instead of
@@ -67,43 +96,6 @@
   model lists. Unknown models pass through unchanged. The mini-drama render
   path already ran its own duration preflight and resolution pinning, so its
   behaviour is unchanged. Test: `tests/validate-before-quote.test.mjs`.
->>>>>>> reallybeard/fix/validate-before-quote
-=======
-### Fixed
-
-- **`-basic` Seedance ids are faces-off twins and are blocked on shots with
-  people before submit (rule 62).** Venice lists each Seedance lane twice;
-  the `-basic` twin runs without face handling and refuses any input image
-  of a person (422 `provider_content_policy`, refunded) with an error that
-  blames the prompt. In one downstream project 31 of 32 takes with a
-  character reference failed on a `-basic` id. The three
-  `seedance-2-0-*-basic` specs gain `facesOff: true` (`VideoModelSpec`,
-  exported in `capabilities.json`); new `isFacesOffModel` /
-  `faceCapableTwinId` in `models.ts`. Routing (`resolveVideoModel`,
-  `buildMultiShotPrompt`, `buildMontagePrompt`) swaps a faces-off
-  consistency / lip-sync / unit model for its face-capable twin whenever the
-  shot has characters. `renderVideoFile` runs `assertFacesOffCompatible`
-  (`seedance-preflight.ts`) before building the body: it reads the `hasFace`
-  provenance sidecars of every image the request would send and throws
-  `FacesOffModelError` naming the twin. Text-only and faceless-image renders
-  on a `-basic` id are unaffected. Test: `tests/faces-off-models.test.mjs`.
-<<<<<<< HEAD
->>>>>>> reallybeard/fix/basic-ids-faces-off
-=======
-- **QA approval is bound to the panels a human reviewed (rule 63).**
-  `qa-approved.json` was `{ episode, approvedAt, notes }` and
-  `generate-videos` only checked that it existed, so a panel regenerated or
-  a prompt / reference / image-model change after approval still unblocked
-  a billed render nobody had looked at. `qa-approve` now records per shot a
-  `panelSha256` of the panel bytes and a `settingsDigest` of the inputs the
-  panel depends on (image prompt + location note, reference image paths,
-  image models, aspect ratio, scene refs). `generate-videos` recomputes both
-  before reading the API key and refuses the run when any shot differs,
-  naming each mismatch and the re-approve command. Legacy artifacts without
-  bindings are refused as `not-recorded`. `--skip-qa` still bypasses it.
-  New `src/mini-drama/panel-approval.ts` (pure `settingsDigest` /
-  `compareApproval`). Test: `tests/panel-approval.test.mjs`.
->>>>>>> reallybeard/fix/approval-bound-to-panel
 
 ## 2.26.0 — 2026-10-05
 

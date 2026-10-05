@@ -35,6 +35,11 @@ import { VeniceRequestError } from '../dist/venice/client.js';
 import { runInOperation, OperationAbortedError } from '../dist/venice/operation-context.js';
 import { renderVideoFile, VideoRefusalError } from '../dist/mini-drama/video-generator.js';
 
+// Isolate the pending-job store: renderVideoFile records a pending job in the
+// config dir on its way to the queue call, and without this a test run leaves
+// phantom rows in the operator's real pending-jobs.json. Read at call time.
+process.env.VENICE_VIDEO_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'refusal-config-'));
+
 // ---- Captured bodies --------------------------------------------------------
 
 const REFUNDED = {

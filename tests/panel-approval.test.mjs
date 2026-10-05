@@ -96,7 +96,12 @@ function makeProject() {
 
   return {
     projectDir, episodeDir, sceneDir, series, shots, writeScript,
-    run: (...args) => spawnSync(process.execPath, [cli, ...args, '-p', projectDir, '-e', '1'], { encoding: 'utf-8', env: { ...process.env, VENICE_API_KEY: '' } }),
+    // Isolate the user config: an empty VENICE_API_KEY is NOT enough — the CLI
+    // hydrates a stored key from the config dir when the env var is falsy, and
+    // generate-videos would then queue a real billed render. Point the config
+    // dir at the scratch project so no stored key (or pending-job record) can
+    // reach the operator's real one.
+    run: (...args) => spawnSync(process.execPath, [cli, ...args, '-p', projectDir, '-e', '1'], { encoding: 'utf-8', env: { ...process.env, VENICE_API_KEY: '', VENICE_VIDEO_CONFIG_DIR: join(projectDir, '.test-config') } }),
     cleanup: () => rmSync(projectDir, { recursive: true, force: true }),
   };
 }

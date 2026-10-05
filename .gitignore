@@ -32,3 +32,6 @@ HANDOFF.md
 HANDOFF-*.md
 HARNESS_HANDOFF.md
 HARNESS_EXTENSIONS_NOTE.md
+
+# TypeScript incremental build cache
+*.tsbuildinfo
