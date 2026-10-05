@@ -24,7 +24,7 @@ import {
 } from '../series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { parseShotDuration } from './generation-planner.js';
-import { getMaxPositivePromptChars, modelWantsSimplePrompt } from '../venice/models.js';
+import { faceCapableTwinId, getMaxPositivePromptChars, modelWantsSimplePrompt } from '../venice/models.js';
 import { getLocation } from '../series/manager.js';
 import { buildReferenceSlotPlan, type ReferenceSlot } from './reference-slots.js';
 
@@ -209,10 +209,18 @@ export function resolveVideoModel(
     ? series.videoDefaults.actionModel
     : series.videoDefaults.atmosphereModel;
 
-  const consistencyModel =
-    series.videoDefaults.characterConsistencyModel ?? DEFAULT_CHARACTER_CONSISTENCY_MODEL;
-
   const hasCharacters = shot.characters.length > 0;
+
+  // Faces-off twins (`seedance-*-basic`) refuse input images of people. A
+  // shot with characters sends character sheets and a panel, so any faces-off
+  // id configured for the identity lanes is swapped for its face-capable twin
+  // here, before the prompt is built. Shots with no people keep the configured
+  // id (text-only and faceless-reference renders are fine on it).
+  const faceSafe = (modelId: string): string =>
+    hasCharacters ? faceCapableTwinId(modelId) : modelId;
+  const configuredConsistencyModel =
+    series.videoDefaults.characterConsistencyModel ?? DEFAULT_CHARACTER_CONSISTENCY_MODEL;
+  const consistencyModel = faceSafe(configuredConsistencyModel);
 
   if (!hasCharacters) {
     // With Enhanced R2V as the default for all lanes, even empty
@@ -239,7 +247,9 @@ export function resolveVideoModel(
   // hardcoded off: a reference-capable lip-sync model (Seedance or MiniMax H3
   // R2V, which take a top-level audio_url) should still carry its full
   // reference stack, while Wan 2.7 i2v genuinely has neither.
-  const lipSyncModel = series.videoDefaults.lipSyncModel;
+  const lipSyncModel = series.videoDefaults.lipSyncModel
+    ? faceSafe(series.videoDefaults.lipSyncModel)
+    : series.videoDefaults.lipSyncModel;
   const exactLipSync = series.videoDefaults.audioStrategy === 'lip-sync';
   if (exactLipSync && lipSyncModel && shotWantsLipSync(shot) && shot.characters.length <= 1) {
     return {
@@ -273,10 +283,13 @@ export function resolveVideoModel(
     };
   }
 
+  const facesOffSwapped = consistencyModel !== configuredConsistencyModel;
   return {
     modelId: consistencyModel,
     upgraded: consistencyModel !== baseModel,
-    reason: 'characters present — R2V for identity anchoring',
+    reason: facesOffSwapped
+      ? `characters present — ${configuredConsistencyModel} runs without face handling and refuses images of people; using ${consistencyModel}`
+      : 'characters present — R2V for identity anchoring',
     autoUseElements: MODELS_SUPPORTING_ELEMENTS.has(consistencyModel),
     autoUseReferenceImages: MODELS_SUPPORTING_REFERENCE_IMAGES.has(consistencyModel),
     useImageTags: MODELS_USING_IMAGE_TAGS.has(consistencyModel),
@@ -780,9 +793,14 @@ export function buildMultiShotPrompt(
   unit: GenerationUnit,
   series: SeriesState,
 ): MiniDramaVideoPrompt {
-  const modelId = unit.model && unit.model !== 'action' && unit.model !== 'atmosphere'
+  const configured = unit.model && unit.model !== 'action' && unit.model !== 'atmosphere'
     ? unit.model
     : resolveMultiShotModel(series.videoDefaults);
+  // A unit with any character on screen must not go to a faces-off twin
+  // (see resolveVideoModel); swap to the face-capable id before building.
+  const modelId = shots.some(shot => shot.characters.length > 0)
+    ? faceCapableTwinId(configured)
+    : configured;
   if (MODELS_USING_IMAGE_TAGS.has(modelId)) {
     return buildSeedanceMultiShotPrompt(shots, unit, series, modelId);
   }
@@ -819,7 +837,11 @@ export function buildMontagePrompt(
   if (!series.aesthetic) {
     throw new Error('Series aesthetic must be set before generating videos.');
   }
-  const modelId = unit.model;
+  // Faces-off twins refuse images of people; a montage with any character on
+  // screen goes to the face-capable id (see resolveVideoModel).
+  const modelId = shots.some(shot => shot.characters.length > 0)
+    ? faceCapableTwinId(unit.model)
+    : unit.model;
   // See buildVideoPrompt: on a simple-prompt model the montage IS the thing
   // the model is good at, so it gets the beat list and little else — no camera
   // union, no per-beat blocking, no geography-hold paragraph.

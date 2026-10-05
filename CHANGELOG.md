@@ -3,6 +3,7 @@
 ## Unreleased
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 ### Fixed
 
 <<<<<<< HEAD
@@ -47,6 +48,26 @@
   path already ran its own duration preflight and resolution pinning, so its
   behaviour is unchanged. Test: `tests/validate-before-quote.test.mjs`.
 >>>>>>> reallybeard/fix/validate-before-quote
+=======
+### Fixed
+
+- **`-basic` Seedance ids are faces-off twins and are blocked on shots with
+  people before submit (rule 62).** Venice lists each Seedance lane twice;
+  the `-basic` twin runs without face handling and refuses any input image
+  of a person (422 `provider_content_policy`, refunded) with an error that
+  blames the prompt. In one downstream project 31 of 32 takes with a
+  character reference failed on a `-basic` id. The three
+  `seedance-2-0-*-basic` specs gain `facesOff: true` (`VideoModelSpec`,
+  exported in `capabilities.json`); new `isFacesOffModel` /
+  `faceCapableTwinId` in `models.ts`. Routing (`resolveVideoModel`,
+  `buildMultiShotPrompt`, `buildMontagePrompt`) swaps a faces-off
+  consistency / lip-sync / unit model for its face-capable twin whenever the
+  shot has characters. `renderVideoFile` runs `assertFacesOffCompatible`
+  (`seedance-preflight.ts`) before building the body: it reads the `hasFace`
+  provenance sidecars of every image the request would send and throws
+  `FacesOffModelError` naming the twin. Text-only and faceless-image renders
+  on a `-basic` id are unaffected. Test: `tests/faces-off-models.test.mjs`.
+>>>>>>> reallybeard/fix/basic-ids-faces-off
 
 ## 2.26.0 — 2026-10-05
 

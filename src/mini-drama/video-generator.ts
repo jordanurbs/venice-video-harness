@@ -45,6 +45,7 @@ import {
 import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
 import { getVideoModel, modelSupportsDuration, resolveBitrateMode, type BitrateMode } from '../venice/models.js';
+import { assertFacesOffCompatible } from '../venice/seedance-preflight.js';
 import { appendRecipePass } from '../venice/recipe.js';
 import { classifyVideoRetrieveStatus, VideoGenerationFailedError } from '../venice/video.js';
 import {
@@ -297,6 +298,7 @@ async function renderSeedanceKeyframe(
     referenceImagePaths,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
+    characters: stageAShot.characters,
     project: series.outputDir,
   });
 
@@ -570,6 +572,11 @@ export interface RenderVideoOptions {
   /** Seedance compatibility strategy when images aren't seedream-originated. */
   seedanceCompatibility?: 'prompt' | 'fallback' | 'launder';
   /**
+   * Characters the shot (or unit) places on screen. Feeds the faces-off
+   * preflight: a shot with people must not go to a `-basic` Seedance id.
+   */
+  characters?: string[];
+  /**
    * Voice-donor reference clips (on-disk paths), ordered to match the prompt's
    * @Audio1, @Audio2, … bindings. Sent as `reference_audio_urls` only when the
    * effective model supports reference audio AND at least one reference image
@@ -617,6 +624,22 @@ export async function renderVideoFile(
   // *consent* attestation (409 needs_consent) is a separate mechanism and is
   // still handled at queue time below.
   const effectiveModel = prompt.model;
+
+  // Faces-off preflight: a `-basic` Seedance id refuses any input image that
+  // shows a person, so a shot with characters (or a face-bearing reference)
+  // must not be submitted to one. Throws before the paid call, naming the
+  // face-capable twin. Reads the `hasFace` provenance sidecars.
+  await assertFacesOffCompatible({
+    model: effectiveModel,
+    characters: options.characters,
+    imagePaths: [
+      anchorImagePath,
+      endFrameImagePath,
+      ...(referenceImagePaths ?? []),
+      ...(sceneImagePaths ?? []),
+      ...(elements ?? []).flatMap(el => [el.frontalImageUrl, ...(el.referenceImageUrls ?? [])]),
+    ].filter((p): p is string => Boolean(p)),
+  });
 
   // Pure reference mode (2026-07-30): on @Image-tag R2V models with a full
   // slot plan, the references carry ALL consistency — character sheets,
@@ -1516,6 +1539,7 @@ async function renderSingleShotUnit(
     voiceReferencePaths,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
+    characters: shot.characters,
     project: series.outputDir,
   });
 
@@ -1681,6 +1705,7 @@ async function renderMultiShotUnit(
     voiceReferencePaths: voiceReferencePaths.length > 0 ? voiceReferencePaths : undefined,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
+    characters: Array.from(new Set(shots.flatMap(shot => shot.characters))),
     project: series.outputDir,
   });
 
@@ -1790,6 +1815,7 @@ async function renderMontageUnit(
     voiceReferencePaths: voiceReferencePaths.length > 0 ? voiceReferencePaths : undefined,
     aspectRatio: series.storyboardAspectRatio ?? '16:9',
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
+    characters: Array.from(new Set(shots.flatMap(shot => shot.characters))),
     project: series.outputDir,
   });
 
