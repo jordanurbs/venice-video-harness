@@ -896,7 +896,9 @@ export async function renderVideoFile(
 
   let queueResponse: QueueResponse;
   try {
-    queueResponse = await client.post<QueueResponse>(VIDEO_QUEUE_PATH, body);
+    // retry:false — a 5xx can arrive after Venice already queued and billed the
+    // job; a blind retry would pay for the shot twice. Resume via the job store.
+    queueResponse = await client.post<QueueResponse>(VIDEO_QUEUE_PATH, body, { retry: false });
   } catch (err) {
     // Seedance face-media consent flow (two-call attestation).
     // A 409 needs_consent is non-charging; resubmitting the identical body
@@ -919,7 +921,7 @@ export async function renderVideoFile(
         },
       };
       try {
-        queueResponse = await client.post<QueueResponse>(VIDEO_QUEUE_PATH, consentBody);
+        queueResponse = await client.post<QueueResponse>(VIDEO_QUEUE_PATH, consentBody, { retry: false });
       } catch (consentErr) {
         if (consentErr instanceof VeniceRequestError) {
           console.error(`  Venice queue error after consent (HTTP ${consentErr.status}): ${consentErr.message}`);

@@ -28,6 +28,17 @@ export class VeniceRequestError extends Error {
   }
 }
 
+// ---- Request options -------------------------------------------------------
+
+export interface PostOptions {
+  /**
+   * Retry transient failures (HTTP 429, 5xx, network errors) with back-off.
+   * Defaults to `true`. Set `false` for non-idempotent calls where a retry
+   * could duplicate a side effect that the first attempt already caused.
+   */
+  retry?: boolean;
+}
+
 // ---- Error message extraction ----------------------------------------------
 
 /**
@@ -233,20 +244,32 @@ export class VeniceClient {
    * {@link MAX_RETRIES} times using exponential back-off.  A small delay is
    * inserted between consecutive requests to stay within rate limits.
    *
+   * Pass `{ retry: false }` for calls that are not idempotent. `POST
+   * /video/queue` is the case that matters: Venice may have accepted and
+   * billed the job before the 5xx (or a dropped connection) reached us, so a
+   * blind retry can queue -- and pay for -- the same shot twice. With retries
+   * off the first failure surfaces as-is and the caller decides.
+   *
    * @typeParam T  Expected shape of the parsed JSON response.
    * @param path   API path **including** the leading slash (e.g. `/api/v1/image/generate`).
    * @param body   Request payload -- will be JSON-stringified.
+   * @param options.retry  Retry 429/5xx/network errors (default `true`).
    * @returns      Parsed JSON response body.
    * @throws {VeniceRequestError} On non-retryable HTTP errors (4xx other than 429).
    * @throws {Error}              When all retry attempts are exhausted.
    */
-  async post<T = unknown>(path: string, body: Record<string, unknown>): Promise<T> {
+  async post<T = unknown>(
+    path: string,
+    body: Record<string, unknown>,
+    options: PostOptions = {},
+  ): Promise<T> {
     await this.applyRateLimit();
 
     const url = `${this.baseUrl}${path}`;
+    const maxAttempts = options.retry === false ? 1 : MAX_RETRIES;
     let lastError: Error | undefined;
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       if (attempt > 0) {
         const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
         await abortableSleep(backoff);
@@ -282,9 +305,9 @@ export class VeniceClient {
 
         // Retry on rate-limit (429) and server errors (5xx).
         if (response.status === 429 || response.status >= 500) {
-          if (response.status === 429) {
+          if (response.status === 429 && maxAttempts > 1) {
             console.warn(
-              `  ⚠ Venice rate-limit (HTTP 429) on ${path}; retrying with exponential back-off (attempt ${attempt + 1}/${MAX_RETRIES}).`,
+              `  ⚠ Venice rate-limit (HTTP 429) on ${path}; retrying with exponential back-off (attempt ${attempt + 1}/${maxAttempts}).`,
             );
           }
           lastError = new VeniceRequestError(message, response.status, errorBody);

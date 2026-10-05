@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`POST /video/queue` is no longer auto-retried.** `VeniceClient.post`
+  retried 429/5xx on every path, including the queue call. Venice can accept
+  and bill a job before a 5xx (or dropped connection) reaches the client, so
+  a blind retry could queue — and pay for — the same shot twice. `post` gains
+  `{ retry?: boolean }` (default `true`); the three queue callers
+  (`video.ts` `queueVideo`, `video-generator.ts` `renderVideoFile` incl. the
+  409 consent resubmit, `upscale.ts`) pass `retry: false`. A transient
+  failure on the queue call now surfaces after one attempt; `venice-video
+  queue` re-attaches to anything that did land. Quote, retrieve and complete
+  keep their back-off. Test: `tests/queue-no-retry.test.mjs`.
+
 ## 2.26.0 — 2026-10-05
 
 ### Changed
