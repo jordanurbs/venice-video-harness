@@ -97,7 +97,7 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
     name: 'Approve QA',
     scope: 'episode',
     produces: 'qa-approved.json',
-    gate: 'A human must clear the QA gate. --skip-qa does not clear it.',
+    gate: 'A human must clear the QA gate. --skip-qa does not clear it. The approval is bound to the reviewed panels: a panel or its settings changing afterwards re-blocks that shot.',
     command: 'qa-approve -p <project> -e <n>',
   },
   {

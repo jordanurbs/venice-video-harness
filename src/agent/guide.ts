@@ -53,6 +53,7 @@ export const AGENT_GUIDE: readonly GuideSection[] = [
       'approve-script and qa-approve are explicit human sign-offs, not steps an agent clears on its own.',
       '--skip-approval and --skip-qa do not make the script approved or the QA cleared; they only bypass the check. They are not the fix. Ask the human to approve.',
       'qa-approve reads the QA report: criticals or unchecked shots block approval. --force is the operator saying they reviewed the panels themselves.',
+      'qa-approve binds the approval to the panels on disk (a hash per panel plus a digest of its prompt, references and image model). If a panel is regenerated or those settings change afterwards, generate-videos refuses that shot until qa-approve runs again.',
     ],
   },
   {

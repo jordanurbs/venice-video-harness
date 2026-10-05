@@ -20,6 +20,19 @@
   provenance sidecars of every image the request would send and throws
   `FacesOffModelError` naming the twin. Text-only and faceless-image renders
   on a `-basic` id are unaffected. Test: `tests/faces-off-models.test.mjs`.
+- **QA approval is bound to the panels a human reviewed (rule 63).**
+  `qa-approved.json` was `{ episode, approvedAt, notes }` and
+  `generate-videos` only checked that it existed, so a panel regenerated or
+  a prompt / reference / image-model change after approval still unblocked
+  a billed render nobody had looked at. `qa-approve` now records per shot a
+  `panelSha256` of the panel bytes and a `settingsDigest` of the inputs the
+  panel depends on (image prompt + location note, reference image paths,
+  image models, aspect ratio, scene refs). `generate-videos` recomputes both
+  before reading the API key and refuses the run when any shot differs,
+  naming each mismatch and the re-approve command. Legacy artifacts without
+  bindings are refused as `not-recorded`. `--skip-qa` still bypasses it.
+  New `src/mini-drama/panel-approval.ts` (pure `settingsDigest` /
+  `compareApproval`). Test: `tests/panel-approval.test.mjs`.
 
 ## 2.26.0 — 2026-10-05
 

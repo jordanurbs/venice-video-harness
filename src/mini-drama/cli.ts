@@ -93,6 +93,15 @@ import type { DialogueLine } from '../venice/audio.js';
 import { getMusicModel } from '../venice/models.js';
 
 import { buildImagePrompt, buildCharacterReferencePromptParts } from './prompt-builder.js';
+import {
+  approvalForShot,
+  describeMismatch,
+  shotIdOf,
+  verifyApproval,
+  type ApprovalArtifact,
+  type ShotApproval,
+} from './panel-approval.js';
+import { shotKey } from './shot-paths.js';
 import { generateEpisodeVideos } from './video-generator.js';
 import { generateVoiceReference, harvestVoiceReferenceFromClip } from './voice-reference.js';
 import { generateLocationReferences } from './location-generator.js';
@@ -3229,14 +3238,37 @@ program
       process.exit(1);
     }
 
-    const artifact = {
+    // Bind the approval to the panels a human actually reviewed: per shot, a
+    // hash of the panel bytes plus a digest of the settings the panel depends
+    // on. generate-videos refuses any shot that no longer matches.
+    const approvedShots: Record<string, ShotApproval> = {};
+    const script = await loadEpisodeScript(series, opts.episode);
+    if (script) {
+      const panelDir = join(episodeDir, 'scene-001');
+      const missing: string[] = [];
+      for (const shot of script.shots) {
+        const binding = approvalForShot(series, shot, panelDir);
+        const key = shotKey(shotIdOf(shot));
+        if (binding) approvedShots[key] = binding;
+        else missing.push(key);
+      }
+      if (missing.length > 0) {
+        console.warn(`  ⚠ ${missing.length} shot(s) have no panel on disk and were not bound: ${missing.join(', ')}. They will be refused by generate-videos until storyboarded and re-approved.`);
+      }
+    } else {
+      console.warn('  ⚠ No script.json found; approval recorded without per-shot binding.');
+    }
+
+    const artifact: ApprovalArtifact = {
       episode: opts.episode,
       approvedAt: new Date().toISOString(),
       notes: opts.notes || 'Panels reviewed and approved.',
+      ...(process.env.USER ? { by: process.env.USER } : {}),
+      shots: approvedShots,
     };
 
     await writeFile(qaPath, JSON.stringify(artifact, null, 2), 'utf-8');
-    console.log(`QA approved for Episode ${opts.episode}.`);
+    console.log(`QA approved for Episode ${opts.episode} (${Object.keys(approvedShots).length} panel(s) bound).`);
     console.log(`  Artifact: ${qaPath}`);
     console.log(`\nVideo generation is now unblocked. Run: generate-videos -p ${series.outputDir} -e ${opts.episode}`);
     await updateTreatment(series, opts.episode);
@@ -3475,6 +3507,28 @@ program
       console.error(`  Clear it with:  qa-approve -p ${series.outputDir} -e ${opts.episode}`);
       console.error('  --skip-qa only bypasses this check; it does not clear QA and is not the fix.');
       process.exit(1);
+    }
+    if (!opts.skipQa) {
+      // The approval must still describe the panels on disk. A panel
+      // regenerated or a prompt/reference/model changed after qa-approve
+      // means a human has not reviewed what is about to be billed.
+      let artifact: ApprovalArtifact;
+      try {
+        artifact = JSON.parse(readFileSync(qaPath, 'utf-8')) as ApprovalArtifact;
+      } catch {
+        console.error(`Blocked: ${qaPath} could not be parsed. Re-run qa-approve.`);
+        process.exit(1);
+      }
+      const stale = verifyApproval(artifact, series, script.shots, join(episodeDir, 'scene-001'));
+      if (stale.length > 0) {
+        console.error(`Blocked: ${stale.length} shot(s) changed after QA approval (${artifact.approvedAt}); a human has not reviewed what would be billed.`);
+        for (const s of stale) {
+          console.error(`  shot ${s.shotKey}: ${s.mismatches.map(describeMismatch).join('; ')}`);
+        }
+        console.error(`  Review the panels, then re-approve:  qa-approve -p ${series.outputDir} -e ${opts.episode}`);
+        console.error('  --skip-qa bypasses this check; it does not clear QA and is not the fix.');
+        process.exit(1);
+      }
     }
 
     // commander's --no-<flag> negates the camelCase option. When the user
