@@ -46,6 +46,7 @@ import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planne
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
 import { getVideoModel, modelSupportsDuration, resolveBitrateMode, type BitrateMode } from '../venice/models.js';
 import { appendRecipePass } from '../venice/recipe.js';
+import { classifyVideoRetrieveStatus, VideoGenerationFailedError } from '../venice/video.js';
 import {
   clearPendingJob,
   findPendingJob,
@@ -1073,6 +1074,15 @@ async function pollRenderedVideo(
       }
 
       const status = result.value as { status: string; execution_duration?: number };
+      const verdict = classifyVideoRetrieveStatus(status);
+      if (verdict.kind === 'failed') {
+        // Terminal server-side failure: surface it now instead of polling to
+        // the 30-minute deadline. The job is dead, so drop the pending record
+        // rather than inviting the next run to re-attach to it.
+        process.stdout.write('\n');
+        await clearPendingJob(jobKey);
+        throw new VideoGenerationFailedError(model, queue_id, verdict.status, status, verdict.detail);
+      }
       const pct = status.execution_duration
         ? `${(status.execution_duration / 1000).toFixed(0)}s elapsed`
         : '';
@@ -1081,6 +1091,8 @@ async function pollRenderedVideo(
       process.stdout.write(`\r  Polling... ${status.status} ${pct}   `);
     } catch (err) {
       if (isAbortError(err)) throw err;
+      // Terminal verdicts are not transient poll errors; never count or retry them.
+      if (err instanceof VideoGenerationFailedError) throw err;
 
       // A resumed queue id Venice has already reaped can never complete —
       // without this the loop below would retry it forever.

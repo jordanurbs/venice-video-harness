@@ -4,6 +4,7 @@
 
 ### Fixed
 
+<<<<<<< HEAD
 - **`POST /video/queue` is no longer auto-retried.** `VeniceClient.post`
   retried 429/5xx on every path, including the queue call. Venice can accept
   and bill a job before a 5xx (or dropped connection) reaches the client, so
@@ -14,6 +15,19 @@
   failure on the queue call now surfaces after one attempt; `venice-video
   queue` re-attaches to anything that did land. Quote, retrieve and complete
   keep their back-off. Test: `tests/queue-no-retry.test.mjs`.
+=======
+- **Video polls fail fast on a terminal status.** Both `/video/retrieve`
+  loops (`pollVideoResult` in `video.ts`, `pollRenderedVideo` in
+  `video-generator.ts`) special-cased only `PROCESSING`; a `FAILED` body was
+  treated as "still running" and the shot surfaced as a timeout at the
+  deadline (30 min on the mini-drama path) with the pending-job record still
+  pointing at the dead queue id. New `classifyVideoRetrieveStatus` treats any
+  non-`PROCESSING` JSON body as terminal; both loops throw
+  `VideoGenerationFailedError` (model, queue id, status, body, detail) on
+  that poll and clear the pending job so the next run queues fresh.
+  `VideoRetrieveStatus.status` widens accordingly. Test:
+  `tests/poll-fail-fast.test.mjs`.
+>>>>>>> reallybeard/fix/poll-fail-fast
 
 ## 2.26.0 — 2026-10-05
 

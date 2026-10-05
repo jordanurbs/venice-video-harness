@@ -39,6 +39,65 @@ function isQueueGoneError(error: unknown): boolean {
     && (error.status === 400 || error.status === 404 || error.status === 410);
 }
 
+// ---- Retrieve status classification ----------------------------------------
+
+/**
+ * Thrown when `/video/retrieve` reports that the job ended without a video.
+ * Distinct from the poll timeout so callers (and humans reading logs) can tell
+ * "Venice gave up on this job" from "we gave up waiting".
+ */
+export class VideoGenerationFailedError extends Error {
+  public readonly model: string;
+  public readonly queueId: string;
+  public readonly status: string;
+  public readonly body: unknown;
+
+  constructor(model: string, queueId: string, status: string, body: unknown, detail?: string) {
+    super(
+      `Video generation ${status} for ${model} (${queueId})`
+      + (detail ? `: ${detail}` : ''),
+    );
+    this.name = 'VideoGenerationFailedError';
+    this.model = model;
+    this.queueId = queueId;
+    this.status = status;
+    this.body = body;
+  }
+}
+
+export type VideoRetrieveVerdict =
+  | { kind: 'processing' }
+  | { kind: 'failed'; status: string; detail?: string };
+
+/**
+ * Decide what a JSON `/video/retrieve` body means for the poll loop.
+ *
+ * Only `PROCESSING` keeps polling. Anything else is terminal: `FAILED`, an
+ * `ERROR`, a status we have never seen. Before this, both poll loops
+ * special-cased `PROCESSING` and otherwise just slept again, so a job that
+ * failed on poll 2 was reported as a timeout 30 minutes later -- and the
+ * pending-job record kept pointing at a dead queue id.
+ *
+ * A JSON `COMPLETED` is also terminal here: a finished job is delivered as
+ * `video/mp4` bytes, so a JSON body claiming completion with no video is a
+ * server-side anomaly we cannot recover from by polling again.
+ */
+export function classifyVideoRetrieveStatus(body: unknown): VideoRetrieveVerdict {
+  const status = typeof (body as { status?: unknown } | null)?.status === 'string'
+    ? ((body as { status: string }).status).toUpperCase()
+    : '';
+  if (status === 'PROCESSING') return { kind: 'processing' };
+
+  const b = body as { error?: unknown; message?: unknown } | null | undefined;
+  let detail: string | undefined;
+  if (typeof b?.error === 'string') detail = b.error;
+  else if (typeof (b?.error as { message?: unknown } | undefined)?.message === 'string') {
+    detail = (b!.error as { message: string }).message;
+  } else if (typeof b?.message === 'string') detail = b.message;
+
+  return { kind: 'failed', status: status || 'UNKNOWN', detail };
+}
+
 // ---- Quote ----------------------------------------------------------------
 
 /**
@@ -245,14 +304,20 @@ export async function pollVideoResult(
     }
 
     const status = response.value as VideoRetrieveStatus;
-    if (heartbeatPath) await touchPendingJob(heartbeatPath);
-    if (status.status === 'PROCESSING') {
-      reportProgress({
-        phase: 'poll',
-        detail: `${status.status} ${Math.round((attempt * pollIntervalMs) / 1000)}s`,
-      });
-      onProgress?.(status);
+    const verdict = classifyVideoRetrieveStatus(status);
+    if (verdict.kind === 'failed') {
+      // Terminal: fail now, not at the deadline. Drop the pending-job record
+      // so the next run queues fresh instead of re-attaching to a dead id.
+      if (heartbeatPath) await clearPendingJob(heartbeatPath);
+      throw new VideoGenerationFailedError(model, queueId, verdict.status, status, verdict.detail);
     }
+
+    if (heartbeatPath) await touchPendingJob(heartbeatPath);
+    reportProgress({
+      phase: 'poll',
+      detail: `${status.status} ${Math.round((attempt * pollIntervalMs) / 1000)}s`,
+    });
+    onProgress?.(status);
   }
 
   throw new Error(`Timed out waiting for video generation: ${model} (${queueId})`);

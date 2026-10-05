@@ -176,9 +176,19 @@ export interface VideoRetrieveRequest {
 }
 
 export interface VideoRetrieveStatus {
-  status: 'PROCESSING';
+  /**
+   * `PROCESSING` while the job runs. The published spec lists only
+   * `PROCESSING` and `COMPLETED` for the JSON body (a finished job normally
+   * comes back as `video/mp4` bytes instead), but `FAILED` is observed in
+   * practice when generation dies server-side. Treat anything that is not
+   * `PROCESSING` as terminal -- see `classifyVideoRetrieveStatus`.
+   */
+  status: 'PROCESSING' | 'COMPLETED' | 'FAILED' | (string & {});
   average_execution_time: number;
   execution_duration: number;
+  /** Present on some failure bodies. */
+  error?: string | { message?: string; code?: string };
+  message?: string;
 }
 
 // ---- POST /api/v1/video/quote ---------------------------------------------
