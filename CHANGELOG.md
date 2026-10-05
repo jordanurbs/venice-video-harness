@@ -123,6 +123,20 @@
   project builds `import { getVideoModel } from 'venice-video-harness/core'`
   with no polyfills. `capabilities.json` stays at the repo root and is
   byte-identical.
+  Review fixes from the first downstream consumer (the Venice Video Creator
+  web app took the catalog and the faces-off predicates from the packed
+  tarball; its full suite passed unchanged): `parseShotDuration` /
+  `formatShotDuration` move from the Node-only planner into core
+  (`series/duration.ts`, on the barrel; the planner re-exports the parser so
+  its importers are untouched) because a host that holds `ShotScript` needs
+  to read `"5s"` strings; `validateVideoRequest` documents that resolution is
+  matched verbatim, case included, since Venice's enums differ by family
+  (`'720p'` Seedance, `'768P'` MiniMax) and a normalised value would pass
+  here and 400 at the paid call; `VideoModelSpec.facesOff` documents that
+  the flag covers only the enumerated `-basic` ids and `isFacesOffModel` is
+  the source of truth for the live-listed 2.5 spellings; the manifest states
+  when `schemaVersion` bumps (removed / renamed / retyped fields) and when it
+  does not (new optional fields, new ids). Test: `tests/shot-duration.test.mjs`.
 
 ## 2.26.0 — 2026-10-05
 

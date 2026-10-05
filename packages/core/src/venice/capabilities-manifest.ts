@@ -6,9 +6,18 @@
 //
 // The manifest is DATA ONLY: model specs, capability sets, budgets, prompt
 // caps, and routing defaults. Behavior (prompt builders, planners) still
-// ships with each client. Schema changes bump `schemaVersion`; clients must
-// ignore unknown fields and reject manifests with a schemaVersion greater
-// than what they understand (falling back to their bundled snapshot).
+// ships with each client. Clients must ignore unknown fields and reject
+// manifests with a schemaVersion greater than what they understand (falling
+// back to their bundled snapshot).
+//
+// When to bump `CAPABILITIES_SCHEMA_VERSION`:
+//   - A new OPTIONAL field (on a spec, a set, a budget) does NOT bump it.
+//     Tolerant clients read it or skip it; `facesOff` (2.26.0) shipped under
+//     schema 1 this way.
+//   - Removing or renaming a field, changing a field's type, or changing the
+//     meaning of an existing value DOES bump it, because a client decoding the
+//     old shape would mis-enable a paid capability.
+//   - New model ids, set members and budget entries are data, not schema.
 //
 // Emit with:  venice-video capabilities --json   (or `capabilities > file`)
 // A snapshot is written to capabilities.json at the repo root by

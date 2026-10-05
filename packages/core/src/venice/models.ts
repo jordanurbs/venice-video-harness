@@ -82,6 +82,12 @@ export interface VideoModelSpec {
    * Preflight (`assertFacesOffCompatible`) blocks the combination before the
    * paid call and names `faceCapableTwinId(id)` as the fix; routing
    * (`resolveVideoModel`) never picks a faces-off id for a shot with people.
+   *
+   * The flag is set on the `-basic` ids the registry enumerates (Seedance 2.0
+   * today). Venice also lists `seedance-2-5-*-basic`, which the registry does
+   * not carry; a consumer that reads only this field (or `capabilities.json`)
+   * will not see those as faces-off. `isFacesOffModel(id)` is the source of
+   * truth: it reads the flag and falls back to the id shape for unlisted ids.
    */
   facesOff?: boolean;
   privacy: 'private' | 'anonymized';
@@ -1538,6 +1544,15 @@ export interface VideoRequestIssue {
  *
  * Returns `[]` for an unknown model (the registry cannot vouch either way) and
  * for models that expose no ladder for a field.
+ *
+ * Both values are matched VERBATIM against the ladder, including case:
+ * Venice's enums are case-sensitive and differ by family (`'720p'` on
+ * Seedance, `'768P'` on MiniMax; 2K on H3 Max 400s with
+ * `Expected '480P' | '768P'`), so a caller that normalises resolution to one
+ * case would pass here and fail at the paid call. Pass the string exactly as
+ * the model's `resolutions` ladder (or the live `/models` constraints) spell
+ * it; when the only mismatch is case, the issue's `suggestion` is that
+ * spelling.
  *
  * This replaces two silent corrections: `queueVideo` used to snap an invalid
  * duration to the nearest valid one, and `buildModelParams` used to swap an

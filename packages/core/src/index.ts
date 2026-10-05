@@ -59,6 +59,7 @@ export * from './venice/capabilities-manifest.js';
 
 // The series schema: SeriesState, EpisodeScript, ShotScript, defaults, capability sets.
 export * from './series/types.js';
+export * from './series/duration.js';
 export * from './series/project-language.js';
 
 // Agent-facing pipeline description and guide text.
