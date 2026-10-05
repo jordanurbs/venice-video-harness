@@ -69,6 +69,21 @@ export interface VideoModelSpec {
    * identity and look.
    */
   promptStyle?: 'simple' | 'directorial';
+  /**
+   * The model runs WITHOUT the provider's face handling: Venice lists each
+   * Seedance lane twice, the plain id (face-capable, 409 `needs_consent`
+   * handshake, face screening) and a `-basic` twin that skips all of it and
+   * refuses input images that show a person (422 `provider_content_policy`,
+   * credits refunded). Text-only renders are fine on a faces-off id; any
+   * request that sends an image of a person is not. Evidence: 31 of 32 takes
+   * with a character reference failed on a `-basic` id in one project, 20 as
+   * content-policy rejections; the face-capable twins were refused ~6%.
+   *
+   * Preflight (`assertFacesOffCompatible`) blocks the combination before the
+   * paid call and names `faceCapableTwinId(id)` as the fix; routing
+   * (`resolveVideoModel`) never picks a faces-off id for a shot with people.
+   */
+  facesOff?: boolean;
   privacy: 'private' | 'anonymized';
   offline: boolean;
 }
@@ -96,6 +111,27 @@ export function modelWantsSimplePrompt(modelId: string): boolean {
  */
 export function i2vRejectsFaceStartFrame(modelId: string): boolean {
   return modelId.startsWith('minimax-h3') && modelId.includes('image-to-video');
+}
+
+/**
+ * True for a model that runs without the provider's face handling and refuses
+ * input images of people (see `VideoModelSpec.facesOff`). Registry entries
+ * carry the flag; the id-shape fallback covers the `seedance-2-5-*-basic`
+ * spellings Venice lists live but the registry does not enumerate.
+ */
+export function isFacesOffModel(modelId: string): boolean {
+  const spec = getVideoModel(modelId);
+  if (spec) return spec.facesOff === true;
+  return /^seedance-.+-basic$/i.test(modelId);
+}
+
+/**
+ * The face-capable twin of a faces-off id (`seedance-2-0-reference-to-video-basic`
+ * -> `seedance-2-0-reference-to-video`). Returns the id unchanged when it is
+ * not a faces-off model.
+ */
+export function faceCapableTwinId(modelId: string): string {
+  return isFacesOffModel(modelId) ? modelId.replace(/-basic$/i, '') : modelId;
 }
 
 // ---- Image generation prompt-length budgets () -----------------------
@@ -1235,13 +1271,17 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   },
   // Seedance 2.0 "basic" — the live-listed IDs (the non-suffixed ones the
   // harness sends are unlisted but still valid). Same 4K ceiling, 4-15s ladder.
+  // `facesOff`: these twins run WITHOUT Seedance's face handling and refuse
+  // input images of people (422 provider_content_policy, refunded). Fine for
+  // text-only and faceless-image renders; never for a shot with characters.
+  // See `VideoModelSpec.facesOff`.
   {
     id: 'seedance-2-0-text-to-video-basic', name: 'Seedance 2.0 (basic)', type: 'text-to-video',
     durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+    maxDurationSec: 15, facesOff: true, privacy: 'anonymized', offline: false,
   },
   {
     id: 'seedance-2-0-image-to-video-basic', name: 'Seedance 2.0 (basic)', type: 'image-to-video',
@@ -1249,7 +1289,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: [],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+    maxDurationSec: 15, facesOff: true, privacy: 'anonymized', offline: false,
   },
   {
     id: 'seedance-2-0-reference-to-video-basic', name: 'Seedance 2.0 R2V (basic)', type: 'image-to-video',
@@ -1257,7 +1297,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
     audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 15, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
+    maxDurationSec: 15, supportsReferenceAudio: true, facesOff: true, privacy: 'anonymized', offline: false,
   },
 ];
 
