@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 ### Fixed
 
 <<<<<<< HEAD
@@ -28,6 +29,24 @@
   `VideoRetrieveStatus.status` widens accordingly. Test:
   `tests/poll-fail-fast.test.mjs`.
 >>>>>>> reallybeard/fix/poll-fail-fast
+=======
+### Changed
+
+- **Duration and resolution are validated before the paid call instead of
+  silently corrected.** `queueVideo` used to snap an unsupported duration to
+  the nearest valid one, and `buildModelParams` swapped an unsupported
+  resolution for `resolutions[0]` — both with only a `console.warn`, both
+  changing the price and the output the caller asked for. New
+  `validateVideoRequest(modelId, { duration, resolution })` in `models.ts`
+  returns structured issues (field, requested, valid list, suggestion such as
+  "try 8s"); `queueVideo` and `quoteVideo` throw
+  `VideoRequestValidationError` (a `VeniceRequestError` subclass carrying
+  `issues`) with no HTTP call made. `queueVideo({ snap: true })` opts back
+  into the old snapping. `buildModelParams` now only passes a resolution the
+  model lists. Unknown models pass through unchanged. The mini-drama render
+  path already ran its own duration preflight and resolution pinning, so its
+  behaviour is unchanged. Test: `tests/validate-before-quote.test.mjs`.
+>>>>>>> reallybeard/fix/validate-before-quote
 
 ## 2.26.0 — 2026-10-05
 

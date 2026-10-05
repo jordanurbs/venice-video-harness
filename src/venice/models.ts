@@ -651,8 +651,9 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   {
     id: 'minimax-h3-max-text-to-video', name: 'MiniMax H3 Max', type: 'text-to-video',
     durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
-    // Highest first: `resolutions[0]` is what buildModelParams and the Creator
-    // app's reconcile() fall back to, and 768P is the finish tier. Venice's live
+    // Highest first: `resolutions[0]` is the default tier (what
+    // validateVideoRequest suggests and the Creator app's reconcile() falls
+    // back to), and 768P is the finish tier. Venice's live
     // /models reports this pair as ["480P", "768P"]; the app reorders live to
     // follow this array (preferredResolutionOrder) precisely so that incidental
     // ordering doesn't quietly default every shot to the draft tier.
@@ -822,8 +823,8 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   // Resolution ladder corrected against live /video/quote (2026-09-07): the
   // i2v/t2v/r2v lanes accept up to 4k (quote 200: 4k=$4.86, 1080p=$2.34 for
   // a 5s clip). The harness previously capped these at 720p. Fast/mini stay
-  // 480p/720p. Kept ascending so buildModelParams' resolutions[0] fallback is
-  // the cheap draft, not 4k; renderVideoFile still pins 720p as the auto
+  // 480p/720p. Kept ascending so the resolutions[0] default tier is the cheap
+  // draft, not 4k; renderVideoFile still pins 720p as the auto
   // default and only sends a higher value when the user/engine picks one.
   {
     id: 'seedance-2-0-image-to-video', name: 'Seedance 2.0', type: 'image-to-video',
@@ -1480,6 +1481,71 @@ export function closestValidDuration(modelId: string, requestedSec: number): str
   return parsed[0]?.label;
 }
 
+// ---- Request validation (before the paid call) ----------------------------
+
+export interface VideoRequestIssue {
+  field: 'duration' | 'resolution';
+  requested: string;
+  valid: string[];
+  /** A concrete alternative, e.g. the closest valid duration. */
+  suggestion?: string;
+  message: string;
+}
+
+/**
+ * Check `duration` and `resolution` against a model's registry entry and
+ * return every mismatch, with the valid list and a concrete suggestion.
+ *
+ * Returns `[]` for an unknown model (the registry cannot vouch either way) and
+ * for models that expose no ladder for a field.
+ *
+ * This replaces two silent corrections: `queueVideo` used to snap an invalid
+ * duration to the nearest valid one, and `buildModelParams` used to swap an
+ * invalid resolution for `resolutions[0]`. Both changed the price and the
+ * output without the caller asking, and only a `console.warn` said so. A
+ * caller that *wants* snapping can pass `{ snap: true }` to `queueVideo`.
+ */
+export function validateVideoRequest(
+  modelId: string,
+  opts: { duration?: string; resolution?: string },
+): VideoRequestIssue[] {
+  const model = getVideoModel(modelId);
+  if (!model) return [];
+  const issues: VideoRequestIssue[] = [];
+
+  if (opts.duration && model.durations.length > 0 && !model.durations.includes(opts.duration)) {
+    const requestedSec = parseInt(opts.duration, 10);
+    const suggestion = Number.isFinite(requestedSec)
+      ? closestValidDuration(modelId, requestedSec)
+      : model.durations[0];
+    issues.push({
+      field: 'duration',
+      requested: opts.duration,
+      valid: [...model.durations],
+      suggestion,
+      message: `Duration ${opts.duration} is not supported by ${modelId} (valid: ${model.durations.join(', ')})`
+        + (suggestion ? `; try ${suggestion}` : ''),
+    });
+  }
+
+  if (opts.resolution && model.resolutions.length > 0 && !model.resolutions.includes(opts.resolution)) {
+    // Prefer a case-insensitive match ('720P' vs '720p') as the suggestion;
+    // otherwise the model's first (default) tier.
+    const ci = model.resolutions.find(r => r.toLowerCase() === opts.resolution!.toLowerCase());
+    const suggestion = ci ?? model.resolutions[0];
+    issues.push({
+      field: 'resolution',
+      requested: opts.resolution,
+      valid: [...model.resolutions],
+      suggestion,
+      message: `Resolution ${opts.resolution} is not supported by ${modelId} (valid: ${model.resolutions.join(', ')})`
+        + (suggestion ? `; try ${suggestion}` : ''),
+    });
+  }
+
+  return issues;
+}
+
 // ---- Bitrate mode (Seedance 2.x) ------------------------------------------
 
 /**
@@ -1534,9 +1600,12 @@ export function buildModelParams(modelId: string, opts: {
 
   if (!model) return params;
 
-  if (opts.resolution && model.resolutions.length > 0) {
-    const validRes = model.resolutions.includes(opts.resolution) ? opts.resolution : model.resolutions[0];
-    params.resolution = validRes;
+  // Only pass a resolution the model lists. An invalid one used to be swapped
+  // for `resolutions[0]` here, silently changing price and output; callers
+  // now validate up front (`validateVideoRequest`) and this stays a pure
+  // pass-through so a bad value can never reach the body unannounced.
+  if (opts.resolution && model.resolutions.length > 0 && model.resolutions.includes(opts.resolution)) {
+    params.resolution = opts.resolution;
   }
 
   if (opts.aspectRatio && model.aspectRatios.length > 0) {

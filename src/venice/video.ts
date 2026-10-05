@@ -17,7 +17,14 @@ import type {
   VideoQuoteRequest,
   VideoQuoteResponse,
 } from './types.js';
-import { getVideoModel, buildModelParams, resolveBitrateMode, type BitrateMode } from './models.js';
+import {
+  getVideoModel,
+  buildModelParams,
+  resolveBitrateMode,
+  validateVideoRequest,
+  type BitrateMode,
+  type VideoRequestIssue,
+} from './models.js';
 import { MODELS_SUPPORTING_REFERENCE_AUDIO } from '../series/types.js';
 import { assertNotSilentRejectVideo } from './rejection.js';
 
@@ -101,12 +108,52 @@ export function classifyVideoRetrieveStatus(body: unknown): VideoRetrieveVerdict
 // ---- Quote ----------------------------------------------------------------
 
 /**
+ * Thrown before any HTTP call when a request names a duration or resolution
+ * the model does not list. Carries the structured issues so a CLI or UI can
+ * show the valid list and the suggestion ("try 10s") rather than a bare 400.
+ */
+export class VideoRequestValidationError extends VeniceRequestError {
+  public readonly issues: VideoRequestIssue[];
+
+  constructor(modelId: string, issues: VideoRequestIssue[]) {
+    super(
+      `Invalid video request for ${modelId}: ${issues.map(i => i.message).join('; ')}`,
+      0,
+      { model: modelId, issues },
+    );
+    this.name = 'VideoRequestValidationError';
+    this.issues = issues;
+  }
+}
+
+/**
+ * Validate duration/resolution against the registry and throw before the paid
+ * call. Unknown models pass through (the registry cannot vouch either way;
+ * Venice will validate).
+ */
+export function assertValidVideoRequest(
+  modelId: string,
+  opts: { duration?: string; resolution?: string },
+): void {
+  const issues = validateVideoRequest(modelId, opts);
+  if (issues.length > 0) throw new VideoRequestValidationError(modelId, issues);
+}
+
+/**
  * Get a price estimate for a video generation before committing.
+ *
+ * Validates duration/resolution against the registry first: a quote for a
+ * value the model will reject is misleading (Venice may price a snapped or
+ * defaulted value), so fail here with the valid list instead.
  */
 export async function quoteVideo(
   client: VeniceClient,
   request: VideoQuoteRequest,
 ): Promise<VideoQuoteResponse> {
+  assertValidVideoRequest(request.model, {
+    duration: request.duration,
+    resolution: request.resolution,
+  });
   return client.post<VideoQuoteResponse>(VIDEO_QUOTE_PATH, request as unknown as Record<string, unknown>);
 }
 
@@ -143,15 +190,24 @@ export interface QueueVideoOptions {
    * gain at no extra cost. Pass `'standard'` to opt back into smaller files.
    */
   bitrateMode?: BitrateMode;
+  /**
+   * Opt in to the old behaviour: an unsupported duration is snapped to the
+   * closest valid one and an unsupported resolution falls back to the model
+   * default, each with a warning. Off by default -- a mismatch throws
+   * `VideoRequestValidationError` before any HTTP call, because a silent
+   * snap changes the price and the output without the caller asking.
+   */
+  snap?: boolean;
 }
 
 /**
  * Queue a video generation job. Returns the queue_id for polling.
  *
  * Automatically applies model-specific parameter constraints:
- * - Skips resolution/aspect_ratio when not supported
+ * - Skips aspect_ratio when not supported
  * - Skips end_image_url when not supported
- * - Validates duration against model capabilities
+ * - Validates duration and resolution against model capabilities and throws
+ *   before the paid call (or snaps them, with `snap: true`)
  */
 export async function queueVideo(
   client: VeniceClient,
@@ -160,14 +216,15 @@ export async function queueVideo(
   const modelSpec = getVideoModel(options.model);
 
   let duration = options.duration;
-  if (modelSpec && modelSpec.durations.length > 0 && !modelSpec.durations.includes(duration)) {
-    const requested = parseInt(duration, 10);
-    const valid = modelSpec.durations.map(d => parseInt(d, 10)).sort((a, b) => a - b);
-    const closest = valid.reduce((prev, curr) =>
-      Math.abs(curr - requested) < Math.abs(prev - requested) ? curr : prev,
-    );
-    console.warn(`  Duration ${duration} not supported by ${options.model} (valid: ${modelSpec.durations.join(', ')}). Snapping to ${closest}s.`);
-    duration = `${closest}s`;
+  let resolution = options.resolution;
+  const issues = validateVideoRequest(options.model, { duration, resolution });
+  if (issues.length > 0) {
+    if (!options.snap) throw new VideoRequestValidationError(options.model, issues);
+    for (const issue of issues) {
+      console.warn(`  ${issue.message}. Snapping to ${issue.suggestion ?? '(model default)'}.`);
+      if (issue.field === 'duration') duration = issue.suggestion ?? duration;
+      if (issue.field === 'resolution') resolution = issue.suggestion;
+    }
   }
 
   const body: Record<string, unknown> = {
@@ -189,7 +246,7 @@ export async function queueVideo(
 
   const modelParams = buildModelParams(options.model, {
     aspectRatio: options.aspectRatio,
-    resolution: options.resolution,
+    resolution,
     endImageUrl: options.endImageUrl,
   });
   Object.assign(body, modelParams);
