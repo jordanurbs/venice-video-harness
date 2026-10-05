@@ -118,7 +118,7 @@ export async function upscaleChunk(
     duration: duration.toFixed(2),
     upscale_factor: factor,
     video_url: videoUrl,
-  });
+  }, { retry: false }); // never re-queue blindly: the first call may already be billed
   onProgress?.(`${basename(chunkPath)} queued (${queue_id})`);
 
   const buffer = await pollVideoResult(client, TOPAZ_VIDEO_UPSCALE_MODEL, queue_id, {

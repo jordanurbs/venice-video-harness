@@ -177,7 +177,11 @@ export async function queueVideo(
     }
   }
 
-  return client.post<VideoQueueResponse>(VIDEO_QUEUE_PATH, body);
+  // Never auto-retry the queue call. Venice can accept and bill the job before
+  // a 5xx or dropped connection reaches us; a blind retry would queue the same
+  // shot twice. The error surfaces to the caller, who can re-queue deliberately
+  // (and `venice-video queue` can re-attach to anything that did land).
+  return client.post<VideoQueueResponse>(VIDEO_QUEUE_PATH, body, { retry: false });
 }
 
 // ---- Retrieve / Poll ------------------------------------------------------
