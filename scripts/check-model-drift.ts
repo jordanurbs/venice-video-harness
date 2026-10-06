@@ -30,6 +30,26 @@ interface LiveModel {
 
 const BASE_URL = process.env.VENICE_BASE_URL ?? 'https://api.venice.ai';
 
+/**
+ * Registry ids absent from the public list that still answer `/video/quote`
+ * with the ladder recorded here (checked 2026-10-06). Venice serves them
+ * unlisted, e.g. the face-capable Seedance twins and beta lanes. Reported in a
+ * collapsed section, not as drift. Re-check an id with a free quote before
+ * adding it; one that now validates against a different ladder is retired, so
+ * mark it `offline` in the registry instead.
+ */
+const KNOWN_UNLISTED = new Set([
+  'grok-imagine-image-to-video', 'grok-imagine-reference-to-video', 'grok-imagine-text-to-video', 'grok-imagine-video-to-video',
+  'ltx-2-fast-image-to-video', 'ltx-2-fast-text-to-video', 'ltx-2-full-image-to-video', 'ltx-2-full-text-to-video',
+  'minimax-hailuo-03-image-to-video', 'minimax-hailuo-03-reference-to-video', 'minimax-hailuo-03-text-to-video',
+  'runway-gen4-aleph',
+  'seedance-2-0-enhanced-reference-to-video', 'seedance-2-0-fast-image-to-video', 'seedance-2-0-fast-reference-to-video',
+  'seedance-2-0-fast-text-to-video', 'seedance-2-0-image-to-video', 'seedance-2-0-reference-to-video', 'seedance-2-0-text-to-video',
+  'seedance-2-5-image-to-video', 'seedance-2-5-reference-to-video', 'seedance-2-5-text-to-video',
+  'wan-2-7-spicy-image-to-video', 'wan-2.1-pro-image-to-video', 'wan-2.2-a14b-text-to-video', 'wan-2.6-reference-to-video',
+  'wan-3-0-enhanced-reference-to-video', 'wan-3-0-enhanced-text-to-video',
+]);
+
 function setDiff(registry: readonly string[], live: readonly string[] | undefined): string | undefined {
   if (!live) return undefined;
   const missing = live.filter(v => !registry.includes(v));
@@ -57,7 +77,9 @@ async function main(): Promise<number> {
   const registry = new Map(VIDEO_MODELS.map(m => [m.id, m]));
 
   const added = [...live.keys()].filter(id => !registry.has(id)).sort();
-  const gone = [...registry.keys()].filter(id => !live.has(id)).sort();
+  const unlisted = [...registry.keys()].filter(id => !live.has(id)).sort();
+  const expected = unlisted.filter(id => registry.get(id)!.offline || KNOWN_UNLISTED.has(id));
+  const gone = unlisted.filter(id => !expected.includes(id));
   const changed: string[] = [];
 
   for (const [id, spec] of registry) {
@@ -92,6 +114,16 @@ async function main(): Promise<number> {
   if (gone.length) lines.push(`### In the registry, not on Venice (${gone.length})`, '', ...gone.map(id => `- \`${id}\``), '');
   if (changed.length) lines.push(`### Constraints differ (${changed.length})`, '', ...changed, '');
   if (!added.length && !gone.length && !changed.length) lines.push('No drift.');
+  if (expected.length) {
+    lines.push(
+      '',
+      `<details><summary>Unlisted as expected (${expected.length}): offline in the registry, or still served unlisted</summary>`,
+      '',
+      ...expected.map(id => `- \`${id}\`${registry.get(id)!.offline ? ' (offline)' : ''}`),
+      '',
+      '</details>',
+    );
+  }
   console.log(lines.join('\n'));
 
   return added.length || gone.length || changed.length ? 1 : 0;
