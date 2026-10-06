@@ -436,33 +436,37 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 10, privacy: 'anonymized', offline: false,
   },
   // -- LTX Video 2.0 19B --
+  // Offline 2026-10-06: no longer in GET /models (with or without a key), and
+  // /video/quote now validates these ids against a different ladder (6-20s at 1080p-2160p, the v2.3 one)
+  // that rejects the durations recorded here, so Venice appears to route the id
+  // to another model. Kept for old projects; not offered for new work.
   {
     id: 'ltx-2-19b-full-text-to-video', name: 'LTX Video 2.0 19B Full', type: 'text-to-video',
     durations: ['5s', '8s', '10s', '15s', '18s'], resolutions: ['720p'], aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 18, privacy: 'anonymized', offline: false,
+    maxDurationSec: 18, privacy: 'anonymized', offline: true,
   },
   {
     id: 'ltx-2-19b-full-image-to-video', name: 'LTX Video 2.0 19B Full', type: 'image-to-video',
     durations: ['5s', '8s', '10s', '15s', '18s'], resolutions: ['720p'], aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 18, privacy: 'anonymized', offline: false,
+    maxDurationSec: 18, privacy: 'anonymized', offline: true,
   },
   {
     id: 'ltx-2-19b-distilled-text-to-video', name: 'LTX Video 2.0 19B Distilled', type: 'text-to-video',
     durations: ['5s', '8s', '10s', '15s', '18s'], resolutions: ['720p'], aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 18, privacy: 'anonymized', offline: false,
+    maxDurationSec: 18, privacy: 'anonymized', offline: true,
   },
   {
     id: 'ltx-2-19b-distilled-image-to-video', name: 'LTX Video 2.0 19B Distilled', type: 'image-to-video',
     durations: ['5s', '8s', '10s', '15s', '18s'], resolutions: ['720p'], aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 18, privacy: 'anonymized', offline: false,
+    maxDurationSec: 18, privacy: 'anonymized', offline: true,
   },
   // -- OVI --
   {
@@ -473,17 +477,22 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 5, privacy: 'anonymized', offline: false,
   },
   // -- Kling 2.6 --
+  // audioConfigurable corrected 2026-10-06 (pro lanes): live /models reports audio_configurable
+  // true and /video/quote prices `audio: false` lower, so the toggle is real.
+  // (Lanes that reject the field, HappyHorse 1.1 and H3 Max, quote the same
+  // price either way and report false.) With the flag false the harness dropped
+  // `audio: false` and paid for audio it had asked to omit.
   {
     id: 'kling-2.6-pro-text-to-video', name: 'Kling 2.6 Pro', type: 'text-to-video',
     durations: ['5s', '10s'], resolutions: [], aspectRatios: ['16:9', '9:16', '1:1'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 10, privacy: 'anonymized', offline: false,
   },
   {
     id: 'kling-2.6-pro-image-to-video', name: 'Kling 2.6 Pro', type: 'image-to-video',
     durations: ['5s', '10s'], resolutions: [], aspectRatios: [],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
     maxDurationSec: 10, privacy: 'anonymized', offline: false,
   },
@@ -503,11 +512,16 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 10, privacy: 'anonymized', offline: false,
   },
   // -- Kling O3 --
+  // audioConfigurable corrected 2026-10-06 (pro + standard lanes): live /models reports audio_configurable
+  // true and /video/quote prices `audio: false` lower, so the toggle is real.
+  // (Lanes that reject the field, HappyHorse 1.1 and H3 Max, quote the same
+  // price either way and report false.) With the flag false the harness dropped
+  // `audio: false` and paid for audio it had asked to omit.
   {
     id: 'kling-o3-pro-text-to-video', name: 'Kling O3 Pro', type: 'text-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: [], aspectRatios: ['16:9', '9:16', '1:1'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
@@ -515,7 +529,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'kling-o3-pro-image-to-video', name: 'Kling O3 Pro', type: 'image-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: [], aspectRatios: [],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
@@ -523,7 +537,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'kling-o3-pro-reference-to-video', name: 'Kling O3 Pro R2V', type: 'image-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: [], aspectRatios: ['16:9', '9:16', '1:1'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: true, supportsReferenceImages: true, supportsSceneImages: true, supportsEndImage: true,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
@@ -531,7 +545,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'kling-o3-standard-text-to-video', name: 'Kling O3 Standard', type: 'text-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: [], aspectRatios: ['16:9', '9:16', '1:1'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
@@ -539,7 +553,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'kling-o3-standard-image-to-video', name: 'Kling O3 Standard', type: 'image-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: [], aspectRatios: [],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
@@ -547,7 +561,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'kling-o3-standard-reference-to-video', name: 'Kling O3 Standard R2V', type: 'image-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: [], aspectRatios: ['16:9', '9:16', '1:1'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: true, supportsReferenceImages: true, supportsSceneImages: true, supportsEndImage: true,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
@@ -798,11 +812,16 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     privacy: 'private', offline: false,
   },
   // -- Kling V3 --
+  // audioConfigurable corrected 2026-10-06 (pro + standard lanes): live /models reports audio_configurable
+  // true and /video/quote prices `audio: false` lower, so the toggle is real.
+  // (Lanes that reject the field, HappyHorse 1.1 and H3 Max, quote the same
+  // price either way and report false.) With the flag false the harness dropped
+  // `audio: false` and paid for audio it had asked to omit.
   {
     id: 'kling-v3-pro-text-to-video', name: 'Kling V3 Pro', type: 'text-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: [], aspectRatios: ['16:9', '9:16', '1:1'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
@@ -810,7 +829,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'kling-v3-pro-image-to-video', name: 'Kling V3 Pro', type: 'image-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: [], aspectRatios: [],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
@@ -818,7 +837,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'kling-v3-standard-text-to-video', name: 'Kling V3 Standard', type: 'text-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: [], aspectRatios: ['16:9', '9:16', '1:1'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
@@ -826,7 +845,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     id: 'kling-v3-standard-image-to-video', name: 'Kling V3 Standard', type: 'image-to-video',
     durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: [], aspectRatios: [],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
     maxDurationSec: 15, privacy: 'anonymized', offline: false,
   },
@@ -889,35 +908,43 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 8, privacy: 'anonymized', offline: false,
   },
   // -- Veo 3.1 --
+  // audioConfigurable corrected 2026-10-06: live /models reports audio_configurable
+  // true and /video/quote prices `audio: false` lower, so the toggle is real.
+  // (Lanes that reject the field, HappyHorse 1.1 and H3 Max, quote the same
+  // price either way and report false.) With the flag false the harness dropped
+  // `audio: false` and paid for audio it had asked to omit.
   {
     id: 'veo3.1-fast-text-to-video', name: 'Veo 3.1 Fast', type: 'text-to-video',
     durations: ['4s', '6s', '8s'], resolutions: ['720p', '1080p', '4k'], aspectRatios: ['16:9', '9:16'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 8, privacy: 'anonymized', offline: false,
   },
   {
     id: 'veo3.1-fast-image-to-video', name: 'Veo 3.1 Fast', type: 'image-to-video',
     durations: ['4s', '6s', '8s'], resolutions: ['720p', '1080p', '4k'], aspectRatios: [],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 8, privacy: 'anonymized', offline: false,
   },
   {
     id: 'veo3.1-full-text-to-video', name: 'Veo 3.1 Full', type: 'text-to-video',
     durations: ['4s', '6s', '8s'], resolutions: ['720p', '1080p', '4k'], aspectRatios: ['16:9', '9:16'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 8, privacy: 'anonymized', offline: false,
   },
   {
     id: 'veo3.1-full-image-to-video', name: 'Veo 3.1 Full', type: 'image-to-video',
     durations: ['4s', '6s', '8s'], resolutions: ['720p', '1080p', '4k'], aspectRatios: [],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 8, privacy: 'anonymized', offline: false,
   },
   // -- Seedance 2.0 --
+  // Duration ladder widened 2026-10-06: /video/quote accepts every whole second
+  // from 4s to 15s on these four lanes, so a 6s or 7s shot renders at its scripted
+  // length instead of snapping to 5s or 8s.
   // Resolution ladder corrected against live /video/quote (2026-09-07): the
   // i2v/t2v/r2v lanes accept up to 4k (quote 200: 4k=$4.86, 1080p=$2.34 for
   // a 5s clip). The harness previously capped these at 720p. Fast/mini stay
@@ -926,7 +953,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   // default and only sends a higher value when the user/engine picks one.
   {
     id: 'seedance-2-0-image-to-video', name: 'Seedance 2.0', type: 'image-to-video',
-    durations: ['4s', '5s', '8s', '10s', '12s', '15s'],
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
@@ -934,7 +961,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   },
   {
     id: 'seedance-2-0-text-to-video', name: 'Seedance 2.0', type: 'text-to-video',
-    durations: ['4s', '5s', '8s', '10s', '12s', '15s'],
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
     audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
@@ -947,7 +974,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   // validates on R2V only.
   {
     id: 'seedance-2-0-reference-to-video', name: 'Seedance 2.0 R2V', type: 'image-to-video',
-    durations: ['4s', '5s', '8s', '10s', '12s', '15s'],
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: ['480p', '720p', '1080p', '4k'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
     audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
@@ -959,7 +986,7 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   // ladder, roughly ~1.5x the standard R2V price per clip.
   {
     id: 'seedance-2-0-enhanced-reference-to-video', name: 'Seedance 2.0 R2V Enhanced', type: 'image-to-video',
-    durations: ['4s', '5s', '8s', '10s', '12s', '15s'],
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'],
     resolutions: ['480p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
     // audioInput probe 2026-07-23: queue validator accepted audio_url (R2V family).
     audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
@@ -1009,12 +1036,16 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     maxDurationSec: 30, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
   },
   // -- Sora 2 --
+  // Offline 2026-10-06: no longer in GET /models (with or without a key), and
+  // /video/quote now validates these ids against a different ladder (5-15s at 480P/768P/1080P)
+  // that rejects the durations recorded here, so Venice appears to route the id
+  // to another model. Kept for old projects; not offered for new work.
   {
     id: 'sora-2-image-to-video', name: 'Sora 2', type: 'image-to-video',
     durations: ['4s', '8s', '12s'], resolutions: ['720p'], aspectRatios: ['16:9', '9:16'],
     audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 12, privacy: 'anonymized', offline: false,
+    maxDurationSec: 12, privacy: 'anonymized', offline: true,
   },
   {
     // Sora 2 Pro: durations expanded to 20s as of 2026-05; 'true_1080p' added.
@@ -1023,14 +1054,14 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     resolutions: ['720p', '1080p', 'true_1080p'], aspectRatios: ['16:9', '9:16'],
     audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 20, privacy: 'anonymized', offline: false,
+    maxDurationSec: 20, privacy: 'anonymized', offline: true,
   },
   {
     id: 'sora-2-text-to-video', name: 'Sora 2', type: 'text-to-video',
     durations: ['4s', '8s', '12s'], resolutions: ['720p'], aspectRatios: ['16:9', '9:16'],
     audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 12, privacy: 'anonymized', offline: false,
+    maxDurationSec: 12, privacy: 'anonymized', offline: true,
   },
   {
     id: 'sora-2-pro-text-to-video', name: 'Sora 2 Pro', type: 'text-to-video',
@@ -1038,27 +1069,32 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     resolutions: ['720p', '1080p', 'true_1080p'], aspectRatios: ['16:9', '9:16'],
     audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
-    maxDurationSec: 20, privacy: 'anonymized', offline: false,
+    maxDurationSec: 20, privacy: 'anonymized', offline: true,
   },
   // -- PixVerse v5.6 --
+  // audioConfigurable corrected 2026-10-06: live /models reports audio_configurable
+  // true and /video/quote prices `audio: false` lower, so the toggle is real.
+  // (Lanes that reject the field, HappyHorse 1.1 and H3 Max, quote the same
+  // price either way and report false.) With the flag false the harness dropped
+  // `audio: false` and paid for audio it had asked to omit.
   {
     id: 'pixverse-v5.6-text-to-video', name: 'PixVerse v5.6', type: 'text-to-video',
     durations: ['5s', '8s'], resolutions: ['360p', '540p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 8, privacy: 'anonymized', offline: false,
   },
   {
     id: 'pixverse-v5.6-image-to-video', name: 'PixVerse v5.6', type: 'image-to-video',
     durations: ['5s', '8s'], resolutions: ['360p', '540p', '720p', '1080p'], aspectRatios: [],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 8, privacy: 'anonymized', offline: false,
   },
   {
     id: 'pixverse-v5.6-transition', name: 'PixVerse v5.6 Transition', type: 'image-to-video',
     durations: ['5s', '8s'], resolutions: ['360p', '540p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
-    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
     supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
     maxDurationSec: 8, privacy: 'anonymized', offline: false,
   },

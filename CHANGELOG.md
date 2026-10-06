@@ -4,6 +4,22 @@
 
 ### Fixed
 
+- **Video registry corrections checked against `/video/quote` (drift issue
+  #50).** Quote is free and validates `duration` and `resolution` with the
+  same enum errors as the queue, so each change below rests on it plus the
+  live catalog. (a) **19 lanes were wrongly marked audio-locked**: Kling 2.6
+  Pro, Kling O3 and V3 Pro/Standard, PixVerse v5.6 and Veo 3.1 Fast/Full.
+  With `audioConfigurable: false` the harness dropped `audio: false` and
+  billed audio it had asked to omit (Veo 3.1 Full: $1.76 vs $0.88 for the
+  same 8s clip). The catalog reports them configurable and quote prices the
+  silent render lower; HappyHorse 1.1 and H3 Max, which really reject the
+  field, quote the same either way and stay locked. (b) **Seedance 2.0**
+  accepts every whole second from 4s to 15s, so 6s and 7s shots no longer
+  snap to 5s or 8s. (c) **LTX Video 2.0 19B and Sora 2 are `offline`**: they
+  are gone from `GET /models`, and quote now validates them against another
+  model's ladder that rejects the durations the registry recorded. They stay
+  in the registry for old projects but are no longer offered. Test:
+  `tests/registry-quote-verified.test.mjs`.
 - **A stream that stops itself is settled before it reports stopped.** After
   three consecutive failures (or on reaching its budget) the `StreamEngine`
   worker set `running = false`, awaited `persist()`, and only then set
