@@ -22,6 +22,18 @@
   failure on the queue call now surfaces after one attempt; `venice-video
   queue` re-attaches to anything that did land. Quote, retrieve and complete
   keep their back-off. Test: `tests/queue-no-retry.test.mjs`.
+- **`/audio/queue` gets the same two guards as `/video/queue`.** Music, SFX
+  and seed-audio jobs bill at queue time like video, and `generateQueuedAudio`
+  had the same loop shape as the video pollers. (a) The queue call passes
+  `retry: false`, so a 429/5xx on `POST /audio/queue` surfaces after one
+  attempt instead of risking a second billed job. (b) The `/audio/retrieve`
+  loop runs every JSON body through `classifyVideoRetrieveStatus` (the status
+  field is the same shape); anything but `PROCESSING` throws a new
+  `AudioGenerationFailedError` (model, queue id, status, body, detail) on that
+  poll and clears the pending-job record, where it used to sleep on until the
+  10-minute deadline with the record pointing at a dead queue id.
+  `AudioRetrieveStatus.status` widens accordingly. Test:
+  `tests/audio-queue.test.mjs` (config dir isolated, no key).
 - **Video polls fail fast on a terminal status.** Both `/video/retrieve`
   loops (`pollVideoResult` in `video.ts`, `pollRenderedVideo` in
   `video-generator.ts`) special-cased only `PROCESSING`; a `FAILED` body was
