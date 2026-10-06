@@ -264,7 +264,10 @@
   padded with silence to the render length. The clip is always sent as PCM
   WAV: an MP3 padded to exactly 15.0s decodes to 15.047s once the encoder
   delay is counted, and the provider rejected it (a paid 1080p render,
-  2026-09-28).
+  2026-09-28). The same padding sits in the source MP3's probed length, so
+  the pre-queue refusal allows 0.05s over the cap: a 14.97s line probes as
+  15.02s on Linux CI's ffmpeg and was refused, though the WAV it is re-cut
+  to never exceeds 15.0s.
 - **Lip-sync fidelity check on that lane.** Identical requests do not always
   follow the clip: 2 of 4 takes of one shot re-performed the line (a dropped
   phrase, re-timed words), and their mouths no longer match the file. After

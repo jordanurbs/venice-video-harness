@@ -976,7 +976,10 @@ export async function renderVideoFile(
       console.warn(`  ⚠ Lip-sync audio missing on disk, rendering without it: ${audioPath}`);
     } else {
       const audioSec = await probeAudioDurationSec(audioPath);
-      if (audioSec > LIP_SYNC_REFERENCE_AUDIO_MAX_SEC) {
+      // An MP3's probed length includes encoder padding (~20-50ms, varies by
+      // encoder build); the clip is re-cut to at most the cap below, so only
+      // refuse a line that is really over it.
+      if (audioSec > LIP_SYNC_REFERENCE_AUDIO_MAX_SEC + 0.05) {
         throw new Error(
           `Lip-sync audio ${audioPath} is ${audioSec.toFixed(2)}s; ${effectiveModel} accepts at most ` +
           `${LIP_SYNC_REFERENCE_AUDIO_MAX_SEC}s of reference audio per render (split the line). Not queued.`,
