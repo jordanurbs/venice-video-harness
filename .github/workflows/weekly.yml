@@ -1,0 +1,89 @@
+name: weekly
+
+# Mondays: the model registry against the live public model list, and npm
+# audit. Drift is kept in one open issue (label `model-drift`) that is edited
+# in place and commented on only when the report changes, so it is a backlog,
+# not a weekly alarm. No API key: the public list is what the report may
+# show, since this repo and its issues are public.
+on:
+  schedule:
+    - cron: '0 10 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  model-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+
+      - name: Compare the registry with GET /models
+        id: drift
+        run: |
+          set +e
+          npx tsx scripts/check-model-drift.ts > drift.md
+          code=$?
+          set -e
+          cat drift.md
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          [ "$code" -le 1 ] || { echo "::error::The drift check itself failed."; exit 1; }
+
+      - name: Update the model-drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ steps.drift.outputs.code }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create model-drift --color C5DEF5 --description "Registry vs live GET /models" 2>/dev/null || true
+          issue=$(gh issue list --label model-drift --state open --json number --jq '.[0].number // empty')
+          # Fingerprint the report without its date line, so an unchanged report stays quiet.
+          sha=$(grep -v '^Registry: ' drift.md | sha256sum | cut -c1-16)
+          {
+            echo "<!-- drift-sha: $sha -->"
+            echo "Weekly comparison of \`packages/core/src/venice/models.ts\` with the public \`GET /api/v1/models?type=video\`. Updated in place by the [weekly workflow]($RUN_URL)."
+            echo
+            echo "Some registry ids work without being listed (consent-gated or unlisted twins), so not every line here is a bug. Decide per item; a fix is a registry change plus \`npm run manifest\`."
+            echo
+            cat drift.md
+          } > body.md
+
+          if [ "$CODE" = "0" ]; then
+            if [ -n "$issue" ]; then
+              gh issue comment "$issue" --body "No drift this week. Closing."
+              gh issue close "$issue"
+            fi
+            exit 0
+          fi
+
+          if [ -z "$issue" ]; then
+            gh issue create --title "Model registry drift" --label model-drift --body-file body.md
+            exit 0
+          fi
+
+          old=$(gh issue view "$issue" --json body --jq .body | grep -o 'drift-sha: [0-9a-f]*' | cut -d' ' -f2 || true)
+          gh issue edit "$issue" --body-file body.md
+          if [ "$old" != "$sha" ]; then
+            gh issue comment "$issue" --body "The drift report changed this week; the issue body is updated."
+          fi
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm audit --omit=dev --audit-level=high

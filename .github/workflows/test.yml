@@ -4,6 +4,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    # Mondays: catches runner, ffmpeg or dependency drift on an unchanged main.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,16 +18,21 @@ concurrency:
 
 jobs:
   test:
-    name: test (node ${{ matrix.node }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The Linux names are required checks on main; keep them stable.
+    name: test (node ${{ matrix.node }}${{ matrix.os == 'macos-latest' && ', macos' || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         node: [20, 22]
+        include:
+          - os: macos-latest
+            node: 22
     env:
       # No key in CI, and the config dir points at an empty temp dir so nothing
-      # can fall back to a stored key. No test may reach a paid endpoint.
+      # can fall back to a stored key.
       VENICE_API_KEY: ''
       VENICE_VIDEO_CONFIG_DIR: ${{ github.workspace }}/.ci-config
     steps:
@@ -36,17 +45,30 @@ jobs:
 
       # Without ffmpeg the video-qa, audit-gate and ken-burns tests skip
       # instead of failing, so CI would pass without running them.
-      - name: Install ffmpeg
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
-          ffmpeg -version | head -1
-          ffprobe -version | head -1
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: brew install ffmpeg
+      - run: ffmpeg -version | head -1 && ffprobe -version | head -1
 
       - run: mkdir -p "$VENICE_VIDEO_CONFIG_DIR"
       - run: npm ci --no-audit --no-fund
+      # The preload fails any process that sends a request to a Venice host,
+      # including CLIs the tests spawn. Step-scoped: the checkout and
+      # setup-node actions run before the file exists.
       - run: npm test
+        env:
+          NODE_OPTIONS: --import ${{ github.workspace }}/tests/support/no-venice-network.mjs
       - run: npm run test:legacy
+        env:
+          NODE_OPTIONS: --import ${{ github.workspace }}/tests/support/no-venice-network.mjs
 
       - name: capabilities.json matches the registry
         run: |

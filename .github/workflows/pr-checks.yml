@@ -1,0 +1,44 @@
+name: pr-checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changelog:
+    name: changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: A code change carries a CHANGELOG entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SKIP: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') || github.event.pull_request.user.login == 'dependabot[bot]' }}
+        run: |
+          if [ "$SKIP" = "true" ]; then
+            echo "Skipped (no-changelog label or a Dependabot PR)."
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+          code=$(printf '%s\n' "$files" | grep -E '^(src/|packages/[^/]+/src/)' || true)
+          if [ -z "$code" ]; then
+            echo "No changes under src/ or packages/*/src/; no entry needed."
+            exit 0
+          fi
+          if printf '%s\n' "$files" | grep -qx 'CHANGELOG.md'; then
+            echo "CHANGELOG.md is updated."
+            exit 0
+          fi
+          echo "::error::This PR changes code but not CHANGELOG.md. Add an entry under '## Unreleased' (see CONTRIBUTING.md), or ask a maintainer for the no-changelog label if it doesn't need one."
+          printf 'Code files changed:\n%s\n' "$code"
+          exit 1

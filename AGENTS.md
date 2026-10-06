@@ -40,6 +40,10 @@ Open a GitHub issue with the Bug Report template (`.github/ISSUE_TEMPLATE/bug_re
 - The full error output.
 - Any provenance sidecars (`*.provenance.json`) or recipe sidecars (`*.recipe.json`) for the affected assets.
 
+### How To Send A Pull Request
+
+Follow [`CONTRIBUTING.md`](CONTRIBUTING.md): run the tests with no key and an empty `VENICE_VIDEO_CONFIG_DIR`, add a `CHANGELOG.md` entry under `## Unreleased`, re-run `npm run manifest` after registry changes, and report any paid probes in the PR body. CI runs both suites on Linux and macOS and fails any test that reaches the Venice API.
+
 ### How To Consume The Harness
 
 Three patterns are sanctioned, in order of preference:
