@@ -55,7 +55,7 @@
   },
   "dependencies": {
     "chokidar": "^5.0.0",
-    "commander": "^12.1.0",
+    "commander": "^15.0.0",
     "dotenv": "^18.0.5",
     "fountain-js": "^1.1.0",
     "pdf-parse": "^1.1.1",
