@@ -16,6 +16,21 @@
   itself (a switch during the writer's last persist let it author one more
   beat) and now waits for the writer to exit. Both regressions slow
   `persist()` and fail every time without the fix.
+- **A multi-shot unit no longer retries a FAILED render or a faces-off
+  refusal forever.** `renderMultiShotUnitUntilSuccess` retries a failed unit
+  every 15 s with no cap, and treated only `VideoRefusalError` as final. Two
+  more errors fail the same way on every attempt. A
+  `VideoGenerationFailedError` (Venice reported the render FAILED) has
+  already cleared its pending-job record, so each retry re-queued and
+  re-billed the same request body, without end. A `FacesOffModelError` (a
+  `-basic` id given a face-bearing image, rule 62) is thrown before the queue
+  call, so it cost nothing but never stopped. Both are now rethrown, so
+  `generate-videos` stops at that unit and exits non-zero with the error
+  message, as it already did for a refusal. Test:
+  `tests/multishot-final-errors.test.mjs` drives a multi-shot unit through
+  `generateEpisodeVideos` with a scripted client and immediate timers, and
+  asserts one queue call for a FAILED render and none for a faces-off
+  refusal; without the fix both cases fail at once on the scheduled retry.
 - **A regenerate or unpin while the loop is stopping no longer hangs it.**
   When every shot was given up on, the `LoopEngine` worker set
   `running = false` and awaited its final `persist()` while still marked

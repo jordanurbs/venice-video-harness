@@ -49,7 +49,7 @@ import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planne
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
 import { getVideoModel, modelSupportsDuration, resolveBitrateMode, validateCameraTrajectory, type BitrateMode } from 'venice-video-harness/core/venice/models.js';
 import type { CameraKeyframe } from 'venice-video-harness/core/venice/types.js';
-import { assertFacesOffCompatible } from '../venice/seedance-preflight.js';
+import { assertFacesOffCompatible, FacesOffModelError } from '../venice/seedance-preflight.js';
 import { appendRecipePass } from '../venice/recipe.js';
 import { classifyVideoRetrieveStatus, VideoGenerationFailedError } from '../venice/video.js';
 import {
@@ -2059,6 +2059,11 @@ async function renderMultiShotUnitUntilSuccess(
       // refunded retry inside submitVideoQueue. Looping here would only bill
       // (or spam the queue endpoint, anti-pattern 27b).
       if (err instanceof VideoRefusalError) throw err;
+      // A FAILED render is final too: its pending-job record is already
+      // cleared, so a retry re-queues and re-bills the same body. A faces-off
+      // refusal is thrown before the queue call on the same images every time.
+      if (err instanceof VideoGenerationFailedError) throw err;
+      if (err instanceof FacesOffModelError) throw err;
       if (err instanceof VeniceRequestError) {
         console.warn(`  ${unit.unitId}: multi-shot attempt ${attempt} failed (HTTP ${err.status}): ${err.message}`);
         console.warn(`  Error body: ${JSON.stringify(err.body, null, 2)}`);
