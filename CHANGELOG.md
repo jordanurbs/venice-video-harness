@@ -121,6 +121,17 @@
 
 ### Added
 
+- **Contributor automation.** `CONTRIBUTING.md` and a PR template. CI gains
+  a macOS job (Node 22) and a preload (`tests/support/no-venice-network.mjs`,
+  loaded through `NODE_OPTIONS`) that fails any test process, including CLIs
+  the tests spawn, that sends a request to a Venice host. A `changelog`
+  check fails a PR that changes `src/` or `packages/*/src/` without a
+  `CHANGELOG.md` entry (`no-changelog` label to skip). Conflicting PRs get a
+  `needs rebase` label and a comment whenever `main` moves. Dependabot opens
+  weekly grouped updates for npm (root and `src/web/ui`) and GitHub Actions.
+  A weekly workflow runs `npm audit` and `scripts/check-model-drift.ts`,
+  which compares the video registry with the public `GET /models` list and
+  keeps the result in one `model-drift` issue.
 - **CI.** `.github/workflows/test.yml` runs on every PR and every push to
   `main`: `npm test` and `npm run test:legacy` on Node 20 and 22 with ffmpeg
   installed (the video-QA, audit-gate and ken-burns tests otherwise skip),
