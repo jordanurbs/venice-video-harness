@@ -58,7 +58,7 @@
     "commander": "^12.1.0",
     "dotenv": "^18.0.5",
     "fountain-js": "^1.1.0",
-    "pdf-parse": "^1.1.1",
+    "pdf-parse": "^2.4.5",
     "sharp": "^0.35.3"
   },
   "devDependencies": {
