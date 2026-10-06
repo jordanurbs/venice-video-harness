@@ -440,7 +440,10 @@ export class LoopEngine {
           if (this.once || this.budgetExhausted() || this.allSettled()) {
             this.running = false;
             await this.persist();
-            break;
+            // Re-check `running`, don't break: a regenerate/unpin during the
+            // persist sets it back to true but starts no worker, since this one
+            // is still marked active.
+            continue;
           }
           await this.idle();
           continue;

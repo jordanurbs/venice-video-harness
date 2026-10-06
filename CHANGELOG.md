@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **A regenerate or unpin while the loop is stopping no longer hangs it.**
+  When every shot was given up on, the `LoopEngine` worker set
+  `running = false` and awaited its final `persist()` while still marked
+  active. A `regenerate()` or `unpin()` in that window set `running` back to
+  true but started no worker, and the old worker then `break`-ed out, so the
+  engine reported running with nothing scheduling takes. The worker now
+  re-checks `running` after that persist. Found by CI, where a busy runner
+  made the window wide enough to hit (`regenerate revives a given-up-on shot`
+  timed out once in three runs). Test: a slowed `persist()` in
+  `tests/loop-engine.test.mjs` reproduces it every time without the fix.
 - **Stream manifest writes are serialized per engine (PR #33).** Concurrent
   `persist()` calls (look-ahead writer, renderer, `configure()`) shared one
   temp file, so one write could truncate another or rename its temp file
