@@ -1,0 +1,74 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    env:
+      # No key in CI, and the config dir points at an empty temp dir so nothing
+      # can fall back to a stored key. No test may reach a paid endpoint.
+      VENICE_API_KEY: ''
+      VENICE_VIDEO_CONFIG_DIR: ${{ github.workspace }}/.ci-config
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # Without ffmpeg the video-qa, audit-gate and ken-burns tests skip
+      # instead of failing, so CI would pass without running them.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
+      - run: mkdir -p "$VENICE_VIDEO_CONFIG_DIR"
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npm run test:legacy
+
+      - name: capabilities.json matches the registry
+        run: |
+          npm run manifest
+          git diff --exit-code capabilities.json \
+            || { echo "::error::capabilities.json is stale. Run 'npm run manifest' and commit it."; exit 1; }
+
+  web-ui:
+    name: web UI build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            src/web/ui/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm --prefix src/web/ui ci --no-audit --no-fund
+      - run: npm --prefix src/web/ui run typecheck
+      - run: npm run build
+      - run: npm --prefix src/web/ui run build

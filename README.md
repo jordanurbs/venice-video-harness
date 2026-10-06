@@ -1365,6 +1365,11 @@ npm run test:legacy
 npm run dev -- <command>
 ```
 
+CI (`.github/workflows/test.yml`) runs both suites on Node 20 and 22 with
+ffmpeg installed, checks that `capabilities.json` matches `npm run manifest`,
+and builds the web UI. Run the tests locally with `VENICE_VIDEO_CONFIG_DIR`
+pointed at an empty directory so a stored key can't be picked up.
+
 The repository still includes agent orchestration in `AGENTS.md` and `.agents/`.
 Those layers can operate the same execution engine, but the installed
 `venice-video` command does not depend on them.
