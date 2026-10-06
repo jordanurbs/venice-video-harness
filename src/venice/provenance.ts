@@ -33,7 +33,7 @@ import { dirname } from 'node:path';
 import {
   SEEDANCE_COMPATIBLE_GENERATION_MODELS,
   SEEDANCE_COMPATIBLE_EDIT_MODELS,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 
 // ---- Types ----------------------------------------------------------------
 

@@ -21,7 +21,7 @@ import { existsSync, renameSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { join, relative, isAbsolute, resolve } from 'node:path';
 import type { VeniceClient } from '../venice/client.js';
-import type { Character, SeriesState } from '../series/types.js';
+import type { Character, SeriesState } from 'venice-video-harness/core/series/types.js';
 import { generateSeedAudio, DEFAULT_VENICE_SEED_AUDIO_MODEL } from '../venice/audio.js';
 import { getCharacterDir } from '../series/manager.js';
 import { appendRecipePass } from '../venice/recipe.js';

@@ -33,7 +33,7 @@ import type {
   ShotScript,
   Location,
   VideoFamilyPreference,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import {
   FEMALE_BASE_TRAITS,
   MALE_BASE_TRAITS,
@@ -45,7 +45,7 @@ import {
   DEFAULT_LIP_SYNC_MODEL,
   resolveAutoEdit,
   resolveUseStoryboardPlates,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { VeniceClient } from '../venice/client.js';
 import { upscaleVideo, estimateUpscaleCostUsd } from '../venice/upscale.js';
@@ -90,7 +90,7 @@ import {
   DEFAULT_VENICE_SEED_AUDIO_MODEL,
 } from '../venice/audio.js';
 import type { DialogueLine } from '../venice/audio.js';
-import { getMusicModel } from '../venice/models.js';
+import { getMusicModel } from 'venice-video-harness/core/venice/models.js';
 
 import { buildImagePrompt, buildCharacterReferencePromptParts } from './prompt-builder.js';
 import {
@@ -112,7 +112,7 @@ import {
 import { generateSubtitles, saveSrt } from './subtitle-generator.js';
 import { fixPanel, refineWithReferences, refineStyleConsistency } from './panel-fixer.js';
 import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
-import type { MultiEditModel } from '../venice/types.js';
+import type { MultiEditModel } from 'venice-video-harness/core/venice/types.js';
 import { assembleEpisode, collectShotVideos } from './assembler.js';
 import { buildGenerationPlan, saveGenerationPlan } from './generation-planner.js';
 import {
@@ -121,14 +121,14 @@ import {
   RENDER_ROUTE_CHOICES,
   VIDEO_FAMILY_CHOICES,
   type RenderRoute,
-} from './choices.js';
+} from 'venice-video-harness/core/mini-drama/choices.js';
 import {
   DEFAULT_INTELLIGENCE_MODEL,
   describeIntelligence,
   getTextModel,
   resolveIntelligence,
-} from '../venice/text-models.js';
-import { getProjectLanguage } from '../series/project-language.js';
+} from 'venice-video-harness/core/venice/text-models.js';
+import { getProjectLanguage } from 'venice-video-harness/core/series/project-language.js';
 import {
   approveWorkshop,
   generateWorkshop,
@@ -151,9 +151,9 @@ import {
   runInstall,
 } from '../update.js';
 import { emitJson, failJson, jsonRequested } from '../agent/output.js';
-import { formatGuide, guideAsJson } from '../agent/guide.js';
-import { formatPipeline, pipelineAsJson } from '../agent/pipeline.js';
-import { renderCapabilitiesManifest } from '../venice/capabilities-manifest.js';
+import { formatGuide, guideAsJson } from 'venice-video-harness/core/agent/guide.js';
+import { formatPipeline, pipelineAsJson } from 'venice-video-harness/core/agent/pipeline.js';
+import { renderCapabilitiesManifest } from 'venice-video-harness/core/venice/capabilities-manifest.js';
 
 // Read from package.json rather than a literal, which drifts on every release.
 const packageVersion: string = (() => {
@@ -492,7 +492,7 @@ program
   .description('Emit the probe-verified capability manifest (model specs, capability sets, budgets, routing defaults) as JSON — the machine-readable registry downstream clients sync against')
   .action(() => {
     // Always JSON — the manifest IS the output format.
-    process.stdout.write(renderCapabilitiesManifest());
+    process.stdout.write(renderCapabilitiesManifest({ harnessVersion: packageVersion }));
   });
 
 program
@@ -5117,7 +5117,7 @@ program
     // operator to a model they did not choose. The list is the bakeoff list
     // (stream-choices.ts), fastest reliable first — NOT the project's
     // intelligence model, which is tuned for QA and scripting, not latency.
-    const { STREAM_WRITER_CHOICES, STREAM_DEFAULT_WRITER, STREAM_VIDEO_CHOICES, getStreamVideoChoice } = await import('./stream-choices.js');
+    const { STREAM_WRITER_CHOICES, STREAM_DEFAULT_WRITER, STREAM_VIDEO_CHOICES, getStreamVideoChoice } = await import('venice-video-harness/core/mini-drama/stream-choices.js');
     const resumed = existsSync(join(getEpisodeDir(series, episodeNumber), 'stream', 'stream-manifest.json'));
     let writer: string | undefined;
     if (opts.writer) {

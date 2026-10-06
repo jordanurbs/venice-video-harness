@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { loadSeries, listSeries, loadEpisodeScript, getEpisodeDir } from '../series/manager.js';
-import type { SeriesState, EpisodeScript } from '../series/types.js';
+import type { SeriesState, EpisodeScript } from 'venice-video-harness/core/series/types.js';
 import { collectProjectStatus, type ProjectStatus } from '../session/status.js';
 import { loadWorkshop, type WorkshopDraft } from '../mini-drama/workshop.js';
 import { shotKey } from '../mini-drama/treatment.js';

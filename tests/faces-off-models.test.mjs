@@ -23,7 +23,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { getVideoModel, isFacesOffModel, faceCapableTwinId, VIDEO_MODELS } from '../dist/venice/models.js';
+import { getVideoModel, isFacesOffModel, faceCapableTwinId, VIDEO_MODELS } from '../packages/core/dist/venice/models.js';
 import {
   checkFacesOffCompatible,
   assertFacesOffCompatible,

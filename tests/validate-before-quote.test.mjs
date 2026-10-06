@@ -12,7 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildModelParams, getVideoModel, validateVideoRequest } from '../dist/venice/models.js';
+import { buildModelParams, getVideoModel, validateVideoRequest } from '../packages/core/dist/venice/models.js';
 import { VeniceRequestError } from '../dist/venice/client.js';
 import { queueVideo, quoteVideo, VideoRequestValidationError } from '../dist/venice/video.js';
 

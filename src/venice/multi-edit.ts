@@ -1,7 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import type { VeniceClient } from './client.js';
-import type { MultiEditModel, MultiEditRequest } from './types.js';
-import { assertNotSilentRejectImage } from './rejection.js';
+import type { MultiEditModel, MultiEditRequest } from 'venice-video-harness/core/venice/types.js';
+import { assertNotSilentRejectImage } from 'venice-video-harness/core/venice/rejection.js';
 
 // Intentional non-cache: every call to loadImageAsDataUri / multiEditImage
 // re-reads its inputs from disk. Do NOT introduce an in-process cache of

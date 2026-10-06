@@ -16,13 +16,13 @@ import {
   getMusicModel,
   listMusicModels,
   modelWantsSimplePrompt,
-} from '../dist/venice/models.js';
+} from '../packages/core/dist/venice/models.js';
 import {
   MODELS_SUPPORTING_REFERENCE_IMAGES,
   MODELS_SUPPORTING_END_IMAGE,
   MODELS_SUPPORTING_AUDIO_INPUT,
   MODELS_USING_IMAGE_TAGS,
-} from '../dist/series/types.js';
+} from '../packages/core/dist/series/types.js';
 
 let failed = 0;
 function ok(label, cond) {

@@ -97,6 +97,47 @@
   path already ran its own duration preflight and resolution pinning, so its
   behaviour is unchanged. Test: `tests/validate-before-quote.test.mjs`.
 
+### Added
+
+- **`packages/core` — the pure half of the harness, exported as
+  `venice-video-harness/core` (phase 2 of the core split).** An npm
+  workspace holding the modules that were already pure, moved with
+  `git mv` so blame survives: `venice/models`, `venice/types`,
+  `venice/text-models`, `venice/rejection`, `venice/capabilities-manifest`,
+  `series/types`, `series/project-language`, `agent/pipeline`,
+  `agent/guide`, `mini-drama/choices`, `mini-drama/stream-choices`. The root
+  package re-exports it (`./core` barrel, `./core/*.js` per-module entries,
+  `./capabilities.json`), ships `packages/core/dist` in the tarball, and
+  builds with `tsc -b` via a project reference. The CLI imports from
+  `venice-video-harness/core/...` (the root package's own self-reference, so
+  it resolves from an installed tarball, not only via the workspace symlink);
+  no behaviour changes. Three purity
+  fixes: `AestheticProfile` moves into `series/types.ts` (re-exported from
+  `storyboard/prompt-builder.ts`); `rejection.ts` takes `Uint8Array` and
+  decodes base64 without `Buffer` (`base64ToBytes`); the manifest builder
+  takes `{ harnessVersion, generatedAt }` instead of reading `package.json`
+  (the CLI and `scripts/write-capabilities-manifest.ts` pass the root
+  version). New `tests/core-purity.test.mjs` walks `packages/core/src` and
+  fails on any Node builtin, Node-only package, out-of-package import,
+  `process.env`, `Buffer`, `import.meta.url` or `require()`. A scratch Vite
+  project builds `import { getVideoModel } from 'venice-video-harness/core'`
+  with no polyfills. `capabilities.json` stays at the repo root and is
+  byte-identical.
+  Review fixes from the first downstream consumer (the Venice Video Creator
+  web app took the catalog and the faces-off predicates from the packed
+  tarball; its full suite passed unchanged): `parseShotDuration` /
+  `formatShotDuration` move from the Node-only planner into core
+  (`series/duration.ts`, on the barrel; the planner re-exports the parser so
+  its importers are untouched) because a host that holds `ShotScript` needs
+  to read `"5s"` strings; `validateVideoRequest` documents that resolution is
+  matched verbatim, case included, since Venice's enums differ by family
+  (`'720p'` Seedance, `'768P'` MiniMax) and a normalised value would pass
+  here and 400 at the paid call; `VideoModelSpec.facesOff` documents that
+  the flag covers only the enumerated `-basic` ids and `isFacesOffModel` is
+  the source of truth for the live-listed 2.5 spellings; the manifest states
+  when `schemaVersion` bumps (removed / renamed / retyped fields) and when it
+  does not (new optional fields, new ids). Test: `tests/shot-duration.test.mjs`.
+
 ## 2.26.0 — 2026-10-05
 
 ### Changed

@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,13 +13,13 @@ import {
   buildCapabilitiesManifest,
   renderCapabilitiesManifest,
   CAPABILITIES_SCHEMA_VERSION,
-} from '../dist/venice/capabilities-manifest.js';
-import { VIDEO_MODELS } from '../dist/venice/models.js';
+} from '../packages/core/dist/venice/capabilities-manifest.js';
+import { VIDEO_MODELS } from '../packages/core/dist/venice/models.js';
 import {
   MODELS_SUPPORTING_REFERENCE_IMAGES,
   MODELS_USING_IMAGE_TAGS,
   DEFAULT_MULTISHOT_MODEL,
-} from '../dist/series/types.js';
+} from '../packages/core/dist/series/types.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -59,9 +60,19 @@ test('routing defaults are registry-known and multi-shot default is Seedance 2.5
 });
 
 test('generatedAt pin makes the render deterministic', () => {
-  const a = renderCapabilitiesManifest('2026-01-01T00:00:00Z');
-  const b = renderCapabilitiesManifest('2026-01-01T00:00:00Z');
+  const a = renderCapabilitiesManifest({ generatedAt: '2026-01-01T00:00:00Z' });
+  const b = renderCapabilitiesManifest({ generatedAt: '2026-01-01T00:00:00Z' });
   assert.equal(a, b);
+});
+
+test('harnessVersion is supplied by the host, not read from disk by core', () => {
+  // Core cannot read package.json (it runs in a browser too). Without a
+  // version it stamps 0.0.0; the CLI and the snapshot script pass the real one.
+  assert.equal(buildCapabilitiesManifest().harnessVersion, '0.0.0');
+  assert.equal(buildCapabilitiesManifest({ harnessVersion: '9.9.9' }).harnessVersion, '9.9.9');
+  const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf-8'));
+  const snapshot = JSON.parse(readFileSync(resolve(repoRoot, 'capabilities.json'), 'utf-8'));
+  assert.equal(snapshot.harnessVersion, pkg.version, 'committed snapshot carries the root package version');
 });
 
 test('CLI `capabilities` command emits parseable JSON with the schema version', () => {
@@ -72,4 +83,6 @@ test('CLI `capabilities` command emits parseable JSON with the schema version', 
   const parsed = JSON.parse(out);
   assert.equal(parsed.schemaVersion, CAPABILITIES_SCHEMA_VERSION);
   assert.ok(Array.isArray(parsed.videoModels) && parsed.videoModels.length > 50);
+  const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf-8'));
+  assert.equal(parsed.harnessVersion, pkg.version, 'CLI stamps the real version');
 });

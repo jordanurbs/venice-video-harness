@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { estimateUpscaleCostUsd, TOPAZ_VIDEO_UPSCALE_MODEL } from '../dist/venice/upscale.js';
-import { getVideoModel } from '../dist/venice/models.js';
+import { getVideoModel } from '../packages/core/dist/venice/models.js';
 import { createSeries, saveSeries } from '../dist/series/manager.js';
 import { saveWorkshop } from '../dist/mini-drama/workshop.js';
 

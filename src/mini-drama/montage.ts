@@ -47,12 +47,12 @@ import type {
   SeriesState,
   ShotScript,
   VideoModelDefaults,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import {
   resolveMontageMaxDurationSec,
   resolveMontageMinDurationSec,
   resolveMontageModel,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
 import { shotKey } from './shot-paths.js';
 

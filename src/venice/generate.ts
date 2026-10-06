@@ -13,8 +13,8 @@ import type {
   GenerateWithReferencesOptions,
   GenerateWithReferencesResult,
   CharacterReference,
-} from "./types.js";
-import { assertNotSilentRejectImage, thresholdForResolution } from "./rejection.js";
+} from "venice-video-harness/core/venice/types.js";
+import { assertNotSilentRejectImage, thresholdForResolution } from "venice-video-harness/core/venice/rejection.js";
 
 // ---- Constants ------------------------------------------------------------
 

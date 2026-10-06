@@ -7,7 +7,7 @@ OpenClaw, Cursor, Claude Code, and others). This is the ~80/20 subset of
 It mirrors `venice-video agent-guide` (the same text ships inside the binary) and
 the full rules live in `AGENTS.md`. Read this before running any workflow.
 
-Keep this in sync with `src/agent/guide.ts`; if a rule changes in one, change it
+Keep this in sync with `packages/core/src/agent/guide.ts`; if a rule changes in one, change it
 in the other.
 
 ## Find the next step, do not guess
@@ -51,4 +51,4 @@ in the other.
 - `AGENTS.md` — 49 rules and 28 production anti-patterns, shipped in the package.
 - `.agents/skills/` — `venice-api`, `venice-video-model-routing`, `character-consistency`, `shot-composition`, `burn-in-subtitles`, `video-editing`, and more.
 - `.agents/commands/` — 20 step-by-step playbooks; `.agents/agents/` — 10 sub-agent roles.
-- Read the relevant playbook before running a workflow. Validate model capabilities against `src/venice/models.ts` before an API call.
+- Read the relevant playbook before running a workflow. Validate model capabilities against `packages/core/src/venice/models.ts` before an API call.

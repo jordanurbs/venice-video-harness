@@ -223,6 +223,10 @@ test('a global install targets its own prefix, not the ambient npm', async () =>
   await mkdir(packageDir, { recursive: true });
   await cp(join(repoRoot, 'dist'), join(packageDir, 'dist'), { recursive: true });
   await cp(join(repoRoot, 'package.json'), join(packageDir, 'package.json'));
+  // The package ships two dist trees: the CLI's and core's (packages/core/dist,
+  // reached through the venice-video-harness/core self-reference).
+  await cp(join(repoRoot, 'packages', 'core', 'dist'), join(packageDir, 'packages', 'core', 'dist'), { recursive: true });
+  await cp(join(repoRoot, 'packages', 'core', 'package.json'), join(packageDir, 'packages', 'core', 'package.json'));
   // Dependencies resolve from the package's own node_modules first.
   await symlink(join(repoRoot, 'node_modules'), join(packageDir, 'node_modules'));
 

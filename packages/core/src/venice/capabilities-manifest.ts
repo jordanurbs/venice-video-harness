@@ -6,9 +6,18 @@
 //
 // The manifest is DATA ONLY: model specs, capability sets, budgets, prompt
 // caps, and routing defaults. Behavior (prompt builders, planners) still
-// ships with each client. Schema changes bump `schemaVersion`; clients must
-// ignore unknown fields and reject manifests with a schemaVersion greater
-// than what they understand (falling back to their bundled snapshot).
+// ships with each client. Clients must ignore unknown fields and reject
+// manifests with a schemaVersion greater than what they understand (falling
+// back to their bundled snapshot).
+//
+// When to bump `CAPABILITIES_SCHEMA_VERSION`:
+//   - A new OPTIONAL field (on a spec, a set, a budget) does NOT bump it.
+//     Tolerant clients read it or skip it; `facesOff` (2.26.0) shipped under
+//     schema 1 this way.
+//   - Removing or renaming a field, changing a field's type, or changing the
+//     meaning of an existing value DOES bump it, because a client decoding the
+//     old shape would mis-enable a paid capability.
+//   - New model ids, set members and budget entries are data, not schema.
 //
 // Emit with:  venice-video capabilities --json   (or `capabilities > file`)
 // A snapshot is written to capabilities.json at the repo root by
@@ -16,8 +25,6 @@
 // https://raw.githubusercontent.com/jordanurbs/venice-video-harness/main/capabilities.json
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 import {
   VIDEO_MODELS,
@@ -93,25 +100,27 @@ export interface CapabilitiesManifest {
   ttsModels: string[];
 }
 
-function harnessVersion(): string {
-  try {
-    const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url));
-    return JSON.parse(readFileSync(pkgPath, 'utf-8')).version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
+export interface ManifestOptions {
+  /**
+   * The harness version to stamp on the manifest. Core cannot read
+   * `package.json` (it must run in a browser), so the host passes it in:
+   * the CLI and `scripts/write-capabilities-manifest.ts` read the root
+   * package version. Defaults to `'0.0.0'` when omitted.
+   */
+  harnessVersion?: string;
+  /**
+   * Pin the timestamp (the snapshot script does, so the committed
+   * capabilities.json only changes when the DATA changes).
+   */
+  generatedAt?: string;
 }
 
-/**
- * Build the manifest from the live registry constants.
- * Pass `generatedAt` to pin the timestamp (the snapshot script does, so the
- * committed capabilities.json only changes when the DATA changes).
- */
-export function buildCapabilitiesManifest(generatedAt?: string): CapabilitiesManifest {
+/** Build the manifest from the live registry constants. */
+export function buildCapabilitiesManifest(options: ManifestOptions = {}): CapabilitiesManifest {
   return {
     schemaVersion: CAPABILITIES_SCHEMA_VERSION,
-    harnessVersion: harnessVersion(),
-    generatedAt: generatedAt ?? new Date().toISOString(),
+    harnessVersion: options.harnessVersion ?? '0.0.0',
+    generatedAt: options.generatedAt ?? new Date().toISOString(),
     videoModels: VIDEO_MODELS,
     capabilitySets: {
       elements: [...MODELS_SUPPORTING_ELEMENTS].sort(),
@@ -147,6 +156,6 @@ export function buildCapabilitiesManifest(generatedAt?: string): CapabilitiesMan
 }
 
 /** Deterministic JSON (stable for diffing snapshot commits). */
-export function renderCapabilitiesManifest(generatedAt?: string): string {
-  return JSON.stringify(buildCapabilitiesManifest(generatedAt), null, 2) + '\n';
+export function renderCapabilitiesManifest(options: ManifestOptions = {}): string {
+  return JSON.stringify(buildCapabilitiesManifest(options), null, 2) + '\n';
 }

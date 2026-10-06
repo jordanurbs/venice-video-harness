@@ -3,8 +3,8 @@
 // Run with `node tests/test-questionnaire.mjs` after `npm run build`.
 
 import { createSeries } from '../dist/series/manager.js';
-import { resolveVideoFamilyDefaults } from '../dist/series/types.js';
-import { getVideoModel } from '../dist/venice/models.js';
+import { resolveVideoFamilyDefaults } from '../packages/core/dist/series/types.js';
+import { getVideoModel } from '../packages/core/dist/venice/models.js';
 
 let failed = 0;
 function ok(label, cond, detail) {

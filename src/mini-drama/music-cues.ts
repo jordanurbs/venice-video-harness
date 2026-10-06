@@ -19,7 +19,7 @@ import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import type { MusicCueSpec, ShotScript } from '../series/types.js';
+import type { MusicCueSpec, ShotScript } from 'venice-video-harness/core/series/types.js';
 
 const execFileAsync = promisify(execFile);
 

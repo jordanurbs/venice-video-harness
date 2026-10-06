@@ -20,8 +20,8 @@
 
 import { join } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
-import type { SeriesState, ShotScript } from '../series/types.js';
-import { getMaxReferenceImages } from '../series/types.js';
+import type { SeriesState, ShotScript } from 'venice-video-harness/core/series/types.js';
+import { getMaxReferenceImages } from 'venice-video-harness/core/series/types.js';
 import {
   getCharacterDir,
   getLocationDir,

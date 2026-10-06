@@ -6,7 +6,7 @@ import { assertShotDurationsValid } from '../dist/mini-drama/video-generator.js'
 import {
   resolveMontageMaxDurationSec,
   resolveMontageMinDurationSec,
-} from '../dist/series/types.js';
+} from '../packages/core/dist/series/types.js';
 
 let failed = 0;
 function ok(label, cond) {

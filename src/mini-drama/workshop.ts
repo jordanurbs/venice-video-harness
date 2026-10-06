@@ -6,10 +6,10 @@ import { REFERENCE_THUMBNAIL_PX, ThumbnailCache, type Thumbnails } from './thumb
 import type { ShotArtifacts, TreatmentProgress } from './treatment.js';
 import type { VeniceClient } from '../venice/client.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
-import type { Character, EpisodeScript, Location, SeriesState } from '../series/types.js';
+import type { Character, EpisodeScript, Location, SeriesState } from 'venice-video-harness/core/series/types.js';
 import { addEpisode, getCharacterDir, getLocationDir, saveEpisodeScript, saveSeries } from '../series/manager.js';
-import { getProjectLanguage } from '../series/project-language.js';
-import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence } from '../venice/text-models.js';
+import { getProjectLanguage } from 'venice-video-harness/core/series/project-language.js';
+import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence } from 'venice-video-harness/core/venice/text-models.js';
 
 export interface WorkshopInputs {
   objective: string;

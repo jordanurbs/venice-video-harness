@@ -14,7 +14,7 @@ import {
 import {
   MODELS_SUPPORTING_REFERENCE_AUDIO,
   MODELS_SUPPORTING_SCENE_IMAGES,
-} from '../dist/series/types.js';
+} from '../packages/core/dist/series/types.js';
 
 let failed = 0;
 function ok(label, cond) {

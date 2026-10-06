@@ -8,7 +8,7 @@ import type {
   ShotScript,
   SeriesState,
   VideoModelDefaults,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
 import {
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
   DEFAULT_LIP_SYNC_MODEL,
@@ -17,8 +17,13 @@ import {
   lipSyncModelNeedsKeyframe,
   resolveMontageMode,
   resolveMultiShotModel,
-} from '../series/types.js';
+} from 'venice-video-harness/core/series/types.js';
+import { formatShotDuration, parseShotDuration } from 'venice-video-harness/core/series/duration.js';
 import { planMontageUnits } from './montage.js';
+
+// Moved to core so browser hosts can read `"5s"` strings; kept on this module
+// for its existing importers (prompt-builder, montage, video-generator).
+export { parseShotDuration };
 
 const CHAIN_TRANSITIONS = new Set([
   'DISSOLVE', 'MATCH CUT', 'MORPH', 'WIPE', 'CROSSFADE', 'FADE',
@@ -29,15 +34,6 @@ const END_FRAME_TRANSITIONS = new Set([
 ]);
 
 const ACTION_CONNECTORS = [' then ', ' suddenly ', ' while ', ' after ', ' before ', ' as '];
-
-export function parseShotDuration(duration: string): number {
-  const match = duration.match(/^(\d+)s$/);
-  return match ? parseInt(match[1], 10) : 5;
-}
-
-function formatShotDuration(seconds: number): string {
-  return `${Math.max(1, Math.round(seconds))}s`;
-}
 
 function padShotNumber(shotNumber: number): string {
   return String(shotNumber).padStart(3, '0');

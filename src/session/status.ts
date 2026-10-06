@@ -12,7 +12,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getEpisodeDir, loadEpisodeScript, loadSeries } from '../series/manager.js';
-import type { EpisodeScript, SeriesState } from '../series/types.js';
+import type { EpisodeScript, SeriesState } from 'venice-video-harness/core/series/types.js';
 
 export interface EpisodeStatus {
   episode: number;

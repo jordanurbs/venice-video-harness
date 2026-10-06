@@ -212,7 +212,7 @@ Three reference mechanisms exist for video generation, each supported by differe
 ### `reference_image_urls` (Flat General)
 
 - **Supported by:** `seedance-2-0-reference-to-video` (+ `-enhanced-` / `-fast-` variants), `happyhorse-1-1-reference-to-video`, `kling-o3-standard-reference-to-video`, `kling-o3-pro-reference-to-video`, `vidu-q3-image-to-video`
-- **Structure:** Flat array — **up to 9** on the Seedance 2.0 R2V family and HappyHorse 1.1 R2V (`getMaxReferenceImages()` in `src/series/types.ts`); legacy 4 elsewhere
+- **Structure:** Flat array — **up to 9** on the Seedance 2.0 R2V family and HappyHorse 1.1 R2V (`getMaxReferenceImages()` in `packages/core/src/series/types.ts`); legacy 4 elsewhere
 - **Prompt integration:** For Seedance/Grok Imagine R2V, use `@Image1`, `@Image2` tags. For Kling R2V, standard character names or `@Element` tokens (when elements are also active). For Vidu, standard character names.
 - **Slot order (reference-first, 2026-07-30, `src/mini-drama/reference-slots.ts`):** one primary angle per character → storyboard blocking plate (protected) → location angles (wide/medium/detail) → second character angles. Overflow drops second character angles first, then trailing location angles.
 - **When to use:** Always on the Seedance Enhanced default (pure reference mode — no `image_url`). For Seedance R2V, this is the primary identity mechanism (no elements). For Kling R2V, used alongside `elements` or as a standalone fallback.
@@ -241,7 +241,7 @@ Three reference mechanisms exist for video generation, each supported by differe
 | Audio | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | No | Yes |
 | Native lip-sync | **8+ langs** | **8+ langs** | No | No | No | No | No | No | No | No | No |
 
-Always gate reference attachments through the capability matrix. Sending unsupported params to models that reject them returns 400 errors. The model registry in `src/venice/models.ts` has full typed specs for every model.
+Always gate reference attachments through the capability matrix. Sending unsupported params to models that reject them returns 400 errors. The model registry in `packages/core/src/venice/models.ts` has full typed specs for every model.
 
 ## 4. Frame Source Strategy (Identity vs Continuity)
 

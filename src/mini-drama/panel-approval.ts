@@ -22,9 +22,9 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { SeriesState, ShotScript } from '../series/types.js';
+import type { SeriesState, ShotScript } from 'venice-video-harness/core/series/types.js';
 import { getCharacterDir, getLocation, getLocationDir } from '../series/manager.js';
-import { DEFAULT_IMAGE_EDIT_MODEL, DEFAULT_IMAGE_GENERATION_MODEL } from '../series/types.js';
+import { DEFAULT_IMAGE_EDIT_MODEL, DEFAULT_IMAGE_GENERATION_MODEL } from 'venice-video-harness/core/series/types.js';
 import { buildImagePrompt } from './prompt-builder.js';
 import { panelFileForShot, shotKey } from './shot-paths.js';
 

@@ -2,7 +2,7 @@
 // Location Reference Generation (anchor → derive; compass plates 2026-10-05)
 //
 // Locations are first-class environment entities (see Location in
-// src/series/types.ts). Their reference images anchor the environment across
+// packages/core/src/series/types.ts). Their reference images anchor the environment across
 // storyboard panels, starting frames, and video generations — mirroring how
 // character references anchor identity, and directly serving the
 // lighting-consistency anti-pattern (AGENTS.md anti-pattern 7).
@@ -33,7 +33,7 @@ import { join, basename } from 'node:path';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, rename } from 'node:fs/promises';
 import type { VeniceClient } from '../venice/client.js';
-import type { Location, SeriesState } from '../series/types.js';
+import type { Location, SeriesState } from 'venice-video-harness/core/series/types.js';
 import { getLocationDir } from '../series/manager.js';
 import { generateImage } from '../venice/generate.js';
 import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
@@ -48,8 +48,8 @@ import { appendRecipePass } from '../venice/recipe.js';
 import {
   DEFAULT_IMAGE_GENERATION_MODEL,
   DEFAULT_IMAGE_EDIT_MODEL,
-} from '../series/types.js';
-import type { MultiEditModel } from '../venice/types.js';
+} from 'venice-video-harness/core/series/types.js';
+import type { MultiEditModel } from 'venice-video-harness/core/venice/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 
 /**
