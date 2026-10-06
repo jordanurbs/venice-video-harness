@@ -1,4 +1,10 @@
 version: 2
+
+# npm version updates are minor and patch only. A major bump (React 19,
+# commander 15, pdf-parse 2, TypeScript 7) usually needs code or engine
+# changes, so it is done by hand in its own PR. `allow.update-types` only
+# filters version updates: security updates still come at any version.
+# (`ignore` would block those too.)
 updates:
   - package-ecosystem: npm
     directory: /
@@ -7,6 +13,9 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     labels: [dependencies]
+    allow:
+      - dependency-type: all
+        update-types: [version-update:semver-minor, version-update:semver-patch]
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -18,7 +27,14 @@ updates:
       day: monday
     open-pull-requests-limit: 3
     labels: [dependencies]
+    allow:
+      - dependency-type: all
+        update-types: [version-update:semver-minor, version-update:semver-patch]
     groups:
+      # react and react-dom (and their types) peer-pin each other; split
+      # across PRs, neither installs.
+      react:
+        patterns: [react, react-dom, '@types/react', '@types/react-dom']
       web-ui:
         update-types: [minor, patch]
 
