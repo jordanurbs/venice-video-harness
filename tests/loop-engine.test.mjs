@@ -365,6 +365,33 @@ test('regenerate revives a given-up-on shot', async () => {
   assert.ok(calls.length >= 6, 'regenerate cleared failed and let the shot try again');
 });
 
+test('regenerate during the stopping worker\'s final persist still gets a worker', async () => {
+  // The worker sets running=false, then awaits persist() while still marked
+  // active. A regenerate in that window used to set running=true without a
+  // worker, and the engine reported running forever. A slow persist (a busy
+  // disk) opens the window wide enough to hit every time.
+  const dir = mkdtempSync(join(tmpdir(), 'loop-revive-race-'));
+  const series = makeSeries();
+  series.outputDir = dir;
+  const calls = [];
+  const engine = new LoopEngine({
+    client: {}, series, script: makeScript(1), episode: 1,
+    projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
+    log: () => {}, chain: false, duration: '5s', errorBackoffMs: 0,
+    render: async (_c, o) => { calls.push(o.outputPath); throw new Error('boom'); },
+  });
+  await engine.init();
+  const persist = engine.persist.bind(engine);
+  engine.persist = async () => { await new Promise(r => setTimeout(r, 100)); return persist(); };
+  await engine.start();
+  await waitForStop(engine, 5000);
+  assert.equal(engine.status().shots[0].failed, true);
+
+  await engine.regenerate(1);
+  await waitForStop(engine, 5000);
+  assert.ok(calls.length >= 6, 'the revived shot rendered again');
+});
+
 test('create mode degrades a reference-less character shot to t2v, not a face-killing i2v', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'loop-create-face-'));
   // A panel on disk for the character shot; without the fix this would pick
