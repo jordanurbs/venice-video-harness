@@ -882,6 +882,7 @@ export class StreamEngine {
     try {
       while (this.running) {
         if (this.budgetExhausted()) {
+          this.settle();
           this.running = false;
           this.writerRunning = false;
           this.wakeWriter();
@@ -891,6 +892,7 @@ export class StreamEngine {
         }
         const ok = await this.renderNext();
         if (!ok && this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          this.settle();
           this.running = false;
           this.writerRunning = false;
           this.wakeWriter();
@@ -901,11 +903,20 @@ export class StreamEngine {
       }
     } finally {
       this.workerActive = false;
-      this.status = 'idle';
-      this.inFlight = undefined;
+      this.settle();
       await this.persist();
       this.emit();
     }
+  }
+
+  /**
+   * The worker's resting state. Applied before a self-stop flips `running`, so
+   * a caller that sees `running: false` never reads a half-settled stream
+   * (status still 'error' or 'rendering') while the stop persists.
+   */
+  private settle(): void {
+    this.status = 'idle';
+    this.inFlight = undefined;
   }
 
   /** The authored beats so far, oldest first, as {n, beat}: rendered then buffered. */
