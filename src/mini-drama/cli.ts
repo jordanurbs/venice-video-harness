@@ -851,7 +851,7 @@ program
     '--audio-strategy <strategy>',
     'How dialogue reaches the final mix: ' +
     '"native" (selected model speaks in-frame; Seedance/HappyHorse use voice-donor references when available), ' +
-    '"lip-sync" (exact mode: Venice speech is passed to the model as an audio file and the mouth follows it — in-family on Seedance 2.x and MiniMax H3, via Wan 2.7 elsewhere), ' +
+    '"lip-sync" (exact mode: Venice speech is passed to the model as an audio file and the mouth follows it — in-family on Seedance 2.x, MiniMax H3 and Wan 3.0, via Wan 2.7 elsewhere), ' +
     '"narrator-vo" (NARRATOR voice-over only; auto-mutes the model audio so a competing AI narrator can\'t fight the TTS).',
   )
   .option(

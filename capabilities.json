@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "harnessVersion": "2.26.0",
-  "generatedAt": "2026-10-05T16:49:37-03:00",
+  "generatedAt": "2026-10-06T12:55:45-03:00",
   "videoModels": [
     {
       "id": "wan-2.6-image-to-video",
@@ -305,6 +305,7 @@
       "supportsReferenceImages": true,
       "supportsSceneImages": false,
       "supportsEndImage": false,
+      "lipSyncViaReferenceAudio": true,
       "maxDurationSec": 30,
       "privacy": "anonymized",
       "offline": false
@@ -4232,6 +4233,9 @@
       "seedance-2-0-reference-to-video",
       "seedance-2-0-reference-to-video-basic",
       "seedance-2-5-reference-to-video"
+    ],
+    "lipSyncViaReferenceAudio": [
+      "wan-3-0-reference-to-video"
     ]
   },
   "budgets": {

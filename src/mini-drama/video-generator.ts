@@ -1,7 +1,8 @@
 import { writeFile, mkdir, appendFile } from 'node:fs/promises';
-import { join, dirname, resolve as resolvePath } from 'node:path';
+import { join, dirname, basename, resolve as resolvePath } from 'node:path';
 import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { measureLipSyncFidelity, type LipSyncFidelity } from './lip-sync-fidelity.js';
 import type { VeniceClient } from '../venice/client.js';
 import { VeniceRequestError } from '../venice/client.js';
 import type {
@@ -20,6 +21,8 @@ import {
   MODELS_SUPPORTING_AUDIO_INPUT,
   MODELS_SUPPORTING_PER_REFERENCE_AUDIO,
   MODELS_SUPPORTING_REFERENCE_AUDIO,
+  MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO,
+  LIP_SYNC_REFERENCE_AUDIO_MAX_SEC,
   MODELS_USING_IMAGE_TAGS,
   isSeedanceVideoModel,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
@@ -745,9 +748,14 @@ export async function renderVideoFile(
   // no references at all (rare: no characters, no location, no storyboard)
   // still anchor on the panel.
   const hasSlotPlan = (prompt.referenceSlots?.length ?? 0) > 0;
-  const refsOnly = hasSlotPlan
-    && MODELS_USING_IMAGE_TAGS.has(effectiveModel)
-    && Boolean(referenceImagePaths && referenceImagePaths.length > 0);
+  const hasReferenceImages = Boolean(referenceImagePaths && referenceImagePaths.length > 0);
+  // Reference-audio lip-sync (Wan 3.0 R2V) is sent in the only shape probed
+  // live: reference image(s) + the dialogue clip, no start frame.
+  const lipSyncViaReferenceAudio = MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(effectiveModel)
+    && Boolean(audioPath)
+    && hasReferenceImages;
+  const refsOnly = lipSyncViaReferenceAudio
+    || (hasSlotPlan && MODELS_USING_IMAGE_TAGS.has(effectiveModel) && hasReferenceImages);
 
   const body: Record<string, unknown> = {
     model: effectiveModel,
@@ -863,6 +871,8 @@ export async function renderVideoFile(
     } else if (audioUrl) {
       body.audio_url = audioUrl;
     }
+  } else if (MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(effectiveModel) && audioPath) {
+    // Attached as reference_audio_urls after the reference images are set.
   } else if (audioPath || audioUrl) {
     // Model doesn't accept audio_url — drop quietly rather than 400.
     // For per-reference-audio R2V models, the audio attaches per element below.
@@ -936,6 +946,54 @@ export async function renderVideoFile(
       .map(p => p.startsWith('data:') ? p : (fileToDataUri(p) ?? p))
       .filter(Boolean);
     console.log(`  Scene images: ${(body.scene_image_urls as string[]).length}`);
+  }
+
+  if (MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(effectiveModel) && audioPath) {
+    if (!lipSyncViaReferenceAudio) {
+      console.warn('  ⚠ Lip-sync audio present but no reference image — dropping it (Venice rejects audio-only reference audio).');
+    } else if (!existsSync(audioPath)) {
+      console.warn(`  ⚠ Lip-sync audio missing on disk, rendering without it: ${audioPath}`);
+    } else {
+      const audioSec = await probeAudioDurationSec(audioPath);
+      if (audioSec > LIP_SYNC_REFERENCE_AUDIO_MAX_SEC) {
+        throw new Error(
+          `Lip-sync audio ${audioPath} is ${audioSec.toFixed(2)}s; ${effectiveModel} accepts at most ` +
+          `${LIP_SYNC_REFERENCE_AUDIO_MAX_SEC}s of reference audio per render (split the line). Not queued.`,
+        );
+      }
+      const renderSec = parseInt(String(prompt.duration), 10);
+      // Unpadded tails get invented speech, so pad with silence to the render
+      // length. Always sent as PCM WAV: an MP3's encoder delay decodes ~50ms
+      // long on the provider side, which tips a 15.0s clip over the cap.
+      let targetSec = audioSec;
+      if (Number.isFinite(renderSec)) {
+        if (audioSec > renderSec + 0.05) {
+          // Wan re-performs the reference instead of following it when the
+          // clip outruns the render, so the mouth no longer matches the file.
+          console.warn(`  ⚠ Lip-sync audio is ${audioSec.toFixed(2)}s but the render is ${renderSec}s; Wan will re-perform it rather than follow it.`);
+        } else {
+          targetSec = Math.min(renderSec, LIP_SYNC_REFERENCE_AUDIO_MAX_SEC);
+          if (renderSec > LIP_SYNC_REFERENCE_AUDIO_MAX_SEC) {
+            console.warn(`  ⚠ Render is ${renderSec}s but reference audio caps at ${LIP_SYNC_REFERENCE_AUDIO_MAX_SEC}s; the model may invent speech after it.`);
+          }
+        }
+      }
+      const sendPath = join(dirname(audioPath), 'padded', basename(audioPath).replace(/\.[^.]+$/, '') + '.wav');
+      await mkdir(dirname(sendPath), { recursive: true });
+      const ff = spawnSync('ffmpeg', [
+        '-y', '-v', 'error', '-i', audioPath,
+        '-af', `apad=whole_dur=${targetSec.toFixed(3)}`, '-t', targetSec.toFixed(3),
+        '-ac', '1', '-ar', '44100', '-c:a', 'pcm_s16le', sendPath,
+      ]);
+      if (ff.status !== 0) {
+        throw new Error(`ffmpeg could not prepare lip-sync audio ${audioPath}: ${ff.stderr?.toString().trim()}`);
+      }
+      const uri = fileToDataUri(sendPath, 'audio/wav');
+      if (uri) {
+        body.reference_audio_urls = [uri];
+        console.log(`  Lip-sync audio (reference_audio_urls): ${audioSec.toFixed(2)}s, sent as ${targetSec.toFixed(2)}s WAV`);
+      }
+    }
   }
 
   // Voice-donor reference audio (@Audio1, @Audio2, …). Gated on model support
@@ -1249,11 +1307,13 @@ function resolveCharacterElements(
   if ((shot.useReferenceImages || autoRefs)
     && MODELS_SUPPORTING_REFERENCE_IMAGES.has(prompt.model)) {
     const budget = getMaxReferenceImages(prompt.model);
+    // anchor.png (harvest-anchor, or an operator-locked frame) leads, as it
+    // does in the slot planner (rule 53).
     const paths = resolvedChars
       .slice(0, budget)
       .flatMap(c => {
         const dir = charDirFn(c.name);
-        return ['front.png', 'three-quarter.png']
+        return ['anchor.png', 'front.png', 'three-quarter.png']
           .map(f => join(dir, f))
           .filter(p => existsSync(p));
       })
@@ -1566,20 +1626,21 @@ async function renderSingleShotUnit(
     }
   }
 
-  // Exact lip-sync: wire the dialogue MP3 into `audio_url` so the model
-  // follows the real recording instead of synthesizing a voice. This is the
-  // step that actually produces the lip-sync, so it runs for every
-  // audio-input-capable route — the keyframed Wan 2.7 i2v path and the
-  // in-family R2V path (Seedance 2.x, MiniMax H3) alike.
+  // Exact lip-sync: wire the dialogue MP3 into the model so it follows the
+  // real recording instead of synthesizing a voice. This is the step that
+  // actually produces the lip-sync, so it runs for every audio-driven route —
+  // `audio_url` on the keyframed Wan 2.7 i2v path and the in-family R2V path
+  // (Seedance 2.x, MiniMax H3), `reference_audio_urls` on Wan 3.0 R2V.
   if (!stageAFailed
     && mustRenderAsExactLipSync(shot, series.videoDefaults)
-    && MODELS_SUPPORTING_AUDIO_INPUT.has(videoPrompt.model)) {
+    && (MODELS_SUPPORTING_AUDIO_INPUT.has(videoPrompt.model)
+      || MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(videoPrompt.model))) {
     const audioDir = join(dirname(sceneDir), 'audio');
     console.log(`  Locating dialogue audio for ${videoPrompt.model} lip-sync`);
     dialogueAudioPath = await ensureDialogueAudio(client, series, shot, audioDir);
   }
 
-  const savedPath = await renderVideoFile(client, {
+  const renderOptions: RenderVideoOptions = {
     prompt: videoPrompt,
     anchorImagePath,
     outputPath: videoPath,
@@ -1593,7 +1654,35 @@ async function renderSingleShotUnit(
     seedanceCompatibility: series.videoDefaults.seedanceCompatibility,
     characters: shot.characters,
     project: series.outputDir,
-  });
+    resolution: series.videoDefaults.resolution,
+  };
+  let savedPath = await renderVideoFile(client, renderOptions);
+
+  // Reference-audio lip-sync takes sometimes re-perform the line instead of
+  // following the clip. Keep a take only when its audio matches the clip;
+  // set rejected takes aside so a re-run renders just those shots.
+  let lipSyncFidelity: LipSyncFidelity | undefined;
+  if (dialogueAudioPath && MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO.has(videoPrompt.model)) {
+    const maxAttempts = Math.max(1, series.videoDefaults.lipSyncMaxAttempts ?? 1);
+    for (let attempt = 1; ; attempt++) {
+      lipSyncFidelity = measureLipSyncFidelity(savedPath, dialogueAudioPath);
+      const summary = `corr ${lipSyncFidelity.corr}, worst 1s window ${lipSyncFidelity.minWindowCorr}`;
+      if (lipSyncFidelity.ok) {
+        console.log(`  Lip-sync check: follows the clip (${summary})`);
+        break;
+      }
+      let k = 1;
+      while (existsSync(savedPath.replace(/\.mp4$/, `.rejected-${k}.mp4`))) k++;
+      const rejectedPath = savedPath.replace(/\.mp4$/, `.rejected-${k}.mp4`);
+      renameSync(savedPath, rejectedPath);
+      console.warn(`  ⚠ Lip-sync check: take re-performed the line (${summary}); set aside as ${rejectedPath.split('/').pop()}`);
+      if (attempt >= maxAttempts) {
+        console.warn(`  ⚠ Shot ${shotKey(shotId)} left unrendered after ${attempt} take(s); re-run generate-videos to try again.`);
+        return [];
+      }
+      savedPath = await renderVideoFile(client, { ...renderOptions, forceRequeue: true });
+    }
+  }
 
   const durationSec = getVideoDuration(savedPath);
   unit.renderedDurationSec = durationSec;
@@ -1605,6 +1694,7 @@ async function renderSingleShotUnit(
   }];
 
   const extraMetadata: Record<string, unknown> = { generationUnit: unit.unitId };
+  if (lipSyncFidelity) extraMetadata.lipSyncFidelity = lipSyncFidelity;
   if (keyframeArtifacts) {
     extraMetadata.seedanceKeyframe = {
       stageAVideo: relativeForMetadata(savedPath, keyframeArtifacts.stageAVideoPath),
