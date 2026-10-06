@@ -111,6 +111,12 @@
 
 ### Added
 
+- **CI.** `.github/workflows/test.yml` runs on every PR and every push to
+  `main`: `npm test` and `npm run test:legacy` on Node 20 and 22 with ffmpeg
+  installed (the video-QA, audit-gate and ken-burns tests otherwise skip),
+  a check that `capabilities.json` matches `npm run manifest`, and a web UI
+  typecheck + build. No API key in CI; `VENICE_VIDEO_CONFIG_DIR` points at
+  an empty dir so no test can reach a paid endpoint.
 - **`packages/core` — the pure half of the harness, exported as
   `venice-video-harness/core` (phase 2 of the core split).** An npm
   workspace holding the modules that were already pure, moved with
