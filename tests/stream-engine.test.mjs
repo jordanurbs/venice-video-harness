@@ -112,6 +112,15 @@ function makeEngine(dir, extra = {}, useFixture = true) {
   return { engine, calls, inputs };
 }
 
+/**
+ * Delay every manifest write. A slow disk widens the windows between a state
+ * change and the persist that follows it; CI runners hit them, laptops rarely.
+ */
+function slowPersist(engine, ms = 100) {
+  const persist = engine.persist.bind(engine);
+  engine.persist = async () => { await new Promise(r => setTimeout(r, ms)); return persist(); };
+}
+
 async function waitForStop(engine, timeoutMs = 10000) {
   const start = Date.now();
   while (engine.state().running) {
@@ -239,6 +248,24 @@ test('stops after three consecutive failures and never skips a beat', async () =
   assert.equal(st.beats.length, 0, 'no beat was recorded');
   assert.equal(st.status, 'idle');
   assert.match(st.lastError, /render: boom/);
+});
+
+test('a stream that stops itself is settled by the time running reads false', async () => {
+  // The worker used to flip running=false, await persist(), and only then set
+  // status 'idle' in its finally block, so a caller polling running saw a
+  // stopped stream still reporting 'error'.
+  const dir = mkdtempSync(join(tmpdir(), 'stream-fail-settled-'));
+  const failingRender = async () => { throw new Error('boom'); };
+  const { engine } = makeEngine(dir, { budgetUsd: 100, render: failingRender });
+  await engine.init();
+  slowPersist(engine);
+  await engine.start();
+  await waitForStop(engine);
+
+  const st = engine.state();
+  assert.equal(st.status, 'idle', 'no error status left behind once stopped');
+  assert.equal(st.inFlight, undefined);
+  assert.match(st.lastError, /render: boom/, 'the reason survives the settle');
 });
 
 test('an opening beat is used verbatim for beat 1 and the writer starts at beat 2', async () => {
@@ -672,13 +699,16 @@ test('switching the writer drops the beats the old writer buffered so the new on
   const dir = mkdtempSync(join(tmpdir(), 'stream-switch-drop-'));
   const gate = makeGate();
   const render = gatedRender(gate);
-  // autoRefill off so the writer does not immediately refill after the drop —
-  // that keeps the assertion deterministic.
+  // autoRefill off so the writer does not refill after the drop. It only checks
+  // that at the top of its loop, though: a switch landing while it persists
+  // the 5th beat lets it author one more (by the new writer). Waiting for it
+  // to exit keeps the count exact; the slow persist holds that window open.
   const { engine } = makeEngine(dir, { budgetUsd: budgetFor(20), lookahead: 5, autoRefill: false, render });
   await engine.init();
+  slowPersist(engine);
   await engine.start();
 
-  await waitUntil(() => engine.state().buffered === 5 && render.started());
+  await waitUntil(() => engine.state().buffered === 5 && render.started() && !engine.writerActive);
   const st = await engine.configure({ writer: 'mistral-small-2603' });
   assert.equal(st.model.writer, 'mistral-small-2603');
   assert.equal(st.buffered, 1, 'the beat on the wire is kept; the 4 queued behind it are dropped for the new writer');

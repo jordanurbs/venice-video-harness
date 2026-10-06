@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- **A stream that stops itself is settled before it reports stopped.** After
+  three consecutive failures (or on reaching its budget) the `StreamEngine`
+  worker set `running = false`, awaited `persist()`, and only then set
+  `status` to `idle` in its `finally`. A caller polling `running`, such as the
+  web UI or a test, could read a stopped stream still reporting `error` or
+  `rendering`. The status now settles before `running` flips. Found by CI:
+  `stops after three consecutive failures and never skips a beat` failed on
+  most GitHub runs and never locally, where the persist finished inside the
+  test's 10ms poll. The writer-switch test had a sibling race in the test
+  itself (a switch during the writer's last persist let it author one more
+  beat) and now waits for the writer to exit. Both regressions slow
+  `persist()` and fail every time without the fix.
 - **A regenerate or unpin while the loop is stopping no longer hangs it.**
   When every shot was given up on, the `LoopEngine` worker set
   `running = false` and awaited its final `persist()` while still marked
