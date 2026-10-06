@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "harnessVersion": "2.26.0",
-  "generatedAt": "2026-10-06T12:43:21-05:00",
+  "generatedAt": "2026-10-06T16:46:26-03:00",
   "videoModels": [
     {
       "id": "wan-2.6-image-to-video",
@@ -856,7 +856,7 @@
       "supportsEndImage": false,
       "maxDurationSec": 18,
       "privacy": "anonymized",
-      "offline": false
+      "offline": true
     },
     {
       "id": "ltx-2-19b-full-image-to-video",
@@ -889,7 +889,7 @@
       "supportsEndImage": false,
       "maxDurationSec": 18,
       "privacy": "anonymized",
-      "offline": false
+      "offline": true
     },
     {
       "id": "ltx-2-19b-distilled-text-to-video",
@@ -922,7 +922,7 @@
       "supportsEndImage": false,
       "maxDurationSec": 18,
       "privacy": "anonymized",
-      "offline": false
+      "offline": true
     },
     {
       "id": "ltx-2-19b-distilled-image-to-video",
@@ -955,7 +955,7 @@
       "supportsEndImage": false,
       "maxDurationSec": 18,
       "privacy": "anonymized",
-      "offline": false
+      "offline": true
     },
     {
       "id": "ovi-image-to-video",
@@ -993,7 +993,7 @@
         "1:1"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -1015,7 +1015,7 @@
       "resolutions": [],
       "aspectRatios": [],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -1100,7 +1100,7 @@
         "1:1"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -1133,7 +1133,7 @@
       "resolutions": [],
       "aspectRatios": [],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -1170,7 +1170,7 @@
         "1:1"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": true,
@@ -1207,7 +1207,7 @@
         "1:1"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -1240,7 +1240,7 @@
       "resolutions": [],
       "aspectRatios": [],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -1277,7 +1277,7 @@
         "1:1"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": true,
@@ -2027,7 +2027,7 @@
         "1:1"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -2060,7 +2060,7 @@
       "resolutions": [],
       "aspectRatios": [],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -2097,7 +2097,7 @@
         "1:1"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -2130,7 +2130,7 @@
       "resolutions": [],
       "aspectRatios": [],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -2380,7 +2380,7 @@
         "9:16"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -2407,7 +2407,7 @@
       ],
       "aspectRatios": [],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -2437,7 +2437,7 @@
         "9:16"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -2464,7 +2464,7 @@
       ],
       "aspectRatios": [],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -2482,9 +2482,15 @@
       "durations": [
         "4s",
         "5s",
+        "6s",
+        "7s",
         "8s",
+        "9s",
         "10s",
+        "11s",
         "12s",
+        "13s",
+        "14s",
         "15s"
       ],
       "resolutions": [
@@ -2519,9 +2525,15 @@
       "durations": [
         "4s",
         "5s",
+        "6s",
+        "7s",
         "8s",
+        "9s",
         "10s",
+        "11s",
         "12s",
+        "13s",
+        "14s",
         "15s"
       ],
       "resolutions": [
@@ -2556,9 +2568,15 @@
       "durations": [
         "4s",
         "5s",
+        "6s",
+        "7s",
         "8s",
+        "9s",
         "10s",
+        "11s",
         "12s",
+        "13s",
+        "14s",
         "15s"
       ],
       "resolutions": [
@@ -2594,9 +2612,15 @@
       "durations": [
         "4s",
         "5s",
+        "6s",
+        "7s",
         "8s",
+        "9s",
         "10s",
+        "11s",
         "12s",
+        "13s",
+        "14s",
         "15s"
       ],
       "resolutions": [
@@ -2825,7 +2849,7 @@
       "supportsEndImage": false,
       "maxDurationSec": 12,
       "privacy": "anonymized",
-      "offline": false
+      "offline": true
     },
     {
       "id": "sora-2-pro-image-to-video",
@@ -2857,7 +2881,7 @@
       "supportsEndImage": false,
       "maxDurationSec": 20,
       "privacy": "anonymized",
-      "offline": false
+      "offline": true
     },
     {
       "id": "sora-2-text-to-video",
@@ -2885,7 +2909,7 @@
       "supportsEndImage": false,
       "maxDurationSec": 12,
       "privacy": "anonymized",
-      "offline": false
+      "offline": true
     },
     {
       "id": "sora-2-pro-text-to-video",
@@ -2917,7 +2941,7 @@
       "supportsEndImage": false,
       "maxDurationSec": 20,
       "privacy": "anonymized",
-      "offline": false
+      "offline": true
     },
     {
       "id": "pixverse-v5.6-text-to-video",
@@ -2941,7 +2965,7 @@
         "3:4"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -2968,7 +2992,7 @@
       ],
       "aspectRatios": [],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
@@ -3001,7 +3025,7 @@
         "3:4"
       ],
       "audio": true,
-      "audioConfigurable": false,
+      "audioConfigurable": true,
       "audioInput": false,
       "videoInput": false,
       "supportsElements": false,
