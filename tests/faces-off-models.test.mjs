@@ -40,12 +40,13 @@ const BASIC_IDS = [
 
 // ---- 1. registry -----------------------------------------------------------
 
-test('the three seedance-2-0-*-basic specs are flagged facesOff and nothing else is', () => {
+test('every seedance *-basic spec is flagged facesOff and nothing else is', () => {
   for (const id of BASIC_IDS) {
     assert.equal(getVideoModel(id)?.facesOff, true, `${id} should be facesOff`);
   }
   const flagged = VIDEO_MODELS.filter(m => m.facesOff).map(m => m.id).sort();
-  assert.deepEqual(flagged, [...BASIC_IDS].sort());
+  const basic = VIDEO_MODELS.filter(m => /^seedance-.+-basic$/.test(m.id)).map(m => m.id).sort();
+  assert.deepEqual(flagged, basic);
 });
 
 test('isFacesOffModel reads the registry and falls back to the id shape for unlisted -basic spellings', () => {
@@ -54,8 +55,8 @@ test('isFacesOffModel reads the registry and falls back to the id shape for unli
   assert.equal(isFacesOffModel('seedance-2-5-reference-to-video'), false);
   assert.equal(isFacesOffModel('kling-o3-standard-reference-to-video'), false);
   // Live-listed but not in the registry: the id shape decides.
-  assert.equal(getVideoModel('seedance-2-5-reference-to-video-basic'), undefined);
-  assert.equal(isFacesOffModel('seedance-2-5-reference-to-video-basic'), true);
+  assert.equal(getVideoModel('seedance-2-0-mini-reference-to-video-basic'), undefined);
+  assert.equal(isFacesOffModel('seedance-2-0-mini-reference-to-video-basic'), true);
   // Not a Seedance id: the suffix alone is not enough.
   assert.equal(isFacesOffModel('some-other-model-basic'), false);
 });
@@ -65,9 +66,10 @@ test('faceCapableTwinId strips -basic from faces-off ids and leaves everything e
   assert.equal(faceCapableTwinId('seedance-2-5-image-to-video-basic'), 'seedance-2-5-image-to-video');
   assert.equal(faceCapableTwinId('seedance-2-0-reference-to-video'), 'seedance-2-0-reference-to-video');
   assert.equal(faceCapableTwinId('kling-o3-pro-text-to-video'), 'kling-o3-pro-text-to-video');
-  // Every faces-off registry entry has a registered face-capable twin.
-  for (const id of BASIC_IDS) {
-    assert.ok(getVideoModel(faceCapableTwinId(id)), `${faceCapableTwinId(id)} must be in the registry`);
+  // Every faces-off registry entry has a registered face-capable twin:
+  // prompt-builder swaps to it on shots with people.
+  for (const m of VIDEO_MODELS.filter(x => x.facesOff)) {
+    assert.ok(getVideoModel(faceCapableTwinId(m.id)), `${faceCapableTwinId(m.id)} must be in the registry`);
   }
 });
 

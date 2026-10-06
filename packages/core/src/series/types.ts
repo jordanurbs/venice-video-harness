@@ -1253,6 +1253,15 @@ export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   'wan-3-0-enhanced-reference-to-video',
   'vidu-q3-image-to-video',
   'vidu-q3-text-to-video',
+  // Drift triage 2026-10-06: twins / tier variants of lanes above (see models.ts).
+  'grok-imagine-1-5-reference-to-video-private',
+  'grok-imagine-reference-to-video-private',
+  'minimax-h3-enhanced-reference-to-video',
+  'seedance-2-0-fast-reference-to-video-basic',
+  'seedance-2-5-reference-to-video-basic',
+  'seedance-2-5-us-reference-to-video-private',
+  'wan-3-0-prime-pro-reference-to-video',
+  'wan-3-0-pro-reference-to-video',
 ]);
 
 export const MODELS_SUPPORTING_SCENE_IMAGES = new Set([
@@ -1281,6 +1290,10 @@ export const MODELS_SUPPORTING_END_IMAGE = new Set([
   // not support end_image_url" — probed 2026-07-06 (Venice Video Creator app
   // sync). The VideoModelSpec entries already said supportsEndImage: false;
   // this set had drifted from them. Removed 2026-08-06.
+  // Drift triage 2026-10-06: twins / tier variants of lanes above (see models.ts).
+  'flux-3-first-last-frame-to-video',
+  'kling-v3-turbo-pro-image-to-video',
+  'kling-v3-turbo-standard-image-to-video',
 ]);
 
 export const MODELS_USING_IMAGE_TAGS = new Set([
@@ -1311,6 +1324,13 @@ export const MODELS_USING_IMAGE_TAGS = new Set([
   // the prompt's @Image1/@Image2 assignments). NOTE: quote did NOT reject a
   // 10th ref, but we keep the documented 9-image budget.
   'happyhorse-1-1-reference-to-video',
+  // Drift triage 2026-10-06: twins / tier variants of lanes above (see models.ts).
+  'grok-imagine-1-5-reference-to-video-private',
+  'grok-imagine-reference-to-video-private',
+  'minimax-h3-enhanced-reference-to-video',
+  'seedance-2-0-fast-reference-to-video-basic',
+  'seedance-2-5-reference-to-video-basic',
+  'seedance-2-5-us-reference-to-video-private',
 ]);
 
 export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
@@ -1346,6 +1366,11 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   // Live catalog sync 2026-09-07: the live-listed Seedance 2.0 "basic" R2V id
   // reports audio_input:true (matches the audioInput:true spec in models.ts).
   'seedance-2-0-reference-to-video-basic',
+  // Drift triage 2026-10-06: twins / tier variants of lanes above (see models.ts).
+  'minimax-h3-enhanced-reference-to-video',
+  'seedance-2-0-fast-reference-to-video-basic',
+  'seedance-2-5-reference-to-video-basic',
+  'seedance-2-5-us-reference-to-video-private',
 ]);
 
 /**
@@ -1379,6 +1404,10 @@ export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
   'seedance-2-0-fast-reference-to-video',
   'seedance-2-0-reference-to-video-basic',
   'happyhorse-1-1-reference-to-video',
+  // Drift triage 2026-10-06: twins / tier variants of lanes above (see models.ts).
+  'seedance-2-0-fast-reference-to-video-basic',
+  'seedance-2-5-reference-to-video-basic',
+  'seedance-2-5-us-reference-to-video-private',
 ]);
 
 /**
