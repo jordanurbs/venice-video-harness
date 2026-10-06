@@ -11,8 +11,33 @@ import type { VeniceClient } from './client.js';
 import { clearPendingJob, findPendingJob, recordPendingJob, touchPendingJob } from './job-store.js';
 import { abortableSleep, reportProgress, throwIfAborted } from './operation-context.js';
 import { getMusicModel } from 'venice-video-harness/core/venice/models.js';
+import { classifyVideoRetrieveStatus } from './video.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Thrown when `/audio/retrieve` reports that the job ended without audio. The
+ * audio twin of `VideoGenerationFailedError`: distinct from the poll timeout so
+ * "Venice gave up on this job" reads differently from "we gave up waiting".
+ */
+export class AudioGenerationFailedError extends Error {
+  public readonly model: string;
+  public readonly queueId: string;
+  public readonly status: string;
+  public readonly body: unknown;
+
+  constructor(model: string, queueId: string, status: string, body: unknown, detail?: string) {
+    super(
+      `Audio generation ${status} for ${model} (${queueId})`
+      + (detail ? `: ${detail}` : ''),
+    );
+    this.name = 'AudioGenerationFailedError';
+    this.model = model;
+    this.queueId = queueId;
+    this.status = status;
+    this.body = body;
+  }
+}
 
 // ---- Default Models -------------------------------------------------------
 
@@ -298,7 +323,8 @@ interface AudioQueueResponse {
 }
 
 interface AudioRetrieveStatus {
-  status: 'PROCESSING';
+  /** `PROCESSING` keeps polling; anything else is terminal (see `classifyVideoRetrieveStatus`). */
+  status: 'PROCESSING' | 'FAILED' | (string & {});
   average_execution_time: number;
   execution_duration: number;
 }
@@ -354,7 +380,9 @@ export async function generateQueuedAudio(
     console.log(`  Re-attaching to in-flight audio job ${existing.queueId} (${existing.model}) — not re-queueing.`);
     queued = { model: existing.model, queue_id: existing.queueId, status: 'QUEUED' };
   } else {
-    queued = await client.post<AudioQueueResponse>('/api/v1/audio/queue', queueBody);
+    // Never auto-retried: Venice bills an audio job at queue time, like video,
+    // and can accept it before a 5xx reaches us. A blind retry could pay twice.
+    queued = await client.post<AudioQueueResponse>('/api/v1/audio/queue', queueBody, { retry: false });
     await recordPendingJob({
       kind: 'audio',
       model: queued.model,
@@ -392,6 +420,15 @@ export async function generateQueuedAudio(
     }
 
     const status = response.value as AudioRetrieveStatus;
+    const verdict = classifyVideoRetrieveStatus(status);
+    if (verdict.kind === 'failed') {
+      // Terminal: fail now, not at the deadline (10 min here). Drop the
+      // pending-job record so the next run queues fresh instead of
+      // re-attaching to a dead id.
+      await clearPendingJob(jobKey);
+      throw new AudioGenerationFailedError(queued.model, queued.queue_id, verdict.status, status, verdict.detail);
+    }
+
     await touchPendingJob(jobKey);
     if (status.status === 'PROCESSING') {
       reportProgress({
