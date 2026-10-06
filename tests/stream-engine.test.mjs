@@ -6,7 +6,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -408,6 +408,113 @@ test('the writer is told to end every beat wide, never on a human face', () => {
   const sys = buildStreamSystemPrompt(makeSeries());
   assert.match(sys, /Never end on a close-up of a human face/);
   assert.match(sys, /ENDS on a wide or medium-wide shot/);
+});
+
+// ---- Identity lock (r2v) ---------------------------------------------------
+
+/** Seed front + three-quarter reference sheets so the r2v ref resolver finds art
+ *  and `ensureCharacterReferences` skips generation (no network in tests). */
+function seedCharacterSheets(dir, slugs) {
+  for (const slug of slugs) {
+    const cdir = join(dir, 'characters', slug);
+    mkdirSync(cdir, { recursive: true });
+    writeFileSync(join(cdir, 'front.png'), 'png');
+    writeFileSync(join(cdir, 'three-quarter.png'), 'png');
+  }
+}
+
+test('identity-lock (r2v) renders every beat reference-to-video off the cast sheets, with no start frame and no chaining', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-r2v-'));
+  seedCharacterSheets(dir, ['walt', 'crumb']);
+  const calls = [];
+  const inputs = [];
+  const render = async (_client, options) => {
+    calls.push({
+      model: options.prompt.model,
+      anchor: options.anchorImagePath,
+      refs: options.referenceImagePaths,
+      outputPath: options.outputPath,
+    });
+    await mkdir(join(options.outputPath, '..'), { recursive: true });
+    execFileSync('cp', [realMp4(), options.outputPath]);
+    return options.outputPath;
+  };
+  const series = Object.assign(makeSeries(), { outputDir: dir });
+  const engine = new StreamEngine({
+    client: {}, series, episode: 1,
+    projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
+    log: () => {}, errorBackoffMs: 1, budgetUsd: budgetFor(3),
+    r2vMode: true, render, author: scriptedAuthor(inputs),
+  });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  const R2V = STREAM_VIDEO_CHOICES.find(v => v.id === 'minimax-h3-max').r2v;
+  assert.equal(calls.length, 3, 'three beats within the budget');
+  for (const c of calls) {
+    assert.equal(c.model, R2V, 'every beat (including beat 1) renders on the r2v lane');
+    assert.equal(c.anchor, undefined, 'r2v sends no start frame');
+    assert.ok(Array.isArray(c.refs) && c.refs.length > 0, 'r2v passes the cast reference images');
+  }
+
+  const st = engine.state();
+  assert.equal(st.r2vMode, true);
+  assert.equal(st.model.r2v, R2V);
+  assert.deepEqual(st.beats.map(b => b.lane), ['r2v', 'r2v', 'r2v']);
+  assert.equal(st.beats[0].render.startFrame, undefined, 'no start frame recorded for an r2v beat');
+  assert.equal(st.beats[0].render.model, R2V);
+});
+
+test('identity-lock is switchable at runtime and persists across a resume', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-r2v-config-'));
+  seedCharacterSheets(dir, ['walt', 'crumb']);
+  const { engine, calls } = makeEngine(dir, { budgetUsd: budgetFor(3) });
+  await engine.init();
+  await engine.prime(); // beat 1 on the default t2v→i2v chain
+  assert.equal(calls[0].model, STREAM_MODEL_T2V);
+
+  const on = await engine.configure({ r2vMode: true });
+  assert.equal(on.r2vMode, true);
+  assert.equal(on.model.r2v, 'minimax-h3-max-reference-to-video');
+
+  await engine.start({ budgetUsd: 100 });
+  await new Promise(r => setTimeout(r, 300));
+  await engine.stop();
+  await waitForStop(engine);
+  assert.ok(calls.length >= 2);
+  assert.equal(calls[1].model, 'minimax-h3-max-reference-to-video', 'the next beat switched to the r2v lane');
+  assert.equal(calls[1].anchor, undefined, 'no start frame once identity-lock is on');
+
+  // Resume: the manifest carries r2vMode forward when the caller sets none.
+  const resumed = makeEngine(dir, {}).engine;
+  await resumed.init();
+  assert.equal(resumed.state().r2vMode, true, 'a resumed stream keeps identity-lock on');
+});
+
+test('turning identity-lock on without a cast is refused before anything bills', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-r2v-nocast-'));
+  const series = Object.assign(makeSeries(), { outputDir: dir, characters: [] });
+  const engine = new StreamEngine({
+    client: {}, series, episode: 1,
+    projectDir: dir, episodeDir: join(dir, 'episodes', 'episode-001'),
+    log: () => {}, errorBackoffMs: 1, budgetUsd: 100,
+    render: recordingRender([], realMp4()), author: scriptedAuthor([]),
+  });
+  await engine.init();
+  await assert.rejects(() => engine.configure({ r2vMode: true }), /needs a cast/);
+  assert.equal(engine.state().r2vMode, false, 'identity-lock stays off after a refused switch');
+});
+
+test('switching to a family with no r2v lane turns identity-lock off', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stream-r2v-nofamily-'));
+  seedCharacterSheets(dir, ['walt', 'crumb']);
+  const { engine } = makeEngine(dir, { r2vMode: true });
+  await engine.init();
+  assert.equal(engine.state().r2vMode, true);
+  // LTX Video 2.5 Fast has no reference-to-video lane.
+  const st = await engine.configure({ videoFamily: 'ltx-2-5-fast' });
+  assert.equal(st.r2vMode, false, 'identity-lock cannot stay on for a family without an r2v lane');
 });
 
 test('configure switches the writer and the video family for the NEXT beat, and a resumed stream keeps them', async () => {

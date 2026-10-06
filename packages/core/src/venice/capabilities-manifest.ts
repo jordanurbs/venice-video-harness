@@ -51,6 +51,7 @@ import {
   MODELS_SUPPORTING_AUDIO_INPUT,
   MODELS_SUPPORTING_PER_REFERENCE_AUDIO,
   MODELS_SUPPORTING_REFERENCE_AUDIO,
+  MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO,
   MAX_REFERENCE_IMAGES_BY_MODEL,
   DEFAULT_MAX_REFERENCE_IMAGES,
 } from '../series/types.js';
@@ -76,6 +77,8 @@ export interface CapabilitiesManifest {
     audioInput: string[];
     perReferenceAudio: string[];
     referenceAudio: string[];
+    /** Exact lip-sync driven by a `reference_audio_urls` clip instead of `audio_url`. */
+    lipSyncViaReferenceAudio: string[];
   };
   budgets: {
     maxReferenceImagesByModel: Record<string, number>;
@@ -131,6 +134,7 @@ export function buildCapabilitiesManifest(options: ManifestOptions = {}): Capabi
       audioInput: [...MODELS_SUPPORTING_AUDIO_INPUT].sort(),
       perReferenceAudio: [...MODELS_SUPPORTING_PER_REFERENCE_AUDIO].sort(),
       referenceAudio: [...MODELS_SUPPORTING_REFERENCE_AUDIO].sort(),
+      lipSyncViaReferenceAudio: [...MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO].sort(),
     },
     budgets: {
       maxReferenceImagesByModel: { ...MAX_REFERENCE_IMAGES_BY_MODEL },
