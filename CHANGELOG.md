@@ -148,6 +148,110 @@
 
 ### Added
 
+- **Wan 3.0 R2V exact lip-sync, in-family.** `resolveLipSyncModel('wan-3-0')`
+  now returns `wan-3-0-reference-to-video` instead of falling out to Wan 2.7.
+  Wan 3.0 rejects `audio_url`, but it lip-syncs the reference face to a
+  dialogue MP3 sent as `reference_audio_urls` (paid render 2026-09-01, one
+  reference image + a 4.9s clip). GET /models still reports
+  `audio_input: false` for the family, which is why the registry missed it.
+  New spec flag `lipSyncViaReferenceAudio` and set
+  `MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO` (base R2V only; the prime, enhanced
+  and pro R2V lanes are unprobed). On that lane `renderVideoFile` attaches
+  the dialogue as the single `reference_audio_urls` entry and sends no start
+  frame (the proven request shape). The video prompt gains a "precise lip
+  sync to that audio" clause on this lane only. No Seedance keyframe
+  pre-pass.
+- **Probed limits of that lane (2026-09-28, paid 480p renders).** Reference
+  audio caps at **15s per render, summed across clips**: 10s and 14s render;
+  16s, 20s, 25s (at 44.1, 22.05 and 16 kHz, MP3 or WAV) and a 9.8s + 14.1s
+  two-clip split fail at retrieve with 422 "Maximum is 30 seconds" after the
+  queue accepted them. `LIP_SYNC_REFERENCE_AUDIO_MAX_SEC` now refuses over-cap
+  audio before queueing. When the render is at least as long as the clip, the
+  output audio IS the clip (waveform correlation 0.96 at zero lag), so the
+  mouth follows the file. When the clip outruns the render, Wan re-performs
+  it instead, and an unpadded tail gets invented words, so shorter clips are
+  padded with silence to the render length. The clip is always sent as PCM
+  WAV: an MP3 padded to exactly 15.0s decodes to 15.047s once the encoder
+  delay is counted, and the provider rejected it (a paid 1080p render,
+  2026-09-28). The same padding sits in the source MP3's probed length, so
+  the pre-queue refusal allows 0.05s over the cap: a 14.97s line probes as
+  15.02s on Linux CI's ffmpeg and was refused, though the WAV it is re-cut
+  to never exceeds 15.0s.
+- **Lip-sync fidelity check on that lane.** Identical requests do not always
+  follow the clip: 2 of 4 takes of one shot re-performed the line (a dropped
+  phrase, re-timed words), and their mouths no longer match the file. After
+  each take, `measureLipSyncFidelity` (`src/mini-drama/lip-sync-fidelity.ts`)
+  compares the render's audio with the clip (keep at overall correlation
+  >= 0.9 and every speech second >= 0.6; faithful takes score ~0.96). A failed
+  take is set aside as `shot-NNN.rejected-K.mp4` and the shot is left
+  unrendered, so re-running `generate-videos` re-rolls just those shots.
+  `videoDefaults.lipSyncMaxAttempts` (default 1) re-rolls automatically
+  instead; every extra take is billed. The verdict is written to the shot's
+  video metadata.
+- **`videoDefaults.resolution`.** Optional per-project output resolution for
+  single-shot renders, validated against each model's ladder. Unset keeps
+  every family's current behaviour.
+- `capabilities.json` gains `capabilitySets.lipSyncViaReferenceAudio`. The
+  field is additive and clients ignore unknown keys, so `schemaVersion` stays
+  at 1 (a bump would make shipped clients reject the manifest).
+- **MiniMax H3 Max Multi-Angle (`minimax-h3-max-multi-angle`) + the
+  `camera_trajectory` param.** A new image-to-video lane in the H3 Max family
+  whose payload is a camera path: you supply the start frame (`image_url`) and a
+  **2–12 keyframe** `camera_trajectory`, and the model orbits the subject along
+  it. Each keyframe is `{ time (0–1, strictly increasing), azimuth° (horizontal),
+  elevation° (vertical, −90..90), distance (>0, 1 = unchanged) }`. The request's
+  "horizontal/vertical angle + distance for the start and finish frame" is the
+  2-keyframe case (`time: 0` and `1`).
+  - **Field name, limits, and pricing probed live (2026-09-15)** against the
+    strict `/video/queue` schema and `GET /api/v1/swagger.yaml`: wrong names 400
+    with "Unrecognized key(s)"; azimuth travel over **32 full turns** (11520°)
+    400s with "Camera azimuth travel must not exceed 32 full turns". Quote:
+    480P $0.06/s, 768P ~$0.096/s, **1080P** ~$0.19/s. See
+    `scripts/probe-minimax-multi-angle.mjs` (quote + intentionally-rejected
+    queue only — no paid renders).
+  - **Registry:** i2v, 5–15s, `promptStyle: 'simple'`, `private` + uncensored,
+    audio on and NOT configurable (field omitted). Unlike base H3 Max (768P
+    ceiling) it renders **1080P** — resolutions `['1080P','768P','480P']`,
+    finish-tier first. Marked with the new `VideoModelSpec.supportsCameraTrajectory`
+    flag; carried verbatim into `capabilities.json`.
+  - **Builders + validator** in `src/venice/models.ts`: `buildStartEndTrajectory`
+    (the literal start→finish form), `buildOrbitTrajectory` (full-turn orbits
+    with crane/dolly and a `ramp` speed profile that eases azimuth over even
+    time — real in-shot speed ramping), and `validateCameraTrajectory` (mirrors
+    the server: 2–12 keyframes, strictly-increasing time 0–1, elevation −90..90,
+    distance > 0, ≤32 turns) so a bad path fails fast instead of as a paid
+    round-trip. Exported from the package entry.
+  - **Wired** through `buildModelParams`, `queueVideo`/`generateVideo`
+    (`cameraTrajectory` option), and `renderVideoFile` (`cameraTrajectory`),
+    each gated on `supportsCameraTrajectory` and validated before the request.
+  - **Fixed (family-wide):** `queueVideo` now omits the `audio` field for
+    `audioConfigurable: false` models (H3 Max family, HappyHorse 1.1, …) instead
+    of always sending `audio: true`, which those models 400 as "does not support
+    audio configuration". `renderVideoFile` already did this.
+- **Stream identity lock (reference-to-video).** The stream can now render every
+  beat **reference-to-video** off the cast's character sheets instead of the
+  text-to-video → image-to-video chain. Toggle it with the new **Identity lock**
+  checkbox on the Stream tab, `--r2v` on `venice-video stream`, or an interactive
+  prompt when a new stream starts in a terminal. When on:
+  - every beat (including beat 1) renders on the family's `*-reference-to-video`
+    lane with the cast's `front` + `three-quarter` sheets as `reference_image_urls`
+    — no start frame, no chaining. Character identity is re-anchored each beat and
+    continuity carries through the writing (same place, same people, same moment).
+  - **faces are welcome again.** The i2v chain's "every beat must END on a wide
+    shot, never a close-up" rule (anti-pattern 31: MiniMax i2v dies on a
+    face-filled start frame) is lifted in the writer prompt — R2V takes faces as
+    references, not a start frame.
+  - **references are generated only when it's on.** Missing `front` /
+    `three-quarter` sheets are generated on start (nothing is generated for a
+    plain t2v→i2v stream). Requires a cast (`add-character`) and a locked
+    aesthetic (`set-aesthetic`); turning it on without them is refused before
+    anything bills.
+  - switchable live from the Stream tab (applies to the next beat) and persisted
+    across a resume. Families with an r2v lane: MiniMax H3 Max (+ Turbo, which
+    crosses to the non-turbo R2V), Seedance 2.0, Seedance 2.5, Wan 3.0, Grok
+    Imagine (beats snap to 5/8/10s), Kling O3 Standard. Families without one
+    (LTX 2.5 Fast, Veo 3.1 Fast) show the toggle disabled, and switching to one
+    turns identity lock off.
 - **Contributor automation.** `CONTRIBUTING.md` and a PR template. CI gains
   a macOS job (Node 22) and a preload (`tests/support/no-venice-network.mjs`,
   loaded through `NODE_OPTIONS`) that fails any test process, including CLIs
@@ -235,123 +339,6 @@
   Report templates.
 - **`add-location` playbook** (`.agents/commands/add-location.md`) and a
   compass-plate test (`tests/location-plates.test.mjs`).
-## Unreleased — 2026-09-28
-
-### Added
-
-- **Wan 3.0 R2V exact lip-sync, in-family.** `resolveLipSyncModel('wan-3-0')`
-  now returns `wan-3-0-reference-to-video` instead of falling out to Wan 2.7.
-  Wan 3.0 rejects `audio_url`, but it lip-syncs the reference face to a
-  dialogue MP3 sent as `reference_audio_urls` (paid render 2026-09-01, one
-  reference image + a 4.9s clip). GET /models still reports
-  `audio_input: false` for the family, which is why the registry missed it.
-  New spec flag `lipSyncViaReferenceAudio` and set
-  `MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO` (base R2V only; the prime, enhanced
-  and pro R2V lanes are unprobed). On that lane `renderVideoFile` attaches
-  the dialogue as the single `reference_audio_urls` entry and sends no start
-  frame (the proven request shape). The video prompt gains a "precise lip
-  sync to that audio" clause on this lane only. No Seedance keyframe
-  pre-pass.
-- **Probed limits of that lane (2026-09-28, paid 480p renders).** Reference
-  audio caps at **15s per render, summed across clips**: 10s and 14s render;
-  16s, 20s, 25s (at 44.1, 22.05 and 16 kHz, MP3 or WAV) and a 9.8s + 14.1s
-  two-clip split fail at retrieve with 422 "Maximum is 30 seconds" after the
-  queue accepted them. `LIP_SYNC_REFERENCE_AUDIO_MAX_SEC` now refuses over-cap
-  audio before queueing. When the render is at least as long as the clip, the
-  output audio IS the clip (waveform correlation 0.96 at zero lag), so the
-  mouth follows the file. When the clip outruns the render, Wan re-performs
-  it instead, and an unpadded tail gets invented words, so shorter clips are
-  padded with silence to the render length. The clip is always sent as PCM
-  WAV: an MP3 padded to exactly 15.0s decodes to 15.047s once the encoder
-  delay is counted, and the provider rejected it (a paid 1080p render,
-  2026-09-28). The same padding sits in the source MP3's probed length, so
-  the pre-queue refusal allows 0.05s over the cap: a 14.97s line probes as
-  15.02s on Linux CI's ffmpeg and was refused, though the WAV it is re-cut
-  to never exceeds 15.0s.
-- **Lip-sync fidelity check on that lane.** Identical requests do not always
-  follow the clip: 2 of 4 takes of one shot re-performed the line (a dropped
-  phrase, re-timed words), and their mouths no longer match the file. After
-  each take, `measureLipSyncFidelity` (`src/mini-drama/lip-sync-fidelity.ts`)
-  compares the render's audio with the clip (keep at overall correlation
-  >= 0.9 and every speech second >= 0.6; faithful takes score ~0.96). A failed
-  take is set aside as `shot-NNN.rejected-K.mp4` and the shot is left
-  unrendered, so re-running `generate-videos` re-rolls just those shots.
-  `videoDefaults.lipSyncMaxAttempts` (default 1) re-rolls automatically
-  instead; every extra take is billed. The verdict is written to the shot's
-  video metadata.
-- **`videoDefaults.resolution`.** Optional per-project output resolution for
-  single-shot renders, validated against each model's ladder. Unset keeps
-  every family's current behaviour.
-- `capabilities.json` gains `capabilitySets.lipSyncViaReferenceAudio`. The
-  field is additive and clients ignore unknown keys, so `schemaVersion` stays
-  at 1 (a bump would make shipped clients reject the manifest).
-## 2.27.0 — 2026-09-15
-
-### Added
-
-- **MiniMax H3 Max Multi-Angle (`minimax-h3-max-multi-angle`) + the
-  `camera_trajectory` param.** A new image-to-video lane in the H3 Max family
-  whose payload is a camera path: you supply the start frame (`image_url`) and a
-  **2–12 keyframe** `camera_trajectory`, and the model orbits the subject along
-  it. Each keyframe is `{ time (0–1, strictly increasing), azimuth° (horizontal),
-  elevation° (vertical, −90..90), distance (>0, 1 = unchanged) }`. The request's
-  "horizontal/vertical angle + distance for the start and finish frame" is the
-  2-keyframe case (`time: 0` and `1`).
-  - **Field name, limits, and pricing probed live (2026-09-15)** against the
-    strict `/video/queue` schema and `GET /api/v1/swagger.yaml`: wrong names 400
-    with "Unrecognized key(s)"; azimuth travel over **32 full turns** (11520°)
-    400s with "Camera azimuth travel must not exceed 32 full turns". Quote:
-    480P $0.06/s, 768P ~$0.096/s, **1080P** ~$0.19/s. See
-    `scripts/probe-minimax-multi-angle.mjs` (quote + intentionally-rejected
-    queue only — no paid renders).
-  - **Registry:** i2v, 5–15s, `promptStyle: 'simple'`, `private` + uncensored,
-    audio on and NOT configurable (field omitted). Unlike base H3 Max (768P
-    ceiling) it renders **1080P** — resolutions `['1080P','768P','480P']`,
-    finish-tier first. Marked with the new `VideoModelSpec.supportsCameraTrajectory`
-    flag; carried verbatim into `capabilities.json`.
-  - **Builders + validator** in `src/venice/models.ts`: `buildStartEndTrajectory`
-    (the literal start→finish form), `buildOrbitTrajectory` (full-turn orbits
-    with crane/dolly and a `ramp` speed profile that eases azimuth over even
-    time — real in-shot speed ramping), and `validateCameraTrajectory` (mirrors
-    the server: 2–12 keyframes, strictly-increasing time 0–1, elevation −90..90,
-    distance > 0, ≤32 turns) so a bad path fails fast instead of as a paid
-    round-trip. Exported from the package entry.
-  - **Wired** through `buildModelParams`, `queueVideo`/`generateVideo`
-    (`cameraTrajectory` option), and `renderVideoFile` (`cameraTrajectory`),
-    each gated on `supportsCameraTrajectory` and validated before the request.
-  - **Fixed (family-wide):** `queueVideo` now omits the `audio` field for
-    `audioConfigurable: false` models (H3 Max family, HappyHorse 1.1, …) instead
-    of always sending `audio: true`, which those models 400 as "does not support
-    audio configuration". `renderVideoFile` already did this.
-
-## 2.26.0 — 2026-09-07
-
-### Added
-
-- **Stream identity lock (reference-to-video).** The stream can now render every
-  beat **reference-to-video** off the cast's character sheets instead of the
-  text-to-video → image-to-video chain. Toggle it with the new **Identity lock**
-  checkbox on the Stream tab, `--r2v` on `venice-video stream`, or an interactive
-  prompt when a new stream starts in a terminal. When on:
-  - every beat (including beat 1) renders on the family's `*-reference-to-video`
-    lane with the cast's `front` + `three-quarter` sheets as `reference_image_urls`
-    — no start frame, no chaining. Character identity is re-anchored each beat and
-    continuity carries through the writing (same place, same people, same moment).
-  - **faces are welcome again.** The i2v chain's "every beat must END on a wide
-    shot, never a close-up" rule (anti-pattern 31: MiniMax i2v dies on a
-    face-filled start frame) is lifted in the writer prompt — R2V takes faces as
-    references, not a start frame.
-  - **references are generated only when it's on.** Missing `front` /
-    `three-quarter` sheets are generated on start (nothing is generated for a
-    plain t2v→i2v stream). Requires a cast (`add-character`) and a locked
-    aesthetic (`set-aesthetic`); turning it on without them is refused before
-    anything bills.
-  - switchable live from the Stream tab (applies to the next beat) and persisted
-    across a resume. Families with an r2v lane: MiniMax H3 Max (+ Turbo, which
-    crosses to the non-turbo R2V), Seedance 2.0, Seedance 2.5, Wan 3.0, Grok
-    Imagine (beats snap to 5/8/10s), Kling O3 Standard. Families without one
-    (LTX 2.5 Fast, Veo 3.1 Fast) show the toggle disabled, and switching to one
-    turns identity lock off.
 
 ## 2.25.0 — 2026-09-07
 
