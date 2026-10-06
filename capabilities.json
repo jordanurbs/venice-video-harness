@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "harnessVersion": "2.26.0",
-  "generatedAt": "2026-10-06T12:55:45-03:00",
+  "harnessVersion": "2.27.0",
+  "generatedAt": "2026-10-06T11:32:33-05:00",
   "videoModels": [
     {
       "id": "wan-2.6-image-to-video",
@@ -1961,6 +1961,43 @@
       "supportsEndImage": false,
       "maxDurationSec": 15,
       "promptStyle": "simple",
+      "privacy": "private",
+      "offline": false
+    },
+    {
+      "id": "minimax-h3-max-multi-angle",
+      "name": "MiniMax H3 Max Multi-Angle",
+      "type": "image-to-video",
+      "durations": [
+        "5s",
+        "6s",
+        "7s",
+        "8s",
+        "9s",
+        "10s",
+        "11s",
+        "12s",
+        "13s",
+        "14s",
+        "15s"
+      ],
+      "resolutions": [
+        "1080P",
+        "768P",
+        "480P"
+      ],
+      "aspectRatios": [],
+      "audio": true,
+      "audioConfigurable": false,
+      "audioInput": false,
+      "videoInput": false,
+      "supportsElements": false,
+      "supportsReferenceImages": false,
+      "supportsSceneImages": false,
+      "supportsEndImage": false,
+      "maxDurationSec": 15,
+      "promptStyle": "simple",
+      "supportsCameraTrajectory": true,
       "privacy": "private",
       "offline": false
     },

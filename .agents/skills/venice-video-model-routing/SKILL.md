@@ -385,6 +385,34 @@ The Creator app mirrors this: `VideoModelCapabilities.wantsSimplePrompt(id:)` ga
 same trimming in `ShotPromptBuilder`, and relaxes the `produce_shots` motion/length gate
 so a correctly short H3 Max prompt isn't rejected as thin.
 
+### Camera-Path Models (MiniMax H3 Max Multi-Angle)
+
+`minimax-h3-max-multi-angle` is a simple-prompt i2v lane with one thing no other
+Venice model has: a `camera_trajectory`. You give it the start frame (`image_url`)
+and a **2–12 keyframe** camera path, and it orbits the subject along it. `prompt`
+is optional — the trajectory carries the shot.
+
+- Each keyframe is `{ time (0–1, strictly increasing), azimuth° (horizontal,
+  signed), elevation° (vertical, −90..90), distance (>0, 1 = unchanged) }`. Total
+  absolute azimuth travel ≤ **32 full turns** (11520°). Build with
+  `buildStartEndTrajectory(start, finish)` (the literal start→finish form) or
+  `buildOrbitTrajectory({ azimuthTravel, ramp, startElevation, endElevation,
+  startDistance, endDistance, keyframes })` from `src/venice/models.js`.
+- **In-shot speed ramping** = uneven angular velocity over even time. Pass
+  `ramp: 'ease-in' | 'ease-out' | 'ease-in-out'` (with `keyframes ≥ 3`); the
+  builder eases azimuth across evenly spaced `time` so the rotation accelerates
+  or settles without breaking the strictly-increasing-time rule.
+- **Resolution:** the ONE H3 Max lane that renders **1080P** (`['1080P','768P',
+  '480P']`; base H3 Max caps at 768P). The auto-pin still defaults 768P for cost;
+  pass `resolution: '1080P'` for a finish render or `'480P'` for a cheap draft.
+- i2v only — aspect follows the start image (send no `aspect_ratio`), audio is on
+  and NOT configurable (omit the `audio` field), 5–15s ladder, `private` +
+  uncensored. No t2v/R2V multi-angle lane.
+- Wire via `generateVideo`/`queueVideo` (`cameraTrajectory`) or `renderVideoFile`
+  (`cameraTrajectory`); `validateCameraTrajectory` fails a bad path fast, before a
+  paid queue. Anti-pattern: sending `camera_trajectory` to any other model →
+  `400` "Unrecognized key(s)".
+
 ### Image-Tag R2V Models (Seedance 2.0 R2V Enhanced — default for all lanes)
 
 - Replace character names in descriptions with `@Image1`, `@Image2` tokens via regex
@@ -523,7 +551,8 @@ Seedance 2.0 (now the default for both atmosphere and character shots) accepts *
 - **Sending invalid durations:** Seedance 2.0 accepts 4s/5s/8s/10s/12s/15s. Veo 3.1 accepts 4s/6s/8s. Duration auto-snap corrects this.
 - **Sending `2K` to MiniMax H3 Max, or `768P` to plain MiniMax H3:** The two families share a name and invert on resolution. H3 is 2K-only; H3 Max and H3 Max Turbo top out at 768P and reject 2K. `video-generator.ts` pins each family, and the `-max` branch has to stay above the `minimax-h3` substring match or every H3 Max render 400s.
 - **Reaching for `minimax-h3-max-turbo-reference-to-video`:** It doesn't exist ("Specified model not found"). Turbo has no R2V lane; identity shots route to `minimax-h3-max-reference-to-video`.
-- **Sending `audio` to any MiniMax H3 family model:** `audioConfigurable: false` — audio is always generated and the field must be omitted from the body, not set to `true`.
+- **Sending `audio` to any MiniMax H3 family model:** `audioConfigurable: false` — audio is always generated and the field must be omitted from the body, not set to `true`. (`queueVideo` now strips it automatically for these models.)
+- **Sending `camera_trajectory` to anything but `minimax-h3-max-multi-angle`:** the strict queue schema 400s with "Unrecognized key(s) in object: 'camera_trajectory'". On multi-angle itself, azimuth travel over 32 turns 400s with "Camera azimuth travel must not exceed 32 full turns" — `validateCameraTrajectory` catches both before you pay.
 - **Reference images below 300x300:** R2V models reject `reference_image_urls` and `elements` images smaller than 300x300 pixels. Never downscale character references below this threshold.
 - **Seedance + non-seedream face images (no longer an issue, 2026-07):** Venice removed the restriction that Seedance 2.0 only accepts face-bearing input images from `seedream-v5-lite` / `seedream-v5-lite-edit`. Any image family now works for face-bearing inputs, so there's nothing to pair, reroute, or launder — the pre-flight gate is a no-op.
 

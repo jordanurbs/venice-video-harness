@@ -89,6 +89,16 @@ export interface StreamVideoChoice {
   label: string;
   t2v: string;
   i2v: string;
+  /**
+   * Reference-to-video lane for the family, when it has one. Set only for
+   * families with a working R2V model on Venice. Used by the stream's identity-
+   * lock mode (`r2vMode`): every beat renders on this model off the cast's
+   * character sheets instead of chaining i2v off the previous last frame, so
+   * character identity holds across beats and faces are fine (R2V takes faces
+   * as `reference_image_urls`, not a start frame — anti-pattern 31 does not
+   * apply). Undefined = the family cannot do identity-lock; the toggle is off.
+   */
+  r2v?: string;
   /** Resolution the stream pins for this family (draft tier). */
   resolution: string;
   /** Resolutions the operator may choose for this family. */
@@ -106,42 +116,51 @@ export const STREAM_VIDEO_CHOICES: ReadonlyArray<StreamVideoChoice> = [
   {
     id: 'minimax-h3-max', label: 'MiniMax H3 Max (default)',
     t2v: 'minimax-h3-max-text-to-video', i2v: 'minimax-h3-max-image-to-video',
+    r2v: 'minimax-h3-max-reference-to-video',
     resolution: '480P', resolutions: ['480P', '768P'], usdPer15s: 0.22, renderSecApprox: 45, speed: 'falls behind',
     note: 'The default: sharper than the Turbo lane, pinned to 480P for speed (~45s per 15s beat, $0.22). Still renders slower than playback; the look-ahead buffer hides the writer latency, not the render. 768P is selectable at $0.36 (~60s). Native audio. i2v dies on a face-filled start frame (the engine soft-resets).',
   },
   {
     id: 'minimax-h3-max-turbo', label: 'MiniMax H3 Max Turbo',
     t2v: 'minimax-h3-max-turbo-text-to-video', i2v: 'minimax-h3-max-turbo-image-to-video',
+    // Turbo has NO R2V lane ("Specified model not found"); identity-lock crosses
+    // to the non-turbo H3 Max R2V (AGENTS.md — same reference stack, slower).
+    r2v: 'minimax-h3-max-reference-to-video',
     resolution: '480P', resolutions: ['480P', '768P'], usdPer15s: 0.11, renderSecApprox: 30, speed: 'keeps up',
-    note: 'Fastest and cheapest lane (480P, half the price, ~30s per beat) but noticeably lower quality. The only family that nearly keeps pace with playback. Same face-start-frame limit.',
+    note: 'Fastest and cheapest lane (480P, half the price, ~30s per beat) but noticeably lower quality. The only family that nearly keeps pace with playback. Same face-start-frame limit. Identity-lock (r2v) uses the non-turbo H3 Max R2V (slower).',
   },
   {
     id: 'wan-3-0', label: 'Wan 3.0',
     t2v: 'wan-3-0-text-to-video', i2v: 'wan-3-0-image-to-video',
+    r2v: 'wan-3-0-reference-to-video',
     resolution: '480p', resolutions: ['480p', '720p', '1080p'], usdPer15s: 0.68, renderSecApprox: 120, speed: 'much slower',
     note: 'Accepts face start frames. ~2 min per beat and 6x the Turbo price. Audio.',
   },
   {
     id: 'grok-imagine', label: 'Grok Imagine',
     t2v: 'grok-imagine-text-to-video', i2v: 'grok-imagine-image-to-video',
+    r2v: 'grok-imagine-reference-to-video',
     resolution: '480p', resolutions: ['480p', '720p'], usdPer15s: 0.95, renderSecApprox: 90, speed: 'much slower',
-    note: 'Accepts face start frames. ~1.5 min per beat, 9x the Turbo price.',
+    note: 'Accepts face start frames. ~1.5 min per beat, 9x the Turbo price. Identity-lock (r2v) caps beats at 10s (durations snap to 5/8/10s).',
   },
   {
     id: 'seedance-2-0', label: 'Seedance 2.0',
     t2v: 'seedance-2-0-text-to-video', i2v: 'seedance-2-0-image-to-video',
+    r2v: 'seedance-2-0-reference-to-video',
     resolution: '480p', resolutions: ['480p', '720p', '1080p', '4k'], usdPer15s: 1.32, renderSecApprox: 180, speed: 'much slower',
     note: 'The harness production default look, native dialogue and lip-sync. ~3 min per beat at draft. Resolution goes to native 4K (quote 2026-09-07: 720p $2.64, 1080p $7.02, 4K $14.58 per 15s) — the highest-fidelity stream lane, but the viewer waits between beats and 4K costs ~66x Turbo.',
   },
   {
     id: 'seedance-2-5', label: 'Seedance 2.5',
     t2v: 'seedance-2-5-text-to-video', i2v: 'seedance-2-5-image-to-video',
+    r2v: 'seedance-2-5-reference-to-video',
     resolution: '480p', resolutions: ['480p', '720p', '1080p'], usdPer15s: 1.93, renderSecApprox: 180, speed: 'much slower',
     note: 'Newest Seedance. Resolution to 1080p (quote 2026-09-07: 1080p $7.68 per 15s; 2K/4K rejected). ~3 min per beat.',
   },
   {
     id: 'kling-o3-standard', label: 'Kling O3 Standard',
     t2v: 'kling-o3-standard-text-to-video', i2v: 'kling-o3-standard-image-to-video',
+    r2v: 'kling-o3-standard-reference-to-video',
     resolution: '', resolutions: [], usdPer15s: 1.84, renderSecApprox: 150, speed: 'much slower',
     note: 'Accepts face start frames. ~2.5 min per beat, 16x the Turbo price. No resolution parameter.',
   },
@@ -167,6 +186,16 @@ export const STREAM_DEFAULT_VIDEO_FAMILY = 'minimax-h3-max';
 
 export function getStreamVideoChoice(id: string): StreamVideoChoice | undefined {
   return STREAM_VIDEO_CHOICES.find(c => c.id === id);
+}
+
+/** True when a family (by id) has a reference-to-video lane for identity-lock. */
+export function streamFamilySupportsR2V(idOrModel: string | undefined): boolean {
+  if (!idOrModel) return false;
+  try {
+    return Boolean(resolveStreamVideoFamily(idOrModel).r2v);
+  } catch {
+    return false;
+  }
 }
 
 /** Resolve a family key OR a raw model id (either lane) to its family. */

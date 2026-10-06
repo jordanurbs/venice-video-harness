@@ -255,6 +255,73 @@
 - `capabilities.json` gains `capabilitySets.lipSyncViaReferenceAudio`. The
   field is additive and clients ignore unknown keys, so `schemaVersion` stays
   at 1 (a bump would make shipped clients reject the manifest).
+## 2.27.0 — 2026-09-15
+
+### Added
+
+- **MiniMax H3 Max Multi-Angle (`minimax-h3-max-multi-angle`) + the
+  `camera_trajectory` param.** A new image-to-video lane in the H3 Max family
+  whose payload is a camera path: you supply the start frame (`image_url`) and a
+  **2–12 keyframe** `camera_trajectory`, and the model orbits the subject along
+  it. Each keyframe is `{ time (0–1, strictly increasing), azimuth° (horizontal),
+  elevation° (vertical, −90..90), distance (>0, 1 = unchanged) }`. The request's
+  "horizontal/vertical angle + distance for the start and finish frame" is the
+  2-keyframe case (`time: 0` and `1`).
+  - **Field name, limits, and pricing probed live (2026-09-15)** against the
+    strict `/video/queue` schema and `GET /api/v1/swagger.yaml`: wrong names 400
+    with "Unrecognized key(s)"; azimuth travel over **32 full turns** (11520°)
+    400s with "Camera azimuth travel must not exceed 32 full turns". Quote:
+    480P $0.06/s, 768P ~$0.096/s, **1080P** ~$0.19/s. See
+    `scripts/probe-minimax-multi-angle.mjs` (quote + intentionally-rejected
+    queue only — no paid renders).
+  - **Registry:** i2v, 5–15s, `promptStyle: 'simple'`, `private` + uncensored,
+    audio on and NOT configurable (field omitted). Unlike base H3 Max (768P
+    ceiling) it renders **1080P** — resolutions `['1080P','768P','480P']`,
+    finish-tier first. Marked with the new `VideoModelSpec.supportsCameraTrajectory`
+    flag; carried verbatim into `capabilities.json`.
+  - **Builders + validator** in `src/venice/models.ts`: `buildStartEndTrajectory`
+    (the literal start→finish form), `buildOrbitTrajectory` (full-turn orbits
+    with crane/dolly and a `ramp` speed profile that eases azimuth over even
+    time — real in-shot speed ramping), and `validateCameraTrajectory` (mirrors
+    the server: 2–12 keyframes, strictly-increasing time 0–1, elevation −90..90,
+    distance > 0, ≤32 turns) so a bad path fails fast instead of as a paid
+    round-trip. Exported from the package entry.
+  - **Wired** through `buildModelParams`, `queueVideo`/`generateVideo`
+    (`cameraTrajectory` option), and `renderVideoFile` (`cameraTrajectory`),
+    each gated on `supportsCameraTrajectory` and validated before the request.
+  - **Fixed (family-wide):** `queueVideo` now omits the `audio` field for
+    `audioConfigurable: false` models (H3 Max family, HappyHorse 1.1, …) instead
+    of always sending `audio: true`, which those models 400 as "does not support
+    audio configuration". `renderVideoFile` already did this.
+
+## 2.26.0 — 2026-09-07
+
+### Added
+
+- **Stream identity lock (reference-to-video).** The stream can now render every
+  beat **reference-to-video** off the cast's character sheets instead of the
+  text-to-video → image-to-video chain. Toggle it with the new **Identity lock**
+  checkbox on the Stream tab, `--r2v` on `venice-video stream`, or an interactive
+  prompt when a new stream starts in a terminal. When on:
+  - every beat (including beat 1) renders on the family's `*-reference-to-video`
+    lane with the cast's `front` + `three-quarter` sheets as `reference_image_urls`
+    — no start frame, no chaining. Character identity is re-anchored each beat and
+    continuity carries through the writing (same place, same people, same moment).
+  - **faces are welcome again.** The i2v chain's "every beat must END on a wide
+    shot, never a close-up" rule (anti-pattern 31: MiniMax i2v dies on a
+    face-filled start frame) is lifted in the writer prompt — R2V takes faces as
+    references, not a start frame.
+  - **references are generated only when it's on.** Missing `front` /
+    `three-quarter` sheets are generated on start (nothing is generated for a
+    plain t2v→i2v stream). Requires a cast (`add-character`) and a locked
+    aesthetic (`set-aesthetic`); turning it on without them is refused before
+    anything bills.
+  - switchable live from the Stream tab (applies to the next beat) and persisted
+    across a resume. Families with an r2v lane: MiniMax H3 Max (+ Turbo, which
+    crosses to the non-turbo R2V), Seedance 2.0, Seedance 2.5, Wan 3.0, Grok
+    Imagine (beats snap to 5/8/10s), Kling O3 Standard. Families without one
+    (LTX 2.5 Fast, Veo 3.1 Fast) show the toggle disabled, and switching to one
+    turns identity lock off.
 
 ## 2.25.0 — 2026-09-07
 

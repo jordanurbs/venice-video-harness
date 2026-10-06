@@ -16,6 +16,7 @@ import type {
   VideoRetrieveStatus,
   VideoQuoteRequest,
   VideoQuoteResponse,
+  CameraKeyframe,
 } from 'venice-video-harness/core/venice/types.js';
 import {
   getVideoModel,
@@ -185,6 +186,13 @@ export interface QueueVideoOptions {
    */
   referenceAudioUrls?: string[];
   /**
+   * Camera-orbit keyframes for MiniMax H3 Max Multi-Angle. Only sent to models
+   * that accept `camera_trajectory` (`supportsCameraTrajectory`); validated in
+   * `buildModelParams` before the request goes out. Build with
+   * `buildOrbitTrajectory` / `buildStartEndTrajectory`.
+   */
+  cameraTrajectory?: CameraKeyframe[];
+  /**
    * Output encoding bitrate mode. Only sent to models that accept it (Seedance
    * 2.x). When omitted, Seedance 2.5 defaults to `'high'` — a large fidelity
    * gain at no extra cost. Pass `'standard'` to opt back into smaller files.
@@ -234,6 +242,14 @@ export async function queueVideo(
     audio: options.audio ?? true,
   };
 
+  // Models with audioConfigurable:false (H3 Max family incl. Multi-Angle,
+  // HappyHorse 1.1, …) return HTTP 400 "This model does not support audio
+  // configuration" when the `audio` field is present. Omit it entirely — the
+  // render still carries the model's native audio.
+  if (modelSpec && modelSpec.audioConfigurable === false) {
+    delete body.audio;
+  }
+
   if (options.imageUrl) body.image_url = options.imageUrl;
   if (options.negativePrompt) body.negative_prompt = options.negativePrompt;
   if (options.audioUrl) body.audio_url = options.audioUrl;
@@ -248,6 +264,7 @@ export async function queueVideo(
     aspectRatio: options.aspectRatio,
     resolution,
     endImageUrl: options.endImageUrl,
+    cameraTrajectory: options.cameraTrajectory,
   });
   Object.assign(body, modelParams);
 

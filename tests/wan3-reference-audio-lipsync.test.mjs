@@ -17,8 +17,8 @@ import {
   MODELS_SUPPORTING_REFERENCE_AUDIO,
   lipSyncModelNeedsKeyframe,
   resolveLipSyncModel,
-} from '../dist/series/types.js';
-import { VIDEO_MODELS, getVideoModel } from '../dist/venice/models.js';
+} from '../packages/core/dist/series/types.js';
+import { VIDEO_MODELS, getVideoModel } from '../packages/core/dist/venice/models.js';
 
 const SENTINEL = '__CAPTURED_QUEUE__';
 const PNG = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]);

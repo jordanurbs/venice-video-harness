@@ -79,7 +79,7 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
       const d = raw as {
         project?: string; episode?: number; status?: StreamStatus; running?: boolean;
         inFlight?: number; lastError?: string; spendUsd?: number; beat?: StreamBeat;
-        buffered?: number; lookahead?: number; autoRefill?: boolean;
+        buffered?: number; lookahead?: number; autoRefill?: boolean; r2vMode?: boolean;
       };
       if (d.project !== slug || (d.episode !== undefined && d.episode !== episodeNumber)) return;
       setAttached(true);
@@ -104,6 +104,7 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
           buffered: d.buffered ?? prev.buffered,
           lookahead: d.lookahead ?? prev.lookahead,
           autoRefill: d.autoRefill ?? prev.autoRefill,
+          r2vMode: d.r2vMode ?? prev.r2vMode,
         };
       });
     });
@@ -146,7 +147,7 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
   // Model switches apply to the NEXT beat. The engine keeps the manifest's
   // `model`/`videoFamily` as the source of truth; the selects are controlled
   // by it so a reload or an SSE snapshot never disagrees with the dropdowns.
-  const configure = async (payload: { writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean }) => {
+  const configure = async (payload: { writer?: string; videoFamily?: string; resolution?: string; lookahead?: number; autoRefill?: boolean; r2vMode?: boolean }) => {
     setError(null);
     const res = await streamControl(slug, 'config', payload);
     if ('error' in res) setError(res.error);
@@ -201,7 +202,7 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
         <span style={{ flex: 1 }} />
         {stream && (
           <span className="dim small loop-meter">
-            {stream.model.i2v.replace(/-image-to-video$/, '')} · {stream.resolution || 'default'} · {stream.duration}/beat · spend ${spend.toFixed(2)}{budget != null && Number.isFinite(budget) ? ` / $${budget.toFixed(2)}` : ' (unbounded)'}
+            {(stream.r2vMode && stream.model.r2v ? stream.model.r2v.replace(/-reference-to-video$/, ' r2v') : stream.model.i2v.replace(/-image-to-video$/, ''))} · {stream.resolution || 'default'} · {stream.duration}/beat · spend ${spend.toFixed(2)}{budget != null && Number.isFinite(budget) ? ` / $${budget.toFixed(2)}` : ' (unbounded)'}
           </span>
         )}
       </div>
@@ -216,8 +217,9 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
 
       <div className="card dim small">
         An infinite story. The writer ({stream?.model.writer ?? 'writer model'}) authors one beat at a time.
-        Beat 1 renders text-to-video; every later beat renders image-to-video from the previous beat's last frame.
-        Nothing repeats, nothing re-renders, no re-anchoring — the picture evolves the way one very long take would.
+        {stream?.r2vMode
+          ? <> Every beat renders reference-to-video off the cast's character sheets, so character identity holds across beats and close-ups are fine. Nothing repeats, nothing re-renders.</>
+          : <> Beat 1 renders text-to-video; every later beat renders image-to-video from the previous beat's last frame. Nothing repeats, nothing re-renders, no re-anchoring — the picture evolves the way one very long take would.</>}
         {stream?.direction ? <> Standing direction: <em>{stream.direction}</em>.</> : null}
       </div>
 
@@ -274,6 +276,32 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
               );
             })()}
           </label>
+
+          {(() => {
+            const fam = stream.choices!.video.find(x => x.id === (stream.videoFamily ?? 'minimax-h3-max'));
+            const r2vModel = fam?.r2v;
+            const r2vAvailable = Boolean(r2vModel);
+            const on = Boolean(stream.r2vMode);
+            return (
+              <div className="small" style={{ display: 'grid', gap: 6 }}>
+                <span><strong>Identity lock</strong> <span className="dim">— render each beat reference-to-video off the cast's character sheets instead of chaining off the last frame. Locks character identity every beat; faces are fine.</span></span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }} title={r2vAvailable ? 'Turn on to render reference-to-video every beat. Character reference sheets are generated on start if missing.' : 'This video family has no reference-to-video lane. Pick one that does (e.g. MiniMax H3 Max, Seedance 2.5, Wan 3.0).'}>
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={!attached || !r2vAvailable}
+                    onChange={ev => configure({ r2vMode: ev.target.checked })}
+                  />
+                  <span>{r2vAvailable ? <>Use reference-to-video (<code>{r2vModel}</code>)</> : 'No reference-to-video lane for this family'}</span>
+                </label>
+                <span className="dim">
+                  {on
+                    ? 'On: every beat renders reference-to-video from the cast\'s sheets. Identity holds across beats and close-ups are allowed. Needs a cast + a locked aesthetic; sheets are generated on start if missing.'
+                    : 'Off: beat 1 is text-to-video, later beats chain image-to-video off the previous last frame (no references, identity can drift).'}
+                </span>
+              </div>
+            );
+          })()}
 
           <div className="small" style={{ display: 'grid', gap: 6 }}>
             <span><strong>Look-ahead buffer</strong> <span className="dim">— beats authored before they render, so a render never waits on the writer.</span></span>
@@ -401,8 +429,8 @@ export function StreamView({ slug, state }: { slug: string; state: ProjectState;
               {b.beat.dialogue ? <span className="dim"> — {b.beat.dialogue.character}: “{b.beat.dialogue.line}”</span> : null}
             </span>
             <span
-              className={b.lane === 't2v-reset' ? 'badge low' : 'dim small'}
-              title={b.lane === 't2v' ? 'Opening beat, text-to-video' : b.lane === 't2v-reset' ? 'Chained render failed repeatedly; this beat re-established the picture from text (identity may drift here)' : 'Chained image-to-video off the previous beat'}
+              className={b.lane === 't2v-reset' ? 'badge low' : b.lane === 'r2v' ? 'badge pass' : 'dim small'}
+              title={b.lane === 't2v' ? 'Opening beat, text-to-video' : b.lane === 't2v-reset' ? 'Chained render failed repeatedly; this beat re-established the picture from text (identity may drift here)' : b.lane === 'r2v' ? 'Identity lock — reference-to-video off the cast\'s character sheets (no start frame)' : 'Chained image-to-video off the previous beat'}
             >{b.lane}</span>
             <button
               className="ghost"
