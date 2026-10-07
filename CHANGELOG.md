@@ -164,6 +164,22 @@
 
 ### Added
 
+- **40 video lanes from the drift report (#50).** The live catalog listed 51
+  ids the registry didn't. Each added lane's durations and resolutions are
+  what `/video/quote`'s enum errors accept; privacy, aspect ratios and audio
+  flags come from `GET /models`. Quote can't check capability flags, so twins
+  (Seedance 2.0 Fast and 2.5 `-basic`, Grok Imagine and Seedance 2.5 US
+  `-private`) copy every flag from their face-capable base; tier variants
+  (Wan 3.0 Pro and Prime Pro, Wan 2.7 Enhanced, MiniMax H3 Enhanced, Kling V3
+  Turbo, Grok Imagine 1.5 and 1.5 Lite) copy only the request shape and not
+  lane-probed flags like reference-audio lip-sync; Flux 3, Gemini Omni Flash
+  t2v/i2v and Wan 2.2 Enhanced claim nothing beyond the catalog. The ten
+  private-mode lanes are registered as `private`. Each joins the capability
+  sets its base is in. Left out: five video-input lanes (quote rejects them
+  even with a `video_url`), Gemini Omni Flash R2V (reference shape unknown),
+  and the Seedance 1.5 Pro / 2.0 Mini `-basic` lanes, whose face-capable
+  twins aren't registered. The faces-off tests now check every `-basic`
+  entry, not the original three. Test: `tests/registry-drift-additions.test.mjs`.
 - **Wan 3.0 R2V exact lip-sync, in-family.** `resolveLipSyncModel('wan-3-0')`
   now returns `wan-3-0-reference-to-video` instead of falling out to Wan 2.7.
   Wan 3.0 rejects `audio_url`, but it lip-syncs the reference face to a

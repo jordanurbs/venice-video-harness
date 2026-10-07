@@ -1398,6 +1398,309 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 15, supportsReferenceAudio: true, facesOff: true, privacy: 'anonymized', offline: false,
   },
+  // -- Drift triage additions (2026-10-06) --------------------------------------
+  // Lanes the live catalog lists that the registry didn't. Durations and
+  // resolutions are what /video/quote's enum errors accept; privacy, aspect
+  // ratios and audio flags come from GET /models (aspect intersected with the
+  // base lane's where there is one). Capability flags are the only part quote
+  // can't check, so:
+  //   - twins (-basic, -private, Seedance 2.5 US) are the same model served
+  //     differently and copy every flag from the face-capable base;
+  //   - tier variants (Pro, Prime Pro, Enhanced, Turbo, Grok 1.5) copy only the
+  //     request-shape flags; audio input comes from the catalog, and lane-probed
+  //     flags (reference-audio lip-sync, camera trajectory) are NOT inherited;
+  //   - lanes with no registered base claim nothing beyond the catalog, except
+  //     Flux 3 First Last Frame's end frame, which is the lane's purpose.
+  // A wrong `true` is an unbilled 400 at queue; a wrong `false` only sends a
+  // plainer request. Wan 3.0 Pro / Prime Pro also accept 2s, held back like
+  // base Wan 3.0 (closestValidDuration would send 3s shots as 2s).
+  // Not added yet:
+  //   - Gemini Omni Flash 1.1 Edit, HappyHorse 1.0 Edit, Kling V3 Pro/Standard
+  //     Motion Control: quote rejects them even with a video_url, so the
+  //     request shape is unknown.
+  //   - Gemini Omni Flash R2V (1.0 and 1.1): reference shape unknown.
+  //   - Seedance 1.5 Pro and 2.0 Mini -basic: their face-capable twins aren't
+  //     registered, and prompt-builder swaps to the twin on shots with people.
+  { // no registered base
+    id: 'flux-3-first-last-frame-to-video', name: 'Flux 3 First Last Frame', type: 'image-to-video',
+    durations: ['5s', '10s', '15s', '20s'], resolutions: ['720p', '1080p'], aspectRatios: ['auto', '21:9', '16:9', '4:3', '1:1', '3:4', '9:16', '9:21'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
+    maxDurationSec: 20, privacy: 'anonymized', offline: false,
+  },
+  { // no registered base
+    id: 'flux-3-image-to-video', name: 'Flux 3', type: 'image-to-video',
+    durations: ['5s', '10s', '15s', '20s'], resolutions: ['720p', '1080p'], aspectRatios: ['auto', '21:9', '16:9', '4:3', '1:1', '3:4', '9:16', '9:21'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 20, privacy: 'anonymized', offline: false,
+  },
+  { // no registered base
+    id: 'flux-3-text-to-video', name: 'Flux 3', type: 'text-to-video',
+    durations: ['5s', '10s', '15s', '20s'], resolutions: ['720p', '1080p'], aspectRatios: ['auto', '21:9', '16:9', '4:3', '1:1', '3:4', '9:16', '9:21'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 20, privacy: 'anonymized', offline: false,
+  },
+  { // no registered base
+    id: 'gemini-omni-flash-1-1-image-to-video', name: 'Gemini Omni Flash 1.1', type: 'image-to-video',
+    durations: ['4s', '6s', '8s', '10s'], resolutions: ['720p', '360p', '1080p', '4k'], aspectRatios: [],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  { // no registered base
+    id: 'gemini-omni-flash-1-1-text-to-video', name: 'Gemini Omni Flash 1.1', type: 'text-to-video',
+    durations: ['4s', '6s', '8s', '10s'], resolutions: ['720p', '360p', '1080p', '4k'], aspectRatios: ['16:9', '9:16'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  { // no registered base
+    id: 'gemini-omni-flash-image-to-video', name: 'Gemini Omni Flash', type: 'image-to-video',
+    durations: ['4s', '6s', '8s', '10s'], resolutions: [], aspectRatios: ['16:9', '9:16'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  { // no registered base
+    id: 'gemini-omni-flash-text-to-video', name: 'Gemini Omni Flash', type: 'text-to-video',
+    durations: ['4s', '6s', '8s', '10s'], resolutions: [], aspectRatios: ['16:9', '9:16'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'anonymized', offline: false,
+  },
+  { // shape from grok-imagine-image-to-video
+    id: 'grok-imagine-1-5-image-to-video-private', name: 'Grok Imagine 1.5 (private)', type: 'image-to-video',
+    durations: ['1s', '2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['480p', '720p', '1080p'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'private', offline: false,
+  },
+  { // shape from grok-imagine-image-to-video
+    id: 'grok-imagine-1-5-lite-image-to-video', name: 'Grok Imagine 1.5 Lite', type: 'image-to-video',
+    durations: ['1s', '2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['480p', '720p', '1080p'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'private', offline: false,
+  },
+  { // shape from grok-imagine-text-to-video
+    id: 'grok-imagine-1-5-lite-text-to-video', name: 'Grok Imagine 1.5 Lite', type: 'text-to-video',
+    durations: ['1s', '2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['480p', '720p', '1080p'], aspectRatios: ['16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'private', offline: false,
+  },
+  { // shape from grok-imagine-reference-to-video
+    id: 'grok-imagine-1-5-reference-to-video-private', name: 'Grok Imagine 1.5 R2V (private)', type: 'image-to-video',
+    durations: ['1s', '2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['480p', '720p'], aspectRatios: ['16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'private', offline: false,
+  },
+  { // shape from grok-imagine-text-to-video
+    id: 'grok-imagine-1-5-text-to-video-private', name: 'Grok Imagine 1.5 (private)', type: 'text-to-video',
+    durations: ['1s', '2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['480p', '720p', '1080p'], aspectRatios: ['16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'private', offline: false,
+  },
+  { // twin of grok-imagine-image-to-video
+    id: 'grok-imagine-image-to-video-private', name: 'Grok Imagine (private)', type: 'image-to-video',
+    durations: ['1s', '2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['480p', '720p'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'private', offline: false,
+  },
+  { // twin of grok-imagine-reference-to-video
+    id: 'grok-imagine-reference-to-video-private', name: 'Grok Imagine R2V (private)', type: 'image-to-video',
+    durations: ['1s', '2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s'], resolutions: ['480p', '720p'], aspectRatios: ['16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 10, privacy: 'private', offline: false,
+  },
+  { // twin of grok-imagine-text-to-video
+    id: 'grok-imagine-text-to-video-private', name: 'Grok Imagine (private)', type: 'text-to-video',
+    durations: ['1s', '2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['480p', '720p'], aspectRatios: ['16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'private', offline: false,
+  },
+  { // twin of grok-imagine-video-to-video
+    id: 'grok-imagine-video-to-video-private', name: 'Grok Imagine (private)', type: 'image-to-video',
+    durations: ['5s', '10s', '15s'], resolutions: ['480p', '720p'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: true,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'private', offline: false,
+  },
+  { // shape from kling-v3-pro-image-to-video
+    id: 'kling-v3-turbo-pro-image-to-video', name: 'Kling V3 Turbo Pro', type: 'image-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: [], aspectRatios: [],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  { // shape from kling-v3-pro-text-to-video
+    id: 'kling-v3-turbo-pro-text-to-video', name: 'Kling V3 Turbo Pro', type: 'text-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: [], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  { // shape from kling-v3-standard-image-to-video
+    id: 'kling-v3-turbo-standard-image-to-video', name: 'Kling V3 Turbo Standard', type: 'image-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: [], aspectRatios: [],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: true,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  { // shape from kling-v3-standard-text-to-video
+    id: 'kling-v3-turbo-standard-text-to-video', name: 'Kling V3 Turbo Standard', type: 'text-to-video',
+    durations: ['3s', '4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: [], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  { // shape from minimax-h3-reference-to-video
+    id: 'minimax-h3-enhanced-reference-to-video', name: 'MiniMax H3 R2V Enhanced', type: 'image-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['2K', '768P'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+    audio: true, audioConfigurable: false, audioInput: true, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  { // shape from minimax-h3-text-to-video
+    id: 'minimax-h3-enhanced-text-to-video', name: 'MiniMax H3 Enhanced', type: 'text-to-video',
+    durations: ['5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['2K', '768P'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  { // twin of seedance-2-0-fast-image-to-video
+    id: 'seedance-2-0-fast-image-to-video-basic', name: 'Seedance 2.0 Fast (basic)', type: 'image-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['480p', '720p'], aspectRatios: [],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, facesOff: true, privacy: 'anonymized', offline: false,
+  },
+  { // twin of seedance-2-0-fast-reference-to-video
+    id: 'seedance-2-0-fast-reference-to-video-basic', name: 'Seedance 2.0 Fast R2V (basic)', type: 'image-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
+    audio: true, audioConfigurable: true, audioInput: true, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, supportsReferenceAudio: true, facesOff: true, privacy: 'anonymized', offline: false,
+  },
+  { // twin of seedance-2-0-fast-text-to-video
+    id: 'seedance-2-0-fast-text-to-video-basic', name: 'Seedance 2.0 Fast (basic)', type: 'text-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s'], resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '4:3', '3:4', '1:1'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, facesOff: true, privacy: 'anonymized', offline: false,
+  },
+  { // twin of seedance-2-5-image-to-video
+    id: 'seedance-2-5-image-to-video-basic', name: 'Seedance 2.5 (basic)', type: 'image-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s', '16s', '17s', '18s', '19s', '20s', '21s', '22s', '23s', '24s', '25s', '26s', '27s', '28s', '29s', '30s'], resolutions: ['480p', '720p', '1080p'], aspectRatios: [],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, facesOff: true, privacy: 'anonymized', offline: false,
+  },
+  { // twin of seedance-2-5-reference-to-video
+    id: 'seedance-2-5-reference-to-video-basic', name: 'Seedance 2.5 R2V (basic)', type: 'image-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s', '16s', '17s', '18s', '19s', '20s', '21s', '22s', '23s', '24s', '25s', '26s', '27s', '28s', '29s', '30s'], resolutions: ['480p', '720p', '1080p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: true, videoInput: true,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, supportsReferenceAudio: true, facesOff: true, privacy: 'anonymized', offline: false,
+  },
+  { // twin of seedance-2-5-text-to-video
+    id: 'seedance-2-5-text-to-video-basic', name: 'Seedance 2.5 (basic)', type: 'text-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s', '16s', '17s', '18s', '19s', '20s', '21s', '22s', '23s', '24s', '25s', '26s', '27s', '28s', '29s', '30s'], resolutions: ['480p', '720p', '1080p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, facesOff: true, privacy: 'anonymized', offline: false,
+  },
+  { // twin of seedance-2-5-image-to-video
+    id: 'seedance-2-5-us-image-to-video-private', name: 'Seedance 2.5 US', type: 'image-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s', '16s', '17s', '18s', '19s', '20s', '21s', '22s', '23s', '24s', '25s', '26s', '27s', '28s', '29s', '30s'], resolutions: ['480p', '720p', '1080p'], aspectRatios: [],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'private', offline: false,
+  },
+  { // twin of seedance-2-5-reference-to-video
+    id: 'seedance-2-5-us-reference-to-video-private', name: 'Seedance 2.5 US R2V', type: 'image-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s', '16s', '17s', '18s', '19s', '20s', '21s', '22s', '23s', '24s', '25s', '26s', '27s', '28s', '29s', '30s'], resolutions: ['480p', '720p', '1080p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: true, videoInput: true,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, supportsReferenceAudio: true, privacy: 'private', offline: false,
+  },
+  { // twin of seedance-2-5-text-to-video
+    id: 'seedance-2-5-us-text-to-video-private', name: 'Seedance 2.5 US', type: 'text-to-video',
+    durations: ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s', '13s', '14s', '15s', '16s', '17s', '18s', '19s', '20s', '21s', '22s', '23s', '24s', '25s', '26s', '27s', '28s', '29s', '30s'], resolutions: ['480p', '720p', '1080p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'private', offline: false,
+  },
+  { // no registered base
+    id: 'wan-2-2-enhanced-image-to-video', name: 'Wan 2.2 Enhanced', type: 'image-to-video',
+    durations: ['5s', '8s'], resolutions: ['720p', '480p'], aspectRatios: [],
+    audio: false, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 8, privacy: 'anonymized', offline: false,
+  },
+  { // shape from wan-2-7-image-to-video
+    id: 'wan-2-7-enhanced-image-to-video', name: 'Wan 2.7 Enhanced', type: 'image-to-video',
+    durations: ['5s', '10s', '15s'], resolutions: ['1080p', '720p'], aspectRatios: [],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  { // shape from wan-2-7-text-to-video
+    id: 'wan-2-7-enhanced-text-to-video', name: 'Wan 2.7 Enhanced', type: 'text-to-video',
+    durations: ['5s', '10s', '15s'], resolutions: ['1080p', '720p'], aspectRatios: ['16:9', '9:16', '1:1'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 15, privacy: 'anonymized', offline: false,
+  },
+  { // shape from wan-3-0-prime-image-to-video
+    id: 'wan-3-0-prime-pro-image-to-video', name: 'Wan 3.0 Prime Pro', type: 'image-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'], resolutions: ['1080p', '2k', '4k'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  { // shape from wan-3-0-prime-reference-to-video
+    id: 'wan-3-0-prime-pro-reference-to-video', name: 'Wan 3.0 Prime Pro Reference', type: 'image-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'], resolutions: ['1080p', '2k', '4k'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  { // shape from wan-3-0-prime-text-to-video
+    id: 'wan-3-0-prime-pro-text-to-video', name: 'Wan 3.0 Prime Pro', type: 'text-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'], resolutions: ['1080p', '2k', '4k'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: true, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  { // shape from wan-3-0-image-to-video
+    id: 'wan-3-0-pro-image-to-video', name: 'Wan 3.0 Pro', type: 'image-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'], resolutions: ['1080p', '2k', '4k'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  { // shape from wan-3-0-reference-to-video
+    id: 'wan-3-0-pro-reference-to-video', name: 'Wan 3.0 Pro Reference', type: 'image-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'], resolutions: ['1080p', '2k', '4k'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
+  { // shape from wan-3-0-text-to-video
+    id: 'wan-3-0-pro-text-to-video', name: 'Wan 3.0 Pro', type: 'text-to-video',
+    durations: ['5s', '10s', '15s', '20s', '25s', '30s'], resolutions: ['1080p', '2k', '4k'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    audio: true, audioConfigurable: false, audioInput: false, videoInput: false,
+    supportsElements: false, supportsReferenceImages: false, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, privacy: 'anonymized', offline: false,
+  },
 ];
 
 // ---- Image Models ---------------------------------------------------------
