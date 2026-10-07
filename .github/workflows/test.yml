@@ -49,9 +49,20 @@ jobs:
       # instead of failing, so CI would pass without running them.
       - name: Install ffmpeg (Linux)
         if: runner.os == 'Linux'
+        # Ubuntu mirrors sometimes hang mid-download rather than fail, which
+        # Acquire::Retries alone doesn't catch: bound each attempt and retry.
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          APT="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for attempt in 1 2 3; do
+            if sudo timeout 180 apt-get $APT update -qq \
+              && sudo timeout 180 apt-get $APT install -y -qq --no-install-recommends ffmpeg; then
+              exit 0
+            fi
+            echo "::warning::apt attempt $attempt failed or timed out; retrying"
+            sleep 10
+          done
+          exit 1
       - name: Install ffmpeg (macOS)
         if: runner.os == 'macOS'
         env:
