@@ -77,13 +77,16 @@ function scene(count) {
 
 /**
  * A client that queues instantly and delivers a shot's video once
- * `ready(shot, events)` says so; until then every poll reports PROCESSING.
- * `events` is the ordered record of 'queue' and 'deliver' per shot.
+ * `ready(shot, events, poll)` says so; until then every poll reports
+ * PROCESSING. `events` is the ordered record of 'queue' and 'deliver' per
+ * shot; `poll` counts this shot's retrieve calls from 1. Polls stay out of
+ * `events`, so the order checks see queues and deliveries only.
  */
 function scriptedClient({ ready = () => true, failQueue = () => false } = {}) {
   const events = [];
   const bodies = new Map();
   const jobs = new Map();
+  const polls = new Map();
   return {
     events,
     bodies,
@@ -102,7 +105,9 @@ function scriptedClient({ ready = () => true, failQueue = () => false } = {}) {
     async postBinaryOrJson(path, body) {
       assert.equal(path, '/api/v1/video/retrieve');
       const n = jobs.get(body.queue_id);
-      if (!ready(n, events)) {
+      const poll = (polls.get(n) ?? 0) + 1;
+      polls.set(n, poll);
+      if (!ready(n, events, poll)) {
         return { contentType: 'application/json', value: { status: 'PROCESSING', execution_duration: 1000 } };
       }
       events.push({ type: 'deliver', shot: n });
@@ -158,10 +163,13 @@ test('independent units are queued together, not one after another', async () =>
   const { dir, sceneDir } = scene(3);
   // Nothing is delivered until all three are queued (one-at-a-time rendering
   // never gets there and times out instead), and shot 1 is held until the
-  // other two are in, so it polls PROCESSING meanwhile.
+  // other two are in. Its first poll always reports PROCESSING: units finish
+  // their setup in any order, so shot 1 can queue last and first poll after
+  // shots 2 and 3 are delivered (one run in seven, measured under load),
+  // which left the held-unit check below with no status line to find.
   const client = scriptedClient({
-    ready: (n, events) => queuedSoFar(events).length === 3
-      && (n !== 1 || events.filter(e => e.type === 'deliver').length === 2),
+    ready: (n, events, poll) => queuedSoFar(events).length === 3
+      && (n !== 1 || (poll > 1 && events.filter(e => e.type === 'deliver').length === 2)),
   });
   const plan = { units: [unit(1), unit(2), unit(3)] };
 
