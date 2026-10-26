@@ -36,6 +36,7 @@ in the other.
 - Direct the beat, do not decorate it: name one intention and derive camera/light/blocking/performance from it. Do not stack "cinematic / epic / 4k" adjectives.
 - Re-anchor every separately-rendered shot to the SAME locked references and restate the character invariant traits (including relative size) in every prompt.
 - State placement explicitly in every prompt: lock each location's landmark geography (`spatialAnchors`) and give every character shot a `blocking` field (position vs named anchors, screen side, depth, facing/eyeline). Keep screen sides and eyelines constant across a scene unless a movement is scripted.
+- The plate is the stage: the video model draws what a location plate shows, not what the shot text asks. Every shot names its `plateView` (the view it is staged on) and `stagedOn`, plus `continuity` (`from`: continuous / later / new-scene, and the `endState`). The workshop plan check blocks a shot whose action touches something its plates cannot show, re-plans it once, and `workshop --approve` refuses blocks or unread plates without `--force`.
 - Prefer native model dialogue (Seedance 2.0, HappyHorse 1.1 with voice-donor references) over exact TTS lip-sync.
 
 ## Modes of operation — the linear pipeline is not the only path

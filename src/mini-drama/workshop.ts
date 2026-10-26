@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
 import { REFERENCE_THUMBNAIL_PX, ThumbnailCache, type Thumbnails } from './thumbnails.js';
 import type { ShotArtifacts, TreatmentProgress } from './treatment.js';
@@ -9,7 +9,9 @@ import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import type { Character, EpisodeScript, Location, SeriesState } from 'venice-video-harness/core/series/types.js';
 import { addEpisode, getCharacterDir, getLocationDir, saveEpisodeScript, saveSeries } from '../series/manager.js';
 import { getProjectLanguage } from 'venice-video-harness/core/series/project-language.js';
-import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence } from 'venice-video-harness/core/venice/text-models.js';
+import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence, resolveIntelligence } from 'venice-video-harness/core/venice/text-models.js';
+import { checkShotPlan, describePlanFindings, type PlanCast, type PlanFinding, type PlanLocation, type PlanShot } from './plan-check.js';
+import { plateMisfitMessage, plateUncheckedMessage, type PlateReader, type PlateReadReport } from './plate-read.js';
 
 export interface WorkshopInputs {
   objective: string;
@@ -202,6 +204,24 @@ export interface WorkshopDraft {
     openQuestions: string[];
   };
   feedbackHistory: string[];
+  /** The plan review: shots against their location plates, and how the shots join up (rule 64). */
+  planReport?: WorkshopPlanReport;
+}
+
+export interface WorkshopPlanReport {
+  findings: PlanFinding[];
+  /** What a vision pass over the real plates of the fixed locations said (`readPlates`), when one ran. */
+  plateFit?: PlateReadReport;
+  /** Shots the plate check moved to the view that carries them. */
+  moved?: string[];
+  /** Automatic re-plans run, and the blocking findings that caused them. */
+  replans?: number;
+  before?: PlanFinding[];
+  /** The automatic re-plan failed (its error); the draft is the one before it. */
+  replanFailed?: string;
+  /** The automatic re-plan was not better, so the draft before it was kept; the alternative is saved here. */
+  replanRejected?: { blocking: number; kept: number; file?: string };
+  checkedAt: string;
 }
 
 export function getWorkshopPath(series: Pick<SeriesState, 'outputDir'>): string {
@@ -218,10 +238,35 @@ function stableSeed(value: string): number {
   return Math.abs([...value].reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) | 0, 0)) % 999_999_999;
 }
 
+const PLATE_VIEWS = new Set(['north', 'east', 'south', 'west']);
+const CONTINUITY_FROM = new Set(['continuous', 'later', 'new-scene']);
+
+/** Drop plan fields a model filled with something the pipeline cannot use (a view that isn't one, a placeholder). */
+export function normalizeShotPlan(shot: Partial<EpisodeScript['shots'][number]>): void {
+  const view = typeof shot.plateView === 'string' ? shot.plateView.trim().toLowerCase() : '';
+  if (PLATE_VIEWS.has(view)) shot.plateView = view as typeof shot.plateView;
+  else delete shot.plateView;
+  if (typeof shot.stagedOn !== 'string' || !shot.stagedOn.trim()) delete shot.stagedOn;
+  const continuity = shot.continuity as { from?: string; endState?: string } | string | undefined;
+  if (typeof continuity === 'string') {
+    shot.continuity = { endState: continuity };
+  } else if (continuity && typeof continuity === 'object') {
+    const from = continuity.from?.trim().toLowerCase();
+    shot.continuity = {
+      ...(from && CONTINUITY_FROM.has(from) ? { from: from as 'continuous' | 'later' | 'new-scene' } : {}),
+      ...(continuity.endState?.trim() ? { endState: continuity.endState.trim() } : {}),
+    };
+    if (!shot.continuity.from && !shot.continuity.endState) delete shot.continuity;
+  } else {
+    delete shot.continuity;
+  }
+}
+
 function normalizeDraft(raw: WorkshopDraft, series: SeriesState, inputs: WorkshopInputs, revision: number, feedback: string[]): WorkshopDraft {
   if (!raw || !raw.script || !Array.isArray(raw.script.shots) || raw.script.shots.length === 0) {
     throw new Error('Workshop response did not contain a usable shot-by-shot script.');
   }
+  for (const shot of raw.script.shots) normalizeShotPlan(shot);
   const language = getProjectLanguage(series);
   raw.productionNotes = {
     ...raw.productionNotes,
@@ -233,11 +278,15 @@ function normalizeDraft(raw: WorkshopDraft, series: SeriesState, inputs: Worksho
     locked: false,
     seed: character.seed ?? stableSeed(character.name),
   }));
-  const locations = (raw.locations ?? []).map(location => ({
-    ...location,
-    slug: location.slug || location.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''),
-    seed: location.seed ?? stableSeed(location.name),
-  }));
+  const locations = (raw.locations ?? []).map(location => {
+    const { near, ...rest } = location;
+    return {
+      ...rest,
+      slug: location.slug || location.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''),
+      seed: location.seed ?? stableSeed(location.name),
+      ...(typeof near === 'string' && near.trim() && !/^omit\b/i.test(near.trim()) ? { near: near.trim() } : {}),
+    };
+  });
   return {
     ...raw,
     version: 1,
@@ -283,6 +332,10 @@ RECURRING PROPS ARE CAST. Any inanimate object that appears in 2+ shots, carries
 OBJECT CAST STAYS OUT OF LOCATIONS. A location's "description", "lightingNotes", and "spatialAnchors" must NEVER mention an object cast member (or a close synonym of one — "a sealed letter on the desk", "the case ledger", "an open ledger"): location plates are generated as EMPTY clean stages, and any hero prop painted into the plate becomes a duplicate look-alike when the real reference is composited in per shot. Generic set dressing (books, papers, instruments) is fine; the specific hero props are not. If the geography needs a named surface for a prop ("the desk where the ledger sits"), name the SURFACE in spatialAnchors ("the detective's desk"), never the prop.
 
 SPATIAL CONSISTENCY IS A FIRST-CLASS DELIVERABLE. Every location gets a "spatialAnchors" field: 3-5 named landmarks and their FIXED positions relative to each other (e.g. "bar counter along the back wall; entrance door opposite it; neon window left of the door as seen from the counter"). Every shot with characters gets a "blocking" field: 1-2 sentences of concrete geometry — each character's position relative to the location's named anchors, their frame side (screen left/center/right) and depth (foreground/background), and their facing/eyeline direction. Across consecutive shots in a scene, characters keep their screen side and relative positions unless a movement is written into the action; preserve screen direction and eyelines (180-degree rule); and always reference the SAME named anchors so "by the window" means one specific window. This geometry is injected verbatim into every image, blocking-plate, and video prompt, so vague blocking becomes spatial drift on screen.
+
+THE PLATE IS THE STAGE. Each location becomes four reference plates (views north, east, south, west), and every shot is generated from its location's plates: the video model draws what a plate shows, not what the shot text asks. So a location must SHOW every place and thing the shots staged there act on (the boat they board and its gangway, the stairs they climb), close to the camera. Give every shot "plateView" (the view it is staged on) and "stagedOn" (what in that view the action uses, and where in the frame). When a beat needs a place no location shows, add a location; never stage it on the nearest one. A place that adjoins another location (the landing at the end of a platform) names it in "near" and repeats its architecture, materials and vehicles.
+
+SHOTS JOIN UP. Plan how each shot connects to the one before it: "continuity": {"from": "continuous" | "later" | "new-scene", "endState": where each person, vehicle and prop is when the shot ends and which way they face and move}. A continuous shot starts in the previous endState. Moving things keep their screen direction across cuts. A vehicle seen in two or more shots is one object cast member, and a journey keeps the same vehicle from shot to shot.
 
 Every shot must have one dramatic intention, specific camera/blocking/light/performance direction, a location slug, a valid duration string, and no background music or sound effects baked into its description. Return ONLY valid JSON matching the requested schema.`;
 }
@@ -333,11 +386,192 @@ ${JSON.stringify({
     structure: [{ name: 'Act or movement', purpose: 'dramatic purpose', beats: ['beat'] }],
     aesthetic: { style: '', palette: '', lighting: '', lensCharacteristics: '', filmStock: '' },
     characters: [{ name: '', gender: 'other', age: '', description: '', fullDescription: '', wardrobe: '', voiceDescription: '', baseTraits: 'omit for people; for object cast: "inanimate object, prop; <exact look>; shown alone on a neutral background, clean product-plate framing, no people, no hands, no faces, no scene furniture"', locked: false, seed: 1 }],
-    locations: [{ name: '', slug: '', description: '', lightingNotes: '', spatialAnchors: 'named landmarks and their fixed relative positions', seed: 1 }],
-    script: { episode: 1, title: '', seriesName: series.name, totalDuration: '', status: 'draft', locations: [], shots: [{ shotNumber: 1, type: 'establishing', environment: 'DAY_EXTERIOR', location: '', duration: '10s', videoModel: 'atmosphere', description: '', blocking: 'each character/object: position vs named location anchors, frame side, depth, facing/eyeline — consistent with adjacent shots', panelDescription: '', characters: [], dialogue: null, sfx: null, cameraMovement: '', transition: 'CUT' }] },
+    locations: [{ name: '', slug: '', description: '', lightingNotes: '', spatialAnchors: 'named landmarks and their fixed relative positions', near: 'omit, or the slug of the location this place adjoins', seed: 1 }],
+    script: { episode: 1, title: '', seriesName: series.name, totalDuration: '', status: 'draft', locations: [], shots: [{ shotNumber: 1, type: 'establishing', environment: 'DAY_EXTERIOR', location: '', plateView: 'north | east | south | west: the view this shot is staged on', stagedOn: 'what in that view the action uses, and where in the frame', continuity: { from: 'continuous | later | new-scene', endState: 'where each person, vehicle and prop is at the end, facing/moving which way' }, duration: '10s', videoModel: 'atmosphere', description: '', blocking: 'each character/object: position vs named location anchors, frame side, depth, facing/eyeline — consistent with adjacent shots', panelDescription: '', characters: [], dialogue: null, sfx: null, cameraMovement: '', transition: 'CUT' }] },
     productionNotes: { delivery: inputs.delivery, audioApproach: '', continuityPriorities: [''], risks: [''], openQuestions: [''] },
     feedbackHistory: [],
   }, null, 2)}`;
+}
+
+export interface WorkshopOptions {
+  /**
+   * Check the draft's shots against their location plates (rule 64) and
+   * re-plan the shots that do not fit. Default on.
+   */
+  planCheck?: boolean;
+  /** Automatic re-plans when shots do not fit their plates (default 1). */
+  planRevisions?: number;
+  /** Vision model for a plate-reading pass (default: the project's vision companion). */
+  visionModel?: string;
+  /**
+   * Which locations' plates already exist and cannot change for this story (a
+   * shared library set). Shots on them are held to what the plates show: a
+   * thing the action needs that they do not show close blocks. Default: none,
+   * so every location is new and a missing thing only warns.
+   */
+  fixedLocation?: (location: Location) => boolean;
+  /** A vision pass over the real plates of the fixed locations. Without one, only the words are checked. */
+  readPlates?: PlateReader;
+  /** The re-plan instruction for blocking shots (how a library makes new places, for example). */
+  replanAdvice?: string;
+}
+
+type WorkshopPlanProvider = (series: SeriesState) => WorkshopOptions;
+let planProvider: WorkshopPlanProvider | null = null;
+
+/**
+ * A downstream layer (a shared library of location sets, for example)
+ * supplies its plan-check options here: which locations' plates are fixed, a
+ * plate reader, re-plan advice. It is asked with the project at every review;
+ * options passed to a call win over it.
+ */
+export function setWorkshopPlanProvider(provider: WorkshopPlanProvider | null): void {
+  planProvider = provider;
+}
+
+/** The plan-check options for a project: the provider's, under the caller's. */
+export function workshopPlanOptions(series: SeriesState, options: WorkshopOptions = {}): WorkshopOptions {
+  return { ...(planProvider?.(series) ?? {}), ...options };
+}
+
+/** The places a draft's shots can stand on: the draft's own, then the project's that the draft does not restate. */
+function planLocations(series: Pick<SeriesState, 'locations'>, draft: WorkshopDraft): Location[] {
+  const drafted = new Set((draft.locations ?? []).map(location => location.slug));
+  return [...(draft.locations ?? []), ...(series.locations ?? []).filter(location => !drafted.has(location.slug))];
+}
+
+function planInputs(series: Pick<SeriesState, 'locations'>, draft: WorkshopDraft, options: WorkshopOptions): { shots: PlanShot[]; locations: PlanLocation[]; cast: PlanCast[] } {
+  return {
+    shots: draft.script.shots,
+    locations: planLocations(series, draft).map(location => ({
+      slug: location.slug,
+      name: location.name,
+      description: location.description,
+      spatialAnchors: location.spatialAnchors,
+      fixed: options.fixedLocation?.(location) ?? false,
+      near: location.near,
+    })),
+    cast: (draft.characters ?? []).map(character => ({ name: character.name, prop: isObjectCast(character), description: character.description })),
+  };
+}
+
+/** Object cast members are cast like people, with traits that start "inanimate object" (RECURRING PROPS ARE CAST). */
+function isObjectCast(character: Character): boolean {
+  return /^\s*inanimate object/i.test(character.baseTraits ?? '');
+}
+
+function planShotId(shot: { shotNumber: number; shotIdSuffix?: string }): string {
+  return `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
+}
+
+function blockingShots(report: WorkshopPlanReport): number {
+  return new Set(report.findings.filter(finding => finding.severity === 'block').map(finding => finding.shot ?? 'plan')).size;
+}
+
+/**
+ * The plan review: a plate-reading pass when the caller supplies one, then the
+ * word checks on every draft. A shot the plates carry from another view is
+ * moved to that view before the words are checked; a shot no view carries is
+ * a blocking finding; a shot the reader could not read is unchecked, never a
+ * pass (rule 46).
+ */
+export async function reviewWorkshopPlan(
+  client: VeniceClient | null,
+  series: SeriesState,
+  draft: WorkshopDraft,
+  callerOptions: WorkshopOptions = {},
+): Promise<WorkshopPlanReport> {
+  const options = workshopPlanOptions(series, callerOptions);
+  const report: WorkshopPlanReport = { findings: [], checkedAt: new Date().toISOString() };
+  const misfits: PlanFinding[] = [];
+  if (client && options.readPlates && options.planCheck !== false) {
+    const locations = planLocations(series, draft);
+    const visionModel = options.visionModel ?? series.intelligence?.visionModel ?? resolveIntelligence(series.intelligence?.model).visionModel;
+    let fit: PlateReadReport;
+    try {
+      fit = await options.readPlates({ client, series, locations, shots: draft.script.shots, visionModel });
+    } catch (err) {
+      const reason = `the plate check failed (${(err as Error).message.split('\n')[0]})`;
+      const fixed = new Set(locations.filter(location => options.fixedLocation?.(location)).map(location => location.slug));
+      fit = {
+        results: [],
+        skipped: [],
+        unchecked: draft.script.shots.filter(shot => shot.location && fixed.has(shot.location)).map(shot => ({ shot: planShotId(shot), location: shot.location!, reason })),
+        model: visionModel,
+      };
+    }
+    report.plateFit = fit;
+    for (const result of fit.results) {
+      const shot = draft.script.shots.find(item => planShotId(item) === result.shot);
+      if (!shot) continue;
+      if (result.fits) {
+        if (result.view && shot.plateView !== result.view) {
+          report.moved = [...(report.moved ?? []), `shot ${result.shot}: ${shot.plateView ?? 'no view'} -> ${result.view} (${result.location})`];
+          shot.plateView = result.view;
+        }
+        // A "fits" never clears a word-check block: vision models read a plate
+        // generously, and the video model acts on the nearest, biggest
+        // candidate in the frame. A new plate set is cheaper than a re-take.
+      } else {
+        misfits.push({
+          shot: result.shot, kind: 'plate-misfit', severity: 'block', location: result.location, noun: result.missing,
+          message: plateMisfitMessage(result),
+        });
+      }
+    }
+  }
+  // The words are checked on the plan as it now stands (after any move above).
+  report.findings = [...checkShotPlan({ ...planInputs(series, draft, options), requirePlateView: true }), ...misfits];
+  return report;
+}
+
+/**
+ * The plan check `workshop --approve` gates on: the words re-checked on the
+ * draft being approved (free), plus the saved plate-reading results (they
+ * cost a call to make). A shot the reader never read stays unchecked.
+ */
+export async function reviewWorkshopPlanForApproval(series: SeriesState, draft: WorkshopDraft, options: WorkshopOptions = {}): Promise<WorkshopPlanReport> {
+  const saved = draft.planReport;
+  const report = await reviewWorkshopPlan(null, series, draft, options);
+  const shots = new Set(draft.script.shots.map(planShotId));
+  report.findings.push(...(saved?.findings ?? []).filter(finding => finding.kind === 'plate-misfit' && (!finding.shot || shots.has(finding.shot))));
+  if (saved?.plateFit) report.plateFit = { ...saved.plateFit, unchecked: (saved.plateFit.unchecked ?? []).filter(entry => shots.has(entry.shot)) };
+  for (const key of ['moved', 'replans', 'before', 'replanFailed', 'replanRejected'] as const) {
+    if (saved?.[key] !== undefined) (report as unknown as Record<string, unknown>)[key] = saved[key];
+  }
+  return report;
+}
+
+export function describeWorkshopPlan(report: WorkshopPlanReport | undefined): string[] {
+  if (!report) return [];
+  const blocking = report.findings.filter(finding => finding.severity === 'block');
+  const unchecked = report.plateFit?.unchecked ?? [];
+  const lines = [
+    blocking.length
+      ? `Plan check: ${blocking.length} problem(s) to fix before any spend.`
+      : unchecked.length
+        ? `Plan check: no problems in the words, but ${unchecked.length} shot(s) were never checked against their plates.`
+        : `Plan check: every shot stands on a plate that shows it${report.plateFit ? ` (plates read by ${report.plateFit.model})` : ' (by the words; no plates were read)'}.`,
+  ];
+  if (report.replans) lines.push(`  Re-planned ${report.replans} time(s) automatically (${report.before?.length ?? 0} problem(s) before).`);
+  if (report.replanFailed) lines.push(`  The automatic re-plan failed (${report.replanFailed}); this is the draft from before it.`);
+  if (report.replanRejected) lines.push(`  The automatic re-plan left ${report.replanRejected.blocking} shot(s) with problems against ${report.replanRejected.kept} here, so this draft was kept${report.replanRejected.file ? ` (the re-plan is saved in ${report.replanRejected.file})` : ''}.`);
+  for (const move of report.moved ?? []) lines.push(`  plateView moved to the view that carries it: ${move}`);
+  lines.push(...describePlanFindings(report.findings).map(line => `  ${line}`));
+  for (const entry of unchecked) lines.push(`  ? ${plateUncheckedMessage(entry)}`);
+  for (const note of report.plateFit?.skipped ?? []) lines.push(`  plate check skipped ${note}`);
+  return lines;
+}
+
+const REPLAN_ADVICE = 'Re-plan only these shots. For each: stage it on a location in "locations" whose description and views show what the action touches, close to the camera (write it into that location and the view that carries the shot), or give it a location that does. A journey keeps one vessel. Keep the rest of the draft as it is.';
+
+function planFeedback(report: WorkshopPlanReport, options: WorkshopOptions): string {
+  const blocking = report.findings.filter(finding => finding.severity === 'block');
+  return [
+    'PLATE CHECK (automatic, from the plan review). These shots are staged on locations whose plates do not show what they need, so the video model would draw the wrong place:',
+    ...blocking.map(finding => `- ${finding.message}`),
+    options.replanAdvice ?? REPLAN_ADVICE,
+  ].join('\n');
 }
 
 export async function generateWorkshop(
@@ -347,22 +581,68 @@ export async function generateWorkshop(
   model: string,
   previous?: WorkshopDraft | null,
   feedback?: string,
+  callerOptions: WorkshopOptions = {},
 ): Promise<WorkshopDraft> {
-  const parsed = await client.chatJson<WorkshopDraft>({
-    model,
-    systemPrompt: buildWorkshopSystemPrompt(series),
-    userPrompt: buildWorkshopUserPrompt(series, inputs, previous, feedback),
-    maxTokens: 16_000,
-    temperature: 0.65,
-    label: 'workshop',
-  });
-  return normalizeDraft(
-    parsed,
-    series,
-    inputs,
-    (previous?.revision ?? 0) + 1,
-    [...(previous?.feedbackHistory ?? []), ...(feedback ? [feedback] : [])],
-  );
+  const options = workshopPlanOptions(series, callerOptions);
+  const revision = (previous?.revision ?? 0) + 1;
+  const history = [...(previous?.feedbackHistory ?? []), ...(feedback ? [feedback] : [])];
+  const develop = async (base: WorkshopDraft | null | undefined, note: string | undefined): Promise<WorkshopDraft> => {
+    const parsed = await client.chatJson<WorkshopDraft>({
+      model,
+      systemPrompt: buildWorkshopSystemPrompt(series),
+      userPrompt: buildWorkshopUserPrompt(series, inputs, base, note),
+      maxTokens: 16_000,
+      temperature: 0.65,
+      label: 'workshop',
+    });
+    return normalizeDraft(parsed, series, inputs, revision, history);
+  };
+
+  let draft = await develop(previous, feedback);
+  if (options.planCheck === false) return draft;
+  let review = await reviewWorkshopPlan(client, series, draft, options);
+  const rounds = options.planRevisions ?? 1;
+  for (let round = 1; round <= rounds && blockingShots(review) > 0; round++) {
+    const count = blockingShots(review);
+    console.log(`  Plan check: ${count} shot(s) staged on plates that do not show them. Re-planning (${round}/${rounds})...`);
+    const { planReport: _plan, ...base } = draft;
+    // The draft above is paid for: a re-plan that fails, or does no better,
+    // never costs it. The draft with fewer problems is kept, and a rejected
+    // re-plan is saved beside the workshop instead of thrown away.
+    let replanned: WorkshopDraft;
+    let next: WorkshopPlanReport;
+    try {
+      replanned = await develop(base as WorkshopDraft, planFeedback(review, options));
+      next = await reviewWorkshopPlan(client, series, replanned, options);
+    } catch (err) {
+      review.replanFailed = (err as Error).message.split('\n')[0];
+      console.warn(`  ⚠ The automatic re-plan failed (${review.replanFailed}); keeping the draft from before it.`);
+      break;
+    }
+    const after = blockingShots(next);
+    if (after >= count) {
+      replanned.planReport = next;
+      const file = await saveRejectedReplan(series, replanned, round).catch(() => undefined);
+      review.replanRejected = { blocking: after, kept: count, ...(file ? { file } : {}) };
+      console.warn(`  ⚠ The re-plan did not reduce the problems (${count} -> ${after} shot(s)); keeping the draft from before it${file ? ` (the re-plan is saved in ${file})` : ''}.`);
+      break;
+    }
+    next.replans = (review.replans ?? 0) + 1;
+    next.before = review.findings.filter(finding => finding.severity === 'block');
+    draft = replanned;
+    review = next;
+  }
+  draft.planReport = review;
+  return draft;
+}
+
+/** A re-plan the workshop did not keep, saved next to workshop.json (it was paid for). */
+async function saveRejectedReplan(series: Pick<SeriesState, 'outputDir'>, draft: WorkshopDraft, round: number): Promise<string> {
+  const dir = join(series.outputDir, 'workshop-replans');
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `revision-${draft.revision}-replan-${round}-${Date.now()}.json`);
+  await writeFile(file, `${JSON.stringify(draft, null, 2)}\n`, 'utf-8');
+  return file;
 }
 
 /**
@@ -421,6 +701,7 @@ export function renderWorkshopMarkdown(draft: WorkshopDraft, progress?: Treatmen
     `- Audio: ${draft.productionNotes.audioApproach}`,
     ...draft.productionNotes.continuityPriorities.map(item => `- Continuity: ${item}`),
     ...draft.productionNotes.risks.map(item => `- Risk: ${item}`),
+    ...(draft.planReport ? ['', '## Plan check', ...describeWorkshopPlan(draft.planReport).map(line => `- ${line.trim()}`)] : []),
     '', '## Open questions',
     ...(draft.productionNotes.openQuestions.length ? draft.productionNotes.openQuestions.map(item => `- ${item}`) : ['- None']),
     '', '## Creative references',
@@ -632,6 +913,7 @@ main{width:min(1180px,calc(100% - 40px));margin:auto;padding:64px 0 100px}.hero{
 <h2>Cast</h2><section class="grid">${characters || '<p class="muted">No characters.</p>'}</section>
 <h2>Locations</h2><section class="grid">${locations || '<p class="muted">No locations.</p>'}</section>
 <section class="split"><div><h2>Production plan</h2><div class="card"><p><strong>Audio:</strong> ${escapeHtml(draft.productionNotes.audioApproach)}</p><h3>Continuity</h3>${htmlList(draft.productionNotes.continuityPriorities)}<h3>Risks</h3>${htmlList(draft.productionNotes.risks)}</div></div><div><h2>Open questions</h2><div class="card">${htmlList(draft.productionNotes.openQuestions)}</div></div></section>
+${draft.planReport ? `<h2>Plan check</h2><section class="card">${htmlList(describeWorkshopPlan(draft.planReport).map(line => line.trim()))}</section>` : ''}
 ${progress ? renderProgressSection(progress) : ''}
 <h2>Creative references</h2>${references}
 <h2>Shot script</h2><table><thead><tr><th>#</th>${progress ? '<th>Output</th>' : ''}<th>Shot</th><th>Direction</th><th>Dialogue</th></tr></thead><tbody>${shots}</tbody></table>

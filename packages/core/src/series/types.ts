@@ -560,6 +560,33 @@ export interface Location {
   seed: number;
   /** Image-generation model used for the reference angles (default nano-banana-pro). */
   referenceModel?: string;
+  /**
+   * The existing location this place adjoins or is part of (its slug), when a
+   * new place is the same place from a new standing point: the landing stage
+   * at the end of a station platform, the deck of a boat another set shows
+   * moored. Plate authoring copies its architecture, materials, light and
+   * vehicles so the two sets read as one place.
+   */
+  near?: string;
+}
+
+/** A location reference view, by compass direction (the plate set's four views, rule 61). */
+export type PlateView = 'north' | 'east' | 'south' | 'west';
+
+/** How a shot joins the shot before it. */
+export interface ShotContinuity {
+  /**
+   * `continuous`: picks up the previous shot's last moment (a cut inside one
+   * action). `later`: same thread, time has passed. `new-scene`: a new place
+   * or thread; nothing carries over.
+   */
+  from?: 'continuous' | 'later' | 'new-scene';
+  /**
+   * Where the people, vehicles and props are when the shot ends, which way
+   * they face and move (screen direction). The next continuous shot starts
+   * from this state.
+   */
+  endState?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -799,6 +826,18 @@ export interface ShotScript {
    * line (rule 49).
    */
   blocking?: string;
+  /**
+   * The location view the shot is staged on: the plate whose frame the
+   * camera looks along. It leads the shot's location references (panel and
+   * video), so the model draws that view's background. The video model draws
+   * what the plate shows, so the action's place and the things it touches
+   * must be in this view, near enough to stage the action (rule 64).
+   */
+  plateView?: PlateView;
+  /** What in that view the action uses ("the ferry's gangway, centre, 3 m away"). Planning text, checked against the location. */
+  stagedOn?: string;
+  /** How this shot joins the previous one, and the state it ends in. */
+  continuity?: ShotContinuity;
   dialogue: { character: string; line: string; delivery?: string } | null;
   sfx: string | null;
   cameraMovement: string;

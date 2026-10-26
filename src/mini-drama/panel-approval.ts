@@ -27,6 +27,7 @@ import { getCharacterDir, getLocation, getLocationDir } from '../series/manager.
 import { DEFAULT_IMAGE_EDIT_MODEL, DEFAULT_IMAGE_GENERATION_MODEL } from 'venice-video-harness/core/series/types.js';
 import { buildImagePrompt } from './prompt-builder.js';
 import { panelFileForShot, shotKey } from './shot-paths.js';
+import { locationPlateOrder } from './reference-slots.js';
 
 // ---- Shapes ----------------------------------------------------------------
 
@@ -114,7 +115,6 @@ export function compareApproval(
 // ---- Disk-backed -------------------------------------------------------------
 
 const CHARACTER_REF_ORDER = ['anchor.png', 'front.png', 'three-quarter.png'];
-const LOCATION_REF_ORDER = ['north.png', 'south.png', 'east.png', 'west.png', 'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
 
 function relativeTo(root: string, path: string): string {
   return path.startsWith(root) ? path.slice(root.length).replace(/^[/\\]/, '') : path;
@@ -143,7 +143,7 @@ export function panelSettingsForShot(series: SeriesState, shot: ShotScript): Pan
     const location = getLocation(series, shot.location);
     if (location) {
       const dir = getLocationDir(series, location.slug);
-      const ref = LOCATION_REF_ORDER.map(f => join(dir, f)).find(p => existsSync(p));
+      const ref = locationPlateOrder(shot).map(f => join(dir, f)).find(p => existsSync(p));
       if (ref) referenceImages.push(relativeTo(series.outputDir, ref));
       locationNote = ` Location: ${location.description}`
         + (location.lightingNotes ? ` Lighting: ${location.lightingNotes}.` : '')

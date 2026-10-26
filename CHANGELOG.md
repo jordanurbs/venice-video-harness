@@ -164,6 +164,35 @@
 
 ### Added
 
+- **Shots are planned against their location plates, and checked before any
+  spend (rule 64).** The video model draws what a reference plate shows, not
+  what the shot text asks: a boarding staged on a station platform whose plates
+  show the ferry only far off boards the train beside the actors instead.
+  - Shots carry `plateView` (the view they are staged on, which now leads
+    their panel and video location references: `locationPlateOrder`),
+    `stagedOn` and `continuity` (`from` + `endState`); locations carry `near`.
+    Core types, workshop prompt and schema, WORKSHOP.html/md. Scripts without
+    them behave as before.
+  - `src/mini-drama/plan-check.ts` (pure, words): each shot's staging nouns
+    against its location's text, view by view. It blocks only what the action
+    touches, a boat part the shot stands on, or a vehicle a clause is about,
+    and only on a location whose plates are fixed; everything else warns. Verbs
+    that are also nouns ("the ferry docks", "pigeons launch") ask for nothing. It
+    also flags a journey whose vessel changes and a vehicle at two places with
+    no reference.
+  - The workshop runs it on every draft and re-plans blocking shots once
+    (`--no-plate-check` skips it). A re-plan that fails keeps the draft before
+    it; one that does no better is saved in `workshop-replans/` and the earlier
+    draft is kept. `workshop --approve` re-checks the words and refuses blocks or
+    unchecked shots without `--force`; `workshop --recheck` re-runs the check
+    without re-drafting.
+  - Extension point: `setWorkshopPlanProvider()` lets a downstream layer mark
+    fixed locations, add a vision pass over their real plates (`readPlates`,
+    `src/mini-drama/plate-read.ts`) and give re-plan advice. A shot the reader
+    could not read is unchecked, never a pass (rule 46). Upstream registers
+    none, so no new paid call runs by default.
+  - Tests: `tests/plan-check.test.mjs`, `tests/plan-check-gates.test.mjs`.
+
 - **`generate-videos` renders up to three units at once.** Units used to
   render one after another, and nearly all of an episode's time went to
   waiting in Venice's queue for one clip at a time. `generateEpisodeVideos`

@@ -31,6 +31,7 @@ import {
 import { padAudioForModel, probeAudioDurationSec } from '../venice/audio-preflight.js';
 import { generateSpeech } from '../venice/audio.js';
 import { getCharacterDir, getLocationDir, getLocation } from '../series/manager.js';
+import { locationPlateOrder } from './reference-slots.js';
 import {
   buildMontagePrompt,
   buildMultiShotPrompt,
@@ -369,10 +370,9 @@ function getLocationRefPath(series: SeriesState, shot: ShotScript): string | und
   const loc = getLocation(series, shot.location);
   if (!loc) return undefined;
   const dir = getLocationDir(series, loc.slug);
-  // North (hero plate) first, then the derived same-room plates, then legacy
-  // names for pre-2026-10-05 projects.
-  const order = ['north.png', 'south.png', 'east.png', 'west.png', 'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
-  for (const f of order) {
+  // The shot's own view first (plateView), else north (hero plate), then the
+  // derived plates, then legacy names for pre-2026-10-05 projects.
+  for (const f of locationPlateOrder(shot)) {
     const p = join(dir, f);
     if (existsSync(p)) return p;
   }

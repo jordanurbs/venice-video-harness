@@ -131,11 +131,15 @@ import {
 import { getProjectLanguage } from 'venice-video-harness/core/series/project-language.js';
 import {
   approveWorkshop,
+  describeWorkshopPlan,
   generateWorkshop,
   getWorkshopPath,
   inventoryReferencePath,
   loadWorkshop,
+  reviewWorkshopPlan,
+  reviewWorkshopPlanForApproval,
   saveWorkshop,
+  workshopPlanOptions,
   type WorkshopInputs,
 } from './workshop.js';
 import { hasTreatment, refreshTreatment } from './treatment.js';
@@ -688,10 +692,13 @@ program
   .option('--model <model>', "Override the project's intelligence model for this run")
   .option('--approve', 'Approve the current workshop and materialize its production state', false)
   .option('--status', 'Show current workshop status without generating', false)
+  .option('--no-plate-check', 'Skip the plan check (shots against their location plates, rule 64) and its automatic re-plan')
+  .option('--recheck', 'Re-run the plan check on the current draft without re-drafting it', false)
+  .option('--force', 'Approve even when the plan check found shots their plates cannot carry, or could not read their plates', false)
   .action(async (opts: {
     project: string; outcome?: string; objective?: string; duration?: string; audience?: string;
     mustInclude?: string; avoid?: string; references?: string; delivery?: string; feedback?: string;
-    model: string; approve: boolean; status: boolean;
+    model: string; approve: boolean; status: boolean; recheck: boolean; plateCheck: boolean; force: boolean;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Project not found.'); process.exit(1); }
@@ -713,8 +720,38 @@ program
       return;
     }
 
+    if (opts.recheck) {
+      if (!existing) throw new Error('No workshop draft exists. Run `venice-video workshop` first.');
+      const intelligence = intelligenceFor(series, opts.model);
+      // A plate reader (a downstream library of location sets) needs a client; the word check does not.
+      const client = workshopPlanOptions(series).readPlates ? new VeniceClient(await getVeniceApiKey()) : null;
+      existing.planReport = await reviewWorkshopPlan(client, series, existing, { visionModel: intelligence.visionModel });
+      await saveWorkshop(series, existing);
+      for (const line of describeWorkshopPlan(existing.planReport)) console.log(`  ${line}`);
+      console.log(`  Approve: venice-video workshop -p "${series.outputDir}" --approve`);
+      return;
+    }
+
     if (opts.approve) {
       if (!existing) throw new Error('No workshop draft exists. Run `venice-video workshop` first.');
+      // A shot staged on a plate that does not show its action draws the
+      // wrong place (rule 64). Stop here, before any spend. The words are
+      // re-checked on the draft being approved; plate-reading results are the
+      // saved ones, and a shot they never read is unchecked.
+      const plan = opts.plateCheck ? await reviewWorkshopPlanForApproval(series, existing) : existing.planReport;
+      const blocking = plan?.findings.filter(finding => finding.severity === 'block') ?? [];
+      const unchecked = plan?.plateFit?.unchecked ?? [];
+      if ((blocking.length || unchecked.length) && !opts.force) {
+        throw new Error([
+          blocking.length
+            ? `The plan check found ${blocking.length} problem(s): shots staged on plates that do not show them.`
+            : `The plan check could not read the plates for ${unchecked.length} shot(s), so nothing says their plates carry them.`,
+          ...describeWorkshopPlan(plan).slice(1),
+          ...(blocking.length ? [`Re-plan: venice-video workshop -p "${series.outputDir}" --feedback "Give each flagged shot a location whose plates show it."`] : []),
+          ...(unchecked.length ? [`Check the plates again: venice-video workshop -p "${series.outputDir}" --recheck`] : []),
+          `Or approve anyway (you checked the plates yourself): venice-video workshop -p "${series.outputDir}" --approve --force`,
+        ].join('\n'));
+      }
       await approveWorkshop(series, existing);
 
       // Materialize the approved cast and locations as ART, not just data.
@@ -813,7 +850,10 @@ program
     const intelligence = intelligenceFor(series, opts.model);
     console.log(`${existing ? 'Revising' : 'Developing'} the complete ${language.projectNounLower} workshop...`);
     console.log(`Intelligence: ${describeIntelligence(intelligence.model)}`);
-    const draft = await generateWorkshop(client, series, inputs, intelligence.model, existing, opts.feedback);
+    const draft = await generateWorkshop(client, series, inputs, intelligence.model, existing, opts.feedback, {
+      planCheck: opts.plateCheck,
+      visionModel: intelligence.visionModel,
+    });
     await saveWorkshop(series, draft);
 
     console.log(`Workshop draft ready — revision ${draft.revision}.`);
@@ -824,6 +864,7 @@ program
     console.log(`  Script: ${draft.script.title} · ${draft.script.totalDuration} · ${draft.script.shots.length} shots`);
     console.log(`  Open questions: ${draft.productionNotes.openQuestions.length}`);
     console.log(`  Delivery: ${draft.productionNotes.delivery === '4k' ? '4K master after assembly' : 'Standard master'}`);
+    for (const line of describeWorkshopPlan(draft.planReport)) console.log(`  ${line}`);
     const htmlPath = join(series.outputDir, 'WORKSHOP.html');
     console.log(`  Review: ${htmlPath}`);
     if (openInDefaultBrowser(htmlPath)) console.log('  Opened workshop in your default browser.');
