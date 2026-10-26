@@ -12,24 +12,24 @@ const { normalizeShotPlan, reviewWorkshopPlan } = await import('../dist/mini-dra
 const STATION = {
   slug: 'harbour-station',
   name: 'Harbour Station',
-  description: 'The station at the harbour\'s edge. A long platform of pale stone. Beside it stands the night sleeper train. The platform ends at a stone landing stage on the water, where a navy-lacquered electric ferry lies moored, its gangway down.',
-  spatialAnchors: 'View 1 (north): the train runs along the RIGHT side of the frame, receding; the platform runs straight away on the LEFT to the landing stage, the ferry and the open bay at its end, with the city far across the water. View 2 (east): the camera faces the train side on, 2 m away: an open door of a carriage. View 3 (south): the platform runs straight away the other way, inland; the train on the LEFT. View 4 (west): one empty rail track, then the station building wall.',
+  description: 'A railway station by the sea: one long stone platform with a sleeper train standing at it. At the platform\'s far end, a landing stage on the water, where an electric ferry waits with its gangway lowered.',
+  spatialAnchors: 'View 1 (north): the train fills the RIGHT edge, receding; the platform runs straight away on the LEFT to the landing stage, the ferry and open water at its end, the town far across the bay. View 2 (east): side-on to the train, 2 m away: a carriage door stands open. View 3 (south): the platform runs straight away inland; the train on the LEFT. View 4 (west): a bare rail track, then the station building wall.',
   fixed: true,
 };
 
 const BAY_DECK = {
   slug: 'bay-deck',
   name: 'Bay Deck',
-  description: 'The camera stands at the bow rail of a small coastal passenger ship with a deck of pale teak planks.',
-  spatialAnchors: 'View 1 (north): the bow rail runs across the bottom of the frame; the bay fills the middle. View 2 (east): open bay. View 3 (south): the camera looks aft along the ship: the deck and the wheelhouse. View 4 (west): channel markers.',
+  description: 'The camera stands at the bow rail of a small passenger ship; the deck is pale teak.',
+  spatialAnchors: 'View 1 (north): the bow rail crosses the bottom of the frame; open bay beyond. View 2 (east): open water. View 3 (south): looking aft along the ship: the deck and the wheelhouse. View 4 (west): channel buoys.',
   fixed: true,
 };
 
 const FERRY_LANDING = {
   slug: 'ferry-landing',
   name: 'Ferry Landing',
-  description: 'The stone landing stage at the end of the station platform. Moored alongside lies the navy ferry, its gangway down onto the stage.',
-  spatialAnchors: 'View 1 (north): the ferry lies moored along the RIGHT half of the frame, side on, its gangway down to the stage at centre, 3 m away. View 2 (east): along the ferry toward its bow. View 3 (south): back up the platform toward the train. View 4 (west): the open bay.',
+  description: 'A stone landing stage at the end of the station platform, with the electric ferry moored alongside and its gangway down.',
+  spatialAnchors: 'View 1 (north): the ferry lies along the RIGHT half of the frame, side on, gangway down to the stage at centre, 3 m away. View 2 (east): along the ferry toward its bow. View 3 (south): back up the platform toward the train. View 4 (west): open water.',
   near: 'harbour-station',
 };
 
@@ -156,8 +156,8 @@ test('an unknown location blocks', () => {
 
 test('view texts parse per compass view', () => {
   const views = viewTexts(STATION);
-  assert.match(views.north, /^the train runs/);
-  assert.match(views.east, /open door/);
+  assert.match(views.north, /^the train fills/);
+  assert.match(views.east, /carriage door stands open/);
 });
 
 
@@ -192,4 +192,46 @@ test('the workshop plan review runs the word checks with no client; fixed plates
   // With no fixed locations (the default) every place is new: a missing thing only warns.
   const open = await reviewWorkshopPlan(null, series, draft);
   assert.equal(open.findings.some(f => f.severity === 'block'), false);
+});
+
+// ---- Review fixes (#77) ----------------------------------------------------
+
+test('a shot finds its location by slug or name, in any case, as the pipeline does', () => {
+  for (const location of ['Harbour Station', 'HARBOUR-STATION', 'harbour-station']) {
+    const findings = checkShotPlan({ shots: [{ shotNumber: 1, location, plateView: 'north', description: 'ANNA walks along the platform.', characters: ['ANNA'] }], locations: [STATION] });
+    assert.equal(findings.some(f => f.kind === 'unknown-location'), false, location);
+  }
+});
+
+test('spatialAnchors that are not text do not crash the check', () => {
+  const odd = { ...STATION, spatialAnchors: { north: 'the platform' } };
+  assert.doesNotThrow(() => checkShotPlan({ shots: [BOARDING], locations: [odd] }));
+});
+
+test('an object cast member in the shot carries itself on a new place; a fixed place still has to stage it', () => {
+  const cast = [{ name: 'THE FERRY', prop: true, description: 'an electric ferry with a lowered gangway' }];
+  const quay = { slug: 'quay', name: 'Quay', description: 'A stone quay.' };
+  const shot = { shotNumber: 1, location: 'quay', description: 'ANNA boards the ferry.', characters: ['ANNA', 'THE FERRY'] };
+  assert.equal(checkShotPlan({ shots: [shot], locations: [quay], cast }).some(f => f.noun === 'ferry'), false);
+  // Not listed in the shot, it is not carried.
+  assert.equal(checkShotPlan({ shots: [{ ...shot, characters: ['ANNA'] }], locations: [quay], cast }).some(f => f.noun === 'ferry'), true);
+  assert.equal(checkShotPlan({ shots: [{ ...shot, location: STATION.slug }], locations: [STATION], cast }).find(f => f.noun === 'ferry')?.severity, 'block');
+});
+
+test('a thing the action touches is close, whatever else the sentence puts far off', () => {
+  const findings = checkShotPlan({ shots: [{ ...BOARDING, description: 'ANNA boards the ferry as the far shore fades.' }], locations: [STATION] });
+  assert.equal(findings.find(f => f.noun === 'ferry')?.severity, 'block');
+});
+
+test('distance words reach only their own phrase in a plate description', () => {
+  const pier = { slug: 'pier', name: 'Pier', description: 'A ferry pier.', spatialAnchors: 'View 1 (north): the ferry gangway in the foreground with the horizon behind.', fixed: true };
+  const findings = checkShotPlan({ shots: [{ shotNumber: 1, location: 'pier', plateView: 'north', description: 'ANNA boards the ferry.', characters: ['ANNA'] }], locations: [pier] });
+  assert.equal(findings.some(f => f.severity === 'block'), false);
+});
+
+test('a deck of cards, a bow tie or a part nobody stands on is not a boat part to block on', () => {
+  const findings = checkShotPlan({ shots: [{ shotNumber: 1, location: SQUARE.slug, plateView: 'north', description: 'ANNA shuffles a deck of cards and straightens her bow tie by the wellhead.', characters: ['ANNA'] }], locations: [SQUARE] });
+  assert.deepEqual(findings.filter(f => f.severity === 'block'), []);
+  const stood = checkShotPlan({ shots: [{ shotNumber: 1, location: SQUARE.slug, plateView: 'north', description: 'ANNA stands on the deck by the wellhead.', characters: ['ANNA'] }], locations: [SQUARE] });
+  assert.equal(stood.find(f => f.noun === 'deck')?.severity, 'block');
 });

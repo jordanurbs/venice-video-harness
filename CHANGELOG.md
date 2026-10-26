@@ -176,16 +176,21 @@
   - `src/mini-drama/plan-check.ts` (pure, words): each shot's staging nouns
     against its location's text, view by view. It blocks only what the action
     touches, a boat part the shot stands on, or a vehicle a clause is about,
-    and only on a location whose plates are fixed; everything else warns. Verbs
-    that are also nouns ("the ferry docks", "pigeons launch") ask for nothing. It
-    also flags a journey whose vessel changes and a vehicle at two places with
-    no reference.
+    and only on a location whose plates are fixed; everything else warns,
+    except a shot on a location neither the draft nor the project has. Verbs
+    that are also nouns ("the ferry docks", "pigeons launch") ask for nothing,
+    distance words reach only their own phrase, locations are found by slug or
+    name in any case, and an object cast member carries itself on a new place.
+    It also flags a journey whose vessel changes and a vehicle at two places
+    with no reference.
   - The workshop runs it on every draft and re-plans blocking shots once
-    (`--no-plate-check` skips it). A re-plan that fails keeps the draft before
-    it; one that does no better is saved in `workshop-replans/` and the earlier
-    draft is kept. `workshop --approve` re-checks the words and refuses blocks or
-    unchecked shots without `--force`; `workshop --recheck` re-runs the check
-    without re-drafting.
+    (`--no-plate-check` skips it). A paid draft is never lost: a check that
+    crashes keeps it unchecked, a re-plan that fails or does no better keeps
+    the earlier draft, and every set-aside draft is saved in
+    `workshop-replans/`. `workshop --approve` re-checks the words and refuses
+    blocks or unchecked shots without `--force`; `workshop --recheck` re-runs
+    the check without re-drafting. The web runner allows `--recheck`, `--force`
+    and `--no-plate-check` for `workshop`.
   - Extension point: `setWorkshopPlanProvider()` lets a downstream layer mark
     fixed locations, add a vision pass over their real plates (`readPlates`,
     `src/mini-drama/plate-read.ts`) and give re-plan advice. A shot the reader

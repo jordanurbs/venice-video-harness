@@ -176,3 +176,38 @@ test('--no-plate-check (planCheck: false) makes one call and no plan report', as
   assert.equal(client.calls.length, 1);
   assert.equal(draft.planReport, undefined);
 });
+
+// ---- Review fixes (#77) ----------------------------------------------------
+
+test('the headline does not call a plan with warnings clean', () => {
+  const lines = describeWorkshopPlan({ findings: [{ shot: '1', kind: 'description-only', severity: 'warn', message: 'look at it' }], checkedAt: 'x' });
+  assert.match(lines[0], /nothing blocks; 1 warning\(s\)/);
+});
+
+test('a plan check that crashes on the first draft keeps the paid draft, unchecked', async () => {
+  const series = film(mkdtempSync(join(tmpdir(), 'replan-crash-')));
+  setWorkshopPlanProvider(() => ({ fixedLocation: () => { throw new Error('boom'); } }));
+  try {
+    const draft = await generateWorkshop(scripted(rawDraft(['orbital-capsule'])), series, INPUTS, 'model-x');
+    assert.equal(draft.planReport.checkFailed, 'boom');
+    assert.match(describeWorkshopPlan(draft.planReport)[0], /the check itself failed/);
+  } finally {
+    setWorkshopPlanProvider(null);
+  }
+});
+
+test('an accepted re-plan saves the draft it replaced', async () => {
+  const series = film(mkdtempSync(join(tmpdir(), 'replan-saved-')));
+  const draft = await generateWorkshop(scripted(rawDraft(['nowhere']), rawDraft(['orbital-capsule'])), series, INPUTS, 'model-x');
+  assert.ok(existsSync(draft.planReport.replacedDraft));
+  assert.equal(JSON.parse(readFileSync(draft.planReport.replacedDraft, 'utf-8')).script.shots[0].location, 'nowhere');
+});
+
+test('a revision does not send the old plan report to the model', async () => {
+  const series = film(mkdtempSync(join(tmpdir(), 'replan-revise-')));
+  const prompts = [];
+  const client = { chatJson: async ({ userPrompt }) => { prompts.push(userPrompt); return rawDraft(['orbital-capsule']); } };
+  const previous = { ...rawDraft(['orbital-capsule']), revision: 1, feedbackHistory: [], planReport: { findings: [{ kind: 'unknown-location', severity: 'block', message: 'STALE-FINDING' }], checkedAt: 'x' } };
+  await generateWorkshop(client, series, INPUTS, 'model-x', previous, 'tighten act two');
+  assert.doesNotMatch(prompts[0], /STALE-FINDING/);
+});

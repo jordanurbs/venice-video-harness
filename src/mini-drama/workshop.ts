@@ -221,6 +221,10 @@ export interface WorkshopPlanReport {
   replanFailed?: string;
   /** The automatic re-plan was not better, so the draft before it was kept; the alternative is saved here. */
   replanRejected?: { blocking: number; kept: number; file?: string };
+  /** The automatic re-plan was better and replaced the draft; the draft it replaced is saved here. */
+  replacedDraft?: string;
+  /** The check itself failed (its error); nothing was checked. */
+  checkFailed?: string;
   checkedAt: string;
 }
 
@@ -333,7 +337,7 @@ OBJECT CAST STAYS OUT OF LOCATIONS. A location's "description", "lightingNotes",
 
 SPATIAL CONSISTENCY IS A FIRST-CLASS DELIVERABLE. Every location gets a "spatialAnchors" field: 3-5 named landmarks and their FIXED positions relative to each other (e.g. "bar counter along the back wall; entrance door opposite it; neon window left of the door as seen from the counter"). Every shot with characters gets a "blocking" field: 1-2 sentences of concrete geometry — each character's position relative to the location's named anchors, their frame side (screen left/center/right) and depth (foreground/background), and their facing/eyeline direction. Across consecutive shots in a scene, characters keep their screen side and relative positions unless a movement is written into the action; preserve screen direction and eyelines (180-degree rule); and always reference the SAME named anchors so "by the window" means one specific window. This geometry is injected verbatim into every image, blocking-plate, and video prompt, so vague blocking becomes spatial drift on screen.
 
-THE PLATE IS THE STAGE. Each location becomes four reference plates (views north, east, south, west), and every shot is generated from its location's plates: the video model draws what a plate shows, not what the shot text asks. So a location must SHOW every place and thing the shots staged there act on (the boat they board and its gangway, the stairs they climb), close to the camera. Give every shot "plateView" (the view it is staged on) and "stagedOn" (what in that view the action uses, and where in the frame). When a beat needs a place no location shows, add a location; never stage it on the nearest one. A place that adjoins another location (the landing at the end of a platform) names it in "near" and repeats its architecture, materials and vehicles.
+THE PLATE IS THE STAGE. Each location becomes four reference plates (views north, east, south, west), and every shot is generated from its location's plates: the video model draws what a plate shows, not what the shot text asks. So a location must SHOW every place and thing the shots staged there act on (the boat they board and its gangway, the stairs they climb), close to the camera; a thing cast as an object cast member is the exception: it carries itself through its own reference, so list it in the shot's "characters" and keep it out of the location (OBJECT CAST STAYS OUT OF LOCATIONS). Give every shot "plateView" (the view it is staged on) and "stagedOn" (what in that view the action uses, and where in the frame). When a beat needs a place no location shows, add a location; never stage it on the nearest one. A place that adjoins another location (the landing at the end of a platform) names it in "near" and repeats its architecture, materials and vehicles.
 
 SHOTS JOIN UP. Plan how each shot connects to the one before it: "continuity": {"from": "continuous" | "later" | "new-scene", "endState": where each person, vehicle and prop is when the shot ends and which way they face and move}. A continuous shot starts in the previous endState. Moving things keep their screen direction across cuts. A vehicle seen in two or more shots is one object cast member, and a journey keeps the same vehicle from shot to shot.
 
@@ -444,9 +448,9 @@ function planInputs(series: Pick<SeriesState, 'locations'>, draft: WorkshopDraft
   return {
     shots: draft.script.shots,
     locations: planLocations(series, draft).map(location => ({
-      slug: location.slug,
-      name: location.name,
-      description: location.description,
+      slug: String(location.slug ?? ''),
+      name: String(location.name ?? ''),
+      description: String(location.description ?? ''),
       spatialAnchors: location.spatialAnchors,
       fixed: options.fixedLocation?.(location) ?? false,
       near: location.near,
@@ -492,11 +496,12 @@ export async function reviewWorkshopPlan(
       fit = await options.readPlates({ client, series, locations, shots: draft.script.shots, visionModel });
     } catch (err) {
       const reason = `the plate check failed (${(err as Error).message.split('\n')[0]})`;
-      const fixed = new Set(locations.filter(location => options.fixedLocation?.(location)).map(location => location.slug));
+      // Locations are found by slug or name, in any case, as getLocation does.
+      const fixed = new Set(locations.filter(location => options.fixedLocation?.(location)).flatMap(location => [location.slug, location.name].map(key => String(key ?? '').toLowerCase())));
       fit = {
         results: [],
         skipped: [],
-        unchecked: draft.script.shots.filter(shot => shot.location && fixed.has(shot.location)).map(shot => ({ shot: planShotId(shot), location: shot.location!, reason })),
+        unchecked: draft.script.shots.filter(shot => shot.location && fixed.has(String(shot.location).toLowerCase())).map(shot => ({ shot: planShotId(shot), location: shot.location!, reason })),
         model: visionModel,
       };
     }
@@ -536,7 +541,7 @@ export async function reviewWorkshopPlanForApproval(series: SeriesState, draft: 
   const shots = new Set(draft.script.shots.map(planShotId));
   report.findings.push(...(saved?.findings ?? []).filter(finding => finding.kind === 'plate-misfit' && (!finding.shot || shots.has(finding.shot))));
   if (saved?.plateFit) report.plateFit = { ...saved.plateFit, unchecked: (saved.plateFit.unchecked ?? []).filter(entry => shots.has(entry.shot)) };
-  for (const key of ['moved', 'replans', 'before', 'replanFailed', 'replanRejected'] as const) {
+  for (const key of ['moved', 'replans', 'before', 'replanFailed', 'replanRejected', 'replacedDraft'] as const) {
     if (saved?.[key] !== undefined) (report as unknown as Record<string, unknown>)[key] = saved[key];
   }
   return report;
@@ -545,16 +550,22 @@ export async function reviewWorkshopPlanForApproval(series: SeriesState, draft: 
 export function describeWorkshopPlan(report: WorkshopPlanReport | undefined): string[] {
   if (!report) return [];
   const blocking = report.findings.filter(finding => finding.severity === 'block');
+  const warnings = report.findings.length - blocking.length;
   const unchecked = report.plateFit?.unchecked ?? [];
   const lines = [
-    blocking.length
-      ? `Plan check: ${blocking.length} problem(s) to fix before any spend.`
-      : unchecked.length
-        ? `Plan check: no problems in the words, but ${unchecked.length} shot(s) were never checked against their plates.`
-        : `Plan check: every shot stands on a plate that shows it${report.plateFit ? ` (plates read by ${report.plateFit.model})` : ' (by the words; no plates were read)'}.`,
+    report.checkFailed
+      ? `Plan check: the check itself failed (${report.checkFailed}); nothing was checked.`
+      : blocking.length
+        ? `Plan check: ${blocking.length} problem(s) to fix before any spend.`
+        : unchecked.length
+          ? `Plan check: no problems in the words, but ${unchecked.length} shot(s) were never checked against their plates.`
+          : warnings
+            ? `Plan check: nothing blocks; ${warnings} warning(s) to look at.`
+            : `Plan check: every shot stands on a plate that shows it${report.plateFit ? ` (plates read by ${report.plateFit.model})` : ' (by the words; no plates were read)'}.`,
   ];
   if (report.replans) lines.push(`  Re-planned ${report.replans} time(s) automatically (${report.before?.length ?? 0} problem(s) before).`);
   if (report.replanFailed) lines.push(`  The automatic re-plan failed (${report.replanFailed}); this is the draft from before it.`);
+  if (report.replacedDraft) lines.push(`  The draft the re-plan replaced is saved in ${report.replacedDraft}.`);
   if (report.replanRejected) lines.push(`  The automatic re-plan left ${report.replanRejected.blocking} shot(s) with problems against ${report.replanRejected.kept} here, so this draft was kept${report.replanRejected.file ? ` (the re-plan is saved in ${report.replanRejected.file})` : ''}.`);
   for (const move of report.moved ?? []) lines.push(`  plateView moved to the view that carries it: ${move}`);
   lines.push(...describePlanFindings(report.findings).map(line => `  ${line}`));
@@ -598,9 +609,18 @@ export async function generateWorkshop(
     return normalizeDraft(parsed, series, inputs, revision, history);
   };
 
-  let draft = await develop(previous, feedback);
+  // A revision works from the previous draft, not from its old plan report.
+  const { planReport: _oldPlan, ...previousDraft } = previous ?? {};
+  let draft = await develop(previous ? previousDraft as WorkshopDraft : previous, feedback);
   if (options.planCheck === false) return draft;
-  let review = await reviewWorkshopPlan(client, series, draft, options);
+  // The draft above is paid for: a check that fails is recorded, not fatal.
+  let review: WorkshopPlanReport;
+  try {
+    review = await reviewWorkshopPlan(client, series, draft, options);
+  } catch (err) {
+    review = { findings: [], checkedAt: new Date().toISOString(), checkFailed: (err as Error).message.split('\n')[0] };
+    console.warn(`  ⚠ The plan check failed (${review.checkFailed}); the draft is kept unchecked.`);
+  }
   const rounds = options.planRevisions ?? 1;
   for (let round = 1; round <= rounds && blockingShots(review) > 0; round++) {
     const count = blockingShots(review);
@@ -622,13 +642,17 @@ export async function generateWorkshop(
     const after = blockingShots(next);
     if (after >= count) {
       replanned.planReport = next;
-      const file = await saveRejectedReplan(series, replanned, round).catch(() => undefined);
+      const file = await saveSetAsideDraft(series, replanned, `replan-${round}`).catch(() => undefined);
       review.replanRejected = { blocking: after, kept: count, ...(file ? { file } : {}) };
       console.warn(`  ⚠ The re-plan did not reduce the problems (${count} -> ${after} shot(s)); keeping the draft from before it${file ? ` (the re-plan is saved in ${file})` : ''}.`);
       break;
     }
+    // The re-plan is better. The draft it replaces was paid for too: keep it.
+    draft.planReport = review;
+    const replaced = await saveSetAsideDraft(series, draft, `before-replan-${round}`).catch(() => undefined);
     next.replans = (review.replans ?? 0) + 1;
     next.before = review.findings.filter(finding => finding.severity === 'block');
+    if (replaced) next.replacedDraft = replaced;
     draft = replanned;
     review = next;
   }
@@ -636,11 +660,11 @@ export async function generateWorkshop(
   return draft;
 }
 
-/** A re-plan the workshop did not keep, saved next to workshop.json (it was paid for). */
-async function saveRejectedReplan(series: Pick<SeriesState, 'outputDir'>, draft: WorkshopDraft, round: number): Promise<string> {
+/** A draft the workshop set aside (a re-plan it did not keep, or the draft a re-plan replaced), saved next to workshop.json: it was paid for. */
+async function saveSetAsideDraft(series: Pick<SeriesState, 'outputDir'>, draft: WorkshopDraft, label: string): Promise<string> {
   const dir = join(series.outputDir, 'workshop-replans');
   await mkdir(dir, { recursive: true });
-  const file = join(dir, `revision-${draft.revision}-replan-${round}-${Date.now()}.json`);
+  const file = join(dir, `revision-${draft.revision}-${label}-${Date.now()}.json`);
   await writeFile(file, `${JSON.stringify(draft, null, 2)}\n`, 'utf-8');
   return file;
 }

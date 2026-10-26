@@ -124,8 +124,8 @@ const LAND_VEHICLES: Term[] = [
 
 /** Parts of a boat: a shot that stands on one is aboard whatever vessel the plate shows. */
 const VESSEL_PARTS: Term[] = [
-  term('deck', ['deck', 'foredeck']),
-  { key: 'bow', pattern: /\b(?:the|at|from|over) bow\b|\bbow (?:rail|point|wave)\b/i },
+  { key: 'deck', pattern: /\b(?:fore)?decks?\b(?!\s+of\s+cards)/i },
+  { key: 'bow', pattern: /\b(?:the|at|from|over) bow\b(?!\s+ties?\b)|\bbow (?:rail|point|wave)\b/i },
   { key: 'stern', pattern: /\b(?:the|at|from|over) stern\b|\baft\b/i },
   term('gangway', ['gangway', 'gangplank']),
   term('wheelhouse', ['wheelhouse']),
@@ -141,7 +141,7 @@ const PLACES: Term[] = [
   { key: 'dock', pattern: new RegExp(`\\b(?:${NOUN_CUE}|stone|wooden|floating|loading|dry)\\s+docks?\\b|\\bdockside\\b|\\bdockyards?\\b`, 'i'), loose: /\bdock(?:s|side|yards?)?\b/i },
   term('quay', ['quay', 'quayside']),
   term('platform', ['platform']),
-  // "The terminus ferry" names a boat, not a station.
+  // A vehicle named for its terminus ("the terminus ferry") is a vehicle, not a station.
   { key: 'station', pattern: /\b(?:terminus(?!\s+(?:ferry|ferries|boat|launch|train|sleeper))|railway\s+station|train\s+station|station\s+building|station\s+platform)(?:e?s)?\b/i },
   term('bridge', ['bridge']),
   term('stairs', ['staircase', 'stairs', 'stairway', 'water steps', 'stone steps', 'marble steps']),
@@ -198,6 +198,13 @@ const DISTANT = /\b(?:far|distant|distance|horizon|beyond|at its end|at the end|
  */
 const DISTANCE_LEAD = /^(?:(?:and|then|while)\s+)?(?:far(?:\s+(?:off|away|out|behind|ahead))?|far across the \w+|in the (?:far )?distance|on the horizon|beyond|across the (?:lagoon|basin|bay|water))$/i;
 const DISTANCE_LEAD_STOP = /\b(?:while|whilst|as|where|when|before|after|until)\b/i;
+/**
+ * Distance words reach only the phrase they sit in: "boards the ferry as the
+ * far shore fades" does not put the ferry far off, nor does "the gangway in the
+ * foreground with the horizon behind". A list keeps one phrase ("the ferry and
+ * the open water at its end" puts both far off).
+ */
+const DISTANCE_PHRASE_BREAK = /\b(?:as|while|whilst|where|when|with|before|after|until)\b/i;
 const RECEDES = /\b(?:runs? straight away|recedes?|receding)\b/i;
 /** A measured distance a few metres off ("3 m beyond it") is close, whatever the wording. */
 const NEAR_METRES = /\b(?:[0-9]|10)(?:\.\d+)?\s?m\b/i;
@@ -208,6 +215,14 @@ function sentences(text: string): string[] {
 
 function clauses(text: string): string[] {
   return sentences(text).flatMap(sentence => sentence.split(/,\s*/)).map(c => c.trim()).filter(Boolean);
+}
+
+/** The phrase of a clause around a position: from the last phrase break before it to the next one after it. */
+function phraseAround(clause: string, at: number): { start: number; text: string } {
+  const breaks = [...clause.matchAll(new RegExp(DISTANCE_PHRASE_BREAK.source, 'gi'))].map(m => m.index ?? 0);
+  const start = Math.max(0, ...breaks.filter(index => index <= at));
+  const end = Math.min(clause.length, ...breaks.filter(index => index > at));
+  return { start, text: clause.slice(start, end) };
 }
 
 /** Where a thing appears in a text: nowhere, only far off, or close. */
@@ -222,10 +237,10 @@ function presence(text: string, pattern: RegExp): 'absent' | 'distant' | 'close'
       const match = pattern.exec(clause);
       if (match) {
         seen = true;
-        const before = clause.slice(0, match.index);
-        const recedes = RECEDES.test(before);
+        const phrase = phraseAround(clause, match.index);
+        const recedes = RECEDES.test(clause.slice(phrase.start, match.index));
         const placedFar = farLead && match.index < (DISTANCE_LEAD_STOP.exec(clause)?.index ?? clause.length);
-        if (NEAR_METRES.test(clause) || (!placedFar && !DISTANT.test(clause) && !recedes)) return 'close';
+        if (NEAR_METRES.test(clause) || (!placedFar && !DISTANT.test(phrase.text) && !recedes)) return 'close';
       }
       farLead = false;
     }
@@ -259,6 +274,16 @@ function contactedIn(text: string, t: Term): boolean {
   return false;
 }
 
+/** The words before a boat part place the shot on or at it ("on the open deck", "at the bow rail"). */
+const PLACED_ON = /\b(?:on|onto|at|in|into|aboard|across|along|from|off|over)\s+(?:(?:the|her|his|its|their|a|an)\s+)?(?:[\w'-]+\s+){0,2}$/i;
+
+function standsOn(text: string, t: Term): boolean {
+  return clauses(text).some(clause => {
+    const match = t.pattern.exec(clause);
+    return Boolean(match) && PLACED_ON.test(clause.slice(0, match!.index));
+  });
+}
+
 /** A vehicle the shot is about: named at the head of a clause, as what moves or waits. */
 function featuredIn(text: string, t: Term): boolean {
   if (!t.vehicle) return false;
@@ -279,7 +304,7 @@ function shotId(shot: PlanShot): string {
 /** The view texts of a location: what each plate shows. Empty when the location does not say. */
 export function viewTexts(location: PlanLocation): Partial<Record<PlateView, string>> {
   const out: Partial<Record<PlateView, string>> = {};
-  const anchors = location.spatialAnchors ?? '';
+  const anchors = typeof location.spatialAnchors === 'string' ? location.spatialAnchors : '';
   const marks = [...anchors.matchAll(/View\s*\d+\s*\((north|east|south|west)\)\s*:\s*/gi)];
   marks.forEach((mark, index) => {
     const start = (mark.index ?? 0) + mark[0].length;
@@ -304,7 +329,7 @@ export interface PlanCheckInput {
   requirePlateView?: boolean;
 }
 
-function staging(shot: PlanShot, loc: PlanLocation): PlanFinding[] {
+function staging(shot: PlanShot, loc: PlanLocation, props: PlanCast[]): PlanFinding[] {
   const findings: PlanFinding[] = [];
   const text = shotText(shot);
   const views = viewTexts(loc);
@@ -317,13 +342,20 @@ function staging(shot: PlanShot, loc: PlanLocation): PlanFinding[] {
   for (const t of STAGING_TERMS) {
     const inShot = presence(text, t.pattern);
     if (inShot === 'absent') continue;
-    const shotFarOff = inShot === 'distant';
     // Only what the action touches, a boat part it stands on, or a vehicle
     // the shot is about has to be on the plate; a thing merely named (looked
-    // at, passing, in a simile) is a warning.
+    // at, passing, in a simile) is a warning. A thing the action touches is
+    // close, whatever else the sentence says is far.
     const touched = contactedIn(text, t);
-    const severe = touched || Boolean(t.part) || featuredIn(text, t);
-    const locationText = `${loc.name}. ${loc.description}. ${loc.spatialAnchors ?? ''}`;
+    const shotFarOff = inShot === 'distant' && !touched;
+    const severe = touched || (Boolean(t.part) && standsOn(text, t)) || featuredIn(text, t);
+    const locationText = `${loc.name}. ${loc.description}. ${typeof loc.spatialAnchors === 'string' ? loc.spatialAnchors : ''}`;
+    // An object cast member in the shot carries itself (its own reference), and
+    // stays out of a new location's text (OBJECT CAST STAYS OUT OF LOCATIONS).
+    // A fixed location's plates still have to stage it.
+    const castProp = props.some(prop => (shot.characters ?? []).some(name => name.toUpperCase() === prop.name.toUpperCase())
+      && placePattern(t).test(`${prop.name} ${prop.description ?? ''}`));
+    if (castProp && !loc.fixed) continue;
     if (!placePattern(t).test(locationText)) {
       findings.push({
         shot: shotId(shot), kind: 'not-in-plates', location: loc.slug, noun: t.key,
@@ -358,15 +390,23 @@ function staging(shot: PlanShot, loc: PlanLocation): PlanFinding[] {
   return findings;
 }
 
+/** Find a location the way the pipeline does (series/manager getLocation): by slug or name, in any case. */
+function locationFinder(locations: PlanLocation[]): (key?: string) => PlanLocation | undefined {
+  const byKey = new Map<string, PlanLocation>();
+  for (const loc of locations) if (typeof loc.name === 'string' && loc.name) byKey.set(loc.name.toLowerCase(), loc);
+  for (const loc of locations) if (typeof loc.slug === 'string' && loc.slug) byKey.set(loc.slug.toLowerCase(), loc);
+  return key => (key ? byKey.get(String(key).toLowerCase()) : undefined);
+}
+
 export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
   const findings: PlanFinding[] = [];
-  const bySlug = new Map(input.locations.map(loc => [loc.slug, loc]));
+  const findLocation = locationFinder(input.locations);
   const props = (input.cast ?? []).filter(member => member.prop);
 
   // Per shot: the place exists, names its view, and its plates show what the action needs.
   for (const shot of input.shots) {
     if (!shot.location) continue;
-    const loc = bySlug.get(shot.location);
+    const loc = findLocation(shot.location);
     if (!loc) {
       findings.push({ shot: shotId(shot), kind: 'unknown-location', severity: 'block', location: shot.location, message: `Shot ${shotId(shot)} names location "${shot.location}", which is not in the plan.` });
       continue;
@@ -375,7 +415,7 @@ export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
     if (input.requirePlateView && loc.fixed && !shot.plateView && VIEWS.some(view => views[view])) {
       findings.push({ shot: shotId(shot), kind: 'no-plate-view', severity: 'warn', location: loc.slug, message: `Shot ${shotId(shot)} does not say which view of ${loc.slug} it is staged on (plateView); the north plate leads by default.` });
     }
-    findings.push(...staging(shot, loc));
+    findings.push(...staging(shot, loc, props));
   }
 
   // The vessel of the journey: the one a shot boards or stands aboard, or the
@@ -383,15 +423,16 @@ export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
   // names a deck, a bow, a gangway, whatever vessel its location's plates
   // show. A vessel merely named (a gondola passing the quay) is not the
   // journey's.
-  let last: { shot: PlanShot; vessels: Set<string>; inferred: boolean } | null = null;
+  let last: { shot: PlanShot; place?: string; vessels: Set<string>; inferred: boolean } | null = null;
   const vesselShots = new Map<string, Set<string>>();
   for (const shot of input.shots) {
     if (shot.continuity?.from === 'new-scene') last = null;
     const text = shotText(shot);
-    const loc = shot.location ? bySlug.get(shot.location) : undefined;
+    const loc = findLocation(shot.location);
+    const place = loc?.slug ?? shot.location;
     for (const vessel of vesselsIn(text)) {
       if (!vesselShots.has(vessel)) vesselShots.set(vessel, new Set());
-      if (shot.location) vesselShots.get(vessel)!.add(shot.location);
+      if (place) vesselShots.get(vessel)!.add(place);
     }
     const boarded = VEHICLES.filter(t => contactedIn(text, t)).map(t => t.key);
     let vessels = new Set([...boarded, ...VEHICLES.filter(t => featuredIn(text, t)).map(t => t.key)]);
@@ -399,26 +440,26 @@ export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
     let inferred = false;
     if (vessels.size === 0 && loc && (VESSEL_PARTS.some(t => hasTerm(text, t)) || /\b(?:aboard|on board)\b/i.test(text))) {
       const views = viewTexts(loc);
-      const shown = shot.plateView && views[shot.plateView] ? `${views[shot.plateView]}. ${loc.description}` : `${loc.description}. ${loc.spatialAnchors ?? ''}`;
+      const shown = shot.plateView && views[shot.plateView] ? `${views[shot.plateView]}. ${loc.description}` : `${loc.description}. ${typeof loc.spatialAnchors === 'string' ? loc.spatialAnchors : ''}`;
       vessels = vesselsIn(shown, 'place');
       inferred = vessels.size > 0;
       aboard = inferred;
     }
     if (vessels.size === 0) {
       // Off the water at another place: the journey is over.
-      if (last && shot.location && shot.location !== last.shot.location) last = null;
+      if (last && place && place !== last.place) last = null;
       continue;
     }
     // Ashore at another place, and not carried straight on from the shot
     // before: a boat seen from there is not the journey's boat.
-    if (last && !aboard && shot.location !== last.shot.location && shot.continuity?.from !== 'continuous') last = null;
+    if (last && !aboard && place !== last.place && shot.continuity?.from !== 'continuous') last = null;
     if (last && (inferred || last.inferred) && ![...vessels].some(v => last!.vessels.has(v))) {
       findings.push({
         shot: shotId(shot), kind: 'vessel-changes', severity: loc?.fixed ? 'block' : 'warn', location: shot.location,
         message: `The boat changes at shot ${shotId(shot)}: shot ${shotId(last.shot)} is ${last.inferred ? `aboard the ${[...last.vessels].join('/')} its plates show` : `on the ${[...last.vessels].join('/')}`}, shot ${shotId(shot)} ${inferred ? `stands on ${shot.location}, whose plates show a ${[...vessels].join('/')}` : `names a ${[...vessels].join('/')}`}. Give the journey one vessel: a location of its own (its deck, its landing) and an object reference for the vessel itself.`,
       });
     }
-    last = { shot, vessels, inferred };
+    last = { shot, place, vessels, inferred };
   }
 
   // A vessel seen at two or more places is drawn fresh at each unless it has its own reference.
@@ -429,7 +470,7 @@ export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
     if (cast) continue;
     findings.push({
       kind: 'recurring-vehicle', severity: 'warn', noun: vessel,
-      message: `The ${vessel} appears at ${[...locations].join(', ')} with no reference of its own; each place will draw a different one. Cast it as an object (prop) and keep its design word for word in every location that shows it.`,
+      message: `The ${vessel} appears at ${[...locations].join(', ')} with no reference of its own; each place will draw a different one. Cast it as an object (prop) and list it in every shot that shows it, so each one carries its reference.`,
     });
   }
   return findings;

@@ -142,6 +142,7 @@ import {
   workshopPlanOptions,
   type WorkshopInputs,
 } from './workshop.js';
+import { locationPlateOrder } from './reference-slots.js';
 import { hasTreatment, refreshTreatment } from './treatment.js';
 import {
   PACKAGE_NAME,
@@ -364,10 +365,10 @@ function resolveLocationRefForShot(
   const location = getLocation(series, shot.location);
   if (!location) return { note: '' };
   const dir = getLocationDir(series, location.slug);
-  // North (hero plate) first, then the derived same-room plates, then legacy
-  // names for pre-2026-10-05 projects.
-  const order = ['north.png', 'south.png', 'east.png', 'west.png', 'wide.png', 'angle-2.png', 'angle-3.png', 'angle-4.png', 'medium.png', 'detail.png'];
-  const refPath = order.map(f => join(dir, f)).find(p => existsSync(p));
+  // The shot's own view first (plateView), else north (hero plate), then the
+  // derived plates, then legacy names for pre-2026-10-05 projects. The same
+  // order as the video slot plan and the panel-approval digest (rule 64).
+  const refPath = locationPlateOrder(shot).map(f => join(dir, f)).find(p => existsSync(p));
   const note = ` Location: ${location.description}`
     + (location.lightingNotes ? ` Lighting: ${location.lightingNotes}.` : '')
     + (location.spatialAnchors ? ` Fixed layout (never rearrange): ${location.spatialAnchors}.` : '');
@@ -737,8 +738,22 @@ program
       // A shot staged on a plate that does not show its action draws the
       // wrong place (rule 64). Stop here, before any spend. The words are
       // re-checked on the draft being approved; plate-reading results are the
-      // saved ones, and a shot they never read is unchecked.
-      const plan = opts.plateCheck ? await reviewWorkshopPlanForApproval(series, existing) : existing.planReport;
+      // saved ones, and a shot they never read is unchecked. --no-plate-check
+      // skips the check.
+      let plan: Awaited<ReturnType<typeof reviewWorkshopPlanForApproval>> | undefined;
+      if (opts.plateCheck) {
+        try {
+          plan = await reviewWorkshopPlanForApproval(series, existing);
+        } catch (err) {
+          if (!opts.force) {
+            throw new Error([
+              `The plan check failed on this draft: ${(err as Error).message.split('\n')[0]}`,
+              `Approve without it (you checked the plates yourself): venice-video workshop -p "${series.outputDir}" --approve --force`,
+            ].join('\n'));
+          }
+          console.warn(`⚠ The plan check failed (${(err as Error).message.split('\n')[0]}); approving anyway (--force).`);
+        }
+      }
       const blocking = plan?.findings.filter(finding => finding.severity === 'block') ?? [];
       const unchecked = plan?.plateFit?.unchecked ?? [];
       if ((blocking.length || unchecked.length) && !opts.force) {

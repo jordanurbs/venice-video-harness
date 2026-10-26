@@ -564,8 +564,9 @@ export interface Location {
    * The existing location this place adjoins or is part of (its slug), when a
    * new place is the same place from a new standing point: the landing stage
    * at the end of a station platform, the deck of a boat another set shows
-   * moored. Plate authoring copies its architecture, materials, light and
-   * vehicles so the two sets read as one place.
+   * moored. Planning text: the workshop records it, so whoever authors the new
+   * place's plates can copy the neighbour's architecture, materials, light and
+   * vehicles and the two sets read as one place.
    */
   near?: string;
 }
