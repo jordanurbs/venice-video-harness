@@ -1,6 +1,6 @@
 import { writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { join, dirname, basename, resolve as resolvePath } from 'node:path';
-import { existsSync, readFileSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { measureLipSyncFidelity, type LipSyncFidelity } from './lip-sync-fidelity.js';
 import type { VeniceClient } from '../venice/client.js';
@@ -688,6 +688,21 @@ function fileToDataUri(filePath: string, mimeType = 'image/png'): string | undef
 }
 
 /**
+ * Reference images over this size are re-encoded as quality-92 JPEG before
+ * they are inlined. Twelve 2 MB PNG references (4 characters x 2 angles + 4
+ * location plates) base64-encode past Venice's request-body limit and the
+ * queue answers HTTP 413; the same stack as JPEG is a fraction of that.
+ */
+const REFERENCE_IMAGE_INLINE_MAX_BYTES = 1_000_000;
+
+async function referenceImageToDataUri(filePath: string): Promise<string | undefined> {
+  if (!filePath || !existsSync(filePath)) return undefined;
+  if (statSync(filePath).size <= REFERENCE_IMAGE_INLINE_MAX_BYTES) return fileToDataUri(filePath);
+  const sharp = (await import('sharp')).default;
+  const jpeg = await sharp(filePath).flatten({ background: '#808080' }).jpeg({ quality: 92 }).toBuffer();
+  return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+}
+/**
  * Thrown when `/video/queue` refused the request and no retry is warranted.
  * `refusal.kind` tells a face-screening refusal (an image problem: nothing
  * queued or charged, the same images fail every time) from a provider
@@ -1030,18 +1045,18 @@ export async function renderVideoFile(
     if (referenceImagePaths.length > refBudget) {
       console.warn(`  ⚠ ${referenceImagePaths.length} reference images exceed ${effectiveModel}'s ${refBudget}-image budget; truncating (check the slot allocator).`);
     }
-    body.reference_image_urls = referenceImagePaths
+    body.reference_image_urls = (await Promise.all(referenceImagePaths
       .slice(0, refBudget)
-      .map(p => p.startsWith('data:') ? p : (fileToDataUri(p) ?? p))
+      .map(async p => p.startsWith('data:') ? p : ((await referenceImageToDataUri(p)) ?? p))))
       .filter(Boolean);
     console.log(`  Reference images (@Image1..@Image${(body.reference_image_urls as string[]).length}): ${(body.reference_image_urls as string[]).length}`);
   }
 
   if (sceneImagePaths && sceneImagePaths.length > 0
     && MODELS_SUPPORTING_SCENE_IMAGES.has(effectiveModel)) {
-    body.scene_image_urls = sceneImagePaths
+    body.scene_image_urls = (await Promise.all(sceneImagePaths
       .slice(0, 4)
-      .map(p => p.startsWith('data:') ? p : (fileToDataUri(p) ?? p))
+      .map(async p => p.startsWith('data:') ? p : ((await referenceImageToDataUri(p)) ?? p))))
       .filter(Boolean);
     console.log(`  Scene images: ${(body.scene_image_urls as string[]).length}`);
   }

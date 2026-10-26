@@ -40,6 +40,10 @@
   `generate-voice-reference` and `generate-audio` call failed with a bare
   "Invalid request parameters". The spec now sets `supportsDuration: false`
   and the field is left out. Clip length follows the prompt.
+- **Big reference stacks failed with HTTP 413.** A montage with four
+  characters (two angles each) and four location plates inlined twelve
+  ~2 MB PNGs, which is past Venice's request-body limit. Reference and scene
+  images over 1 MB are now sent as quality-92 JPEG.
 - **`generate-voice-reference --file` sent non-mp3 clips mislabelled.** An
   `.m4a` or `.wav` was copied byte for byte into `voice-reference.mp3` and
   sent as `audio/mpeg`. Non-mp3 imports are now transcoded.
