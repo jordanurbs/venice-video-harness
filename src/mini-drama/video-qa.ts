@@ -271,7 +271,7 @@ interface PlanUnitLike {
   unitId: string;
   outputFile: string;
   shotNumbers: number[];
-  segments?: Array<{ shotNumber: number; startOffsetSec: number; durationSec: number; outputFile?: string }>;
+  segments?: Array<{ shotNumber: number; shotIdSuffix?: string; startOffsetSec: number; durationSec: number; outputFile?: string }>;
 }
 
 /** Where a rendered unit's footage is on disk. */
@@ -317,17 +317,20 @@ export function sampleUnitFrames(
     const footage = unitFootage(unit, sceneDir);
     if (!footage) continue;
     const duration = footage.master ? ffprobeDurationSec(footage.master) : 0;
-    const segments = unit.segments && unit.segments.length > 0
+    const segments: NonNullable<PlanUnitLike['segments']> = unit.segments && unit.segments.length > 0
       ? unit.segments
       : [{ shotNumber: unit.shotNumbers[0], startOffsetSec: 0, durationSec: duration }];
     for (const [index, seg] of segments.entries()) {
-      const shot = script.shots.find(s => s.shotNumber === seg.shotNumber);
+      // A suffixed insert (13b) shares its base shot's number, and may share its unit.
+      const suffix = seg.shotIdSuffix ?? '';
+      const shot = script.shots.find(s => s.shotNumber === seg.shotNumber && (s.shotIdSuffix ?? '') === suffix)
+        ?? script.shots.find(s => s.shotNumber === seg.shotNumber);
       if (!shot || shot.characters.length === 0) continue;
       const source = footage.master ?? footage.clips![index];
       const atSec = footage.master
         ? Math.min(seg.startOffsetSec + seg.durationSec / 2, Math.max(duration - 0.1, 0))
         : ffprobeDurationSec(source) / 2;
-      const framePath = join(framesDir, `${unit.unitId}-shot-${String(seg.shotNumber).padStart(3, '0')}.png`);
+      const framePath = join(framesDir, `${unit.unitId}-shot-${String(seg.shotNumber).padStart(3, '0')}${suffix}.png`);
       if (extractFrame(source, atSec, framePath)) {
         samples.push({ unitId: unit.unitId, shotNumber: seg.shotNumber, atSec, framePath });
       }

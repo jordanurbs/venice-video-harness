@@ -1437,13 +1437,15 @@ function getShotVideoPath(sceneDir: string, shotId: number | string): string {
 }
 
 /**
- * The clip files a unit's render writes, in shot order. A single writes its
- * shot's own clip, keyed with an insert's suffix ("shot-013b.mp4"; the unit's
- * `outputFile` does not carry the suffix). Montage and multi-shot units cut
- * their clips by shot number.
+ * The clip files a unit's render writes, in shot order. A single and a
+ * montage write each shot's own clip, keyed with an insert's suffix
+ * ("shot-013b.mp4"; a single's `outputFile` does not carry the suffix), so an
+ * insert riding in its base shot's montage gets its own file. Multi-shot units
+ * cut their clips by shot number.
  */
 function unitClipPaths(sceneDir: string, unit: Pick<GenerationUnit, 'unitType'>, shots: ShotScript[]): string[] {
-  return shots.map(shot => getShotVideoPath(sceneDir, unit.unitType === 'single' ? resolveDialogueShotId(shot) : shot.shotNumber));
+  const suffixed = unit.unitType === 'single' || unit.unitType === 'montage';
+  return shots.map(shot => getShotVideoPath(sceneDir, suffixed ? resolveDialogueShotId(shot) : shot.shotNumber));
 }
 
 /**
@@ -1490,9 +1492,10 @@ function adoptCutClips(unit: GenerationUnit, shots: ShotScript[], clipPaths: str
     const durationSec = getVideoDuration(path);
     const segment: GenerationUnitSegment = {
       shotNumber: shots[index].shotNumber,
+      ...(shots[index].shotIdSuffix ? { shotIdSuffix: shots[index].shotIdSuffix } : {}),
       startOffsetSec: Number(offset.toFixed(3)),
       durationSec: Number(durationSec.toFixed(3)),
-      outputFile: `shot-${shotKey(shots[index].shotNumber)}.mp4`,
+      outputFile: basename(path),
     };
     offset += durationSec;
     return segment;
@@ -2049,7 +2052,7 @@ async function renderMontageUnit(
     } else {
       const episode = /episode-(\d+)$/.exec(basename(episodeDir))?.[1];
       console.log(`  ${unit.unitId}: shot cuts exist, skipping (no ${unit.outputFile} on disk; the cuts are kept and nothing is billed).`);
-      console.log(`    To render shots ${unit.shotNumbers.join(', ')} again as one generation: generate-videos -p ${series.outputDir} -e ${episode ? Number(episode) : '<episode>'} --retake ${unit.shotNumbers.join(',')}`);
+      console.log(`    To render shots ${shots.map(shot => resolveDialogueShotId(shot)).join(', ')} again as one generation: generate-videos -p ${series.outputDir} -e ${episode ? Number(episode) : '<episode>'} --retake ${[...new Set(unit.shotNumbers)].join(',')}`);
     }
     return adoptCutClips(unit, shots, shotOutputPaths, unitOutputPath);
   }
@@ -2097,7 +2100,7 @@ async function renderMontageUnit(
   const { shotPaths, libraryPaths, segments } = cutMontageIntoShots({
     montagePath: savedUnitPath,
     unit,
-    shotsByNumber: new Map(shots.map(shot => [shot.shotNumber, shot])),
+    shots,
     sceneDir,
     episodeDir,
     archiveExisting,
@@ -2105,7 +2108,7 @@ async function renderMontageUnit(
   console.log(`  Media library: ${libraryPaths.length} cut(s) + master → ${join(episodeDir, 'media-library', `scene-${String(unit.sceneNumber ?? 1).padStart(2, '0')}`)}`);
 
   for (const segment of segments) {
-    const shot = shots.find(item => item.shotNumber === segment.shotNumber);
+    const shot = shots.find(item => item.shotNumber === segment.shotNumber && (item.shotIdSuffix ?? '') === (segment.shotIdSuffix ?? ''));
     if (!shot) continue;
     await saveSingleShotMetadata(series, shot, join(sceneDir, segment.outputFile), {
       ...prompt,

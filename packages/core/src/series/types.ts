@@ -989,6 +989,8 @@ export type EndFrameStrategy = 'natural' | 'next-panel-target';
 
 export interface GenerationUnitSegment {
   shotNumber: number;
+  /** A suffixed insert's suffix ("b" for 13b), which shares its base shot's number. */
+  shotIdSuffix?: string;
   startOffsetSec: number;
   durationSec: number;
   outputFile: string;
@@ -1004,6 +1006,8 @@ export interface GenerationUnitSegment {
  */
 export interface MontageBeat {
   shotNumber: number;
+  /** A suffixed insert's suffix ("b" for 13b): its clip is `shot-013b.mp4`, not its base shot's. */
+  shotIdSuffix?: string;
   startSec: number;
   endSec: number;
 }

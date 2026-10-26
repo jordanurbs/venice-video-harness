@@ -27,8 +27,9 @@ import { join } from 'node:path';
 process.env.VENICE_VIDEO_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'montage-retake-config-'));
 
 import { archiveRetakeUnits, generateEpisodeVideos } from '../dist/mini-drama/video-generator.js';
-import { unitIndicesForShots } from '../dist/mini-drama/generation-planner.js';
+import { buildGenerationPlan, unitIndicesForShots } from '../dist/mini-drama/generation-planner.js';
 import { cutMontageIntoShots } from '../dist/mini-drama/montage.js';
+import { unitFootage } from '../dist/mini-drama/video-qa.js';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]);
 const ffmpeg = (...args) => execFileSync('ffmpeg', ['-v', 'error', '-y', ...args]);
@@ -205,6 +206,110 @@ test('a montage unit whose clips exist is skipped even when no master carries it
   assert.ok(Math.abs(result.plan.units[0].renderedDurationSec - 2) < 0.2, `rendered length from the clips (${result.plan.units[0].renderedDurationSec})`);
   assert.ok(lines.some(line => /shot cuts exist, skipping \(no montage-s02-001-002\.mp4 on disk; the cuts are kept and nothing is billed\)/.test(line)), lines.join('\n'));
   assert.ok(lines.some(line => /generate-videos -p .+ -e 2 --retake 1,2/.test(line)), lines.join('\n'));
+});
+
+// A continuous run 12, 13, 13b (an insert), 14 in one place renders as one
+// montage unit. Its master shows one colour per shot, so each clip's colour
+// says whose footage it holds.
+const RUN = [
+  { ...makeShot(12), location: 'market' },
+  { ...makeShot(13), location: 'market', continuity: { from: 'continuous' } },
+  { ...makeShot(13, 'b'), type: 'insert', location: 'market', continuity: { from: 'continuous' } },
+  { ...makeShot(14), location: 'market', continuity: { from: 'continuous' } },
+];
+const RUN_COLOURS = { red: [255, 0, 0], lime: [0, 255, 0], blue: [0, 0, 255], white: [255, 255, 255] };
+const RUN_MASTER = (() => {
+  const file = join(mkdtempSync(join(tmpdir(), 'montage-retake-run-')), 'run.mp4');
+  const colours = Object.keys(RUN_COLOURS);
+  ffmpeg(
+    ...colours.flatMap(c => ['-f', 'lavfi', '-i', `color=c=${c}:s=64x36:r=25:d=1`]),
+    '-filter_complex', `${colours.map((_, i) => `[${i}:v]`).join('')}concat=n=${colours.length}:v=1:a=0,format=yuv420p[v]`,
+    '-map', '[v]', '-c:v', 'libx264', file,
+  );
+  return readFileSync(file);
+})();
+const montageSeries = (dir) => ({ ...series(dir), videoDefaults: { ...series(dir).videoDefaults, montageMode: true } });
+
+/** The run's colour nearest to a clip's middle frame. */
+function colourOf(path) {
+  const [r, g, b] = spawnSync('ffmpeg', ['-v', 'error', '-ss', '0.4', '-i', path, '-frames:v', '1', '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'], { maxBuffer: 1 << 20 }).stdout;
+  const distance = ([x, y, z]) => (x - r) ** 2 + (y - g) ** 2 + (z - b) ** 2;
+  return Object.entries(RUN_COLOURS).sort(([, p], [, q]) => distance(p) - distance(q))[0][0];
+}
+
+test('an insert riding in its base shot\'s montage gets its own clip; the skip check, QA footage and re-take see all four', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'montage-retake-insert-'));
+  const episodeDir = join(dir, 'episodes', 'episode-001');
+  const sceneDir = join(episodeDir, 'scene-001');
+  mkdirSync(sceneDir, { recursive: true });
+  const plan = () => buildGenerationPlan({ episode: 1, shots: RUN }, montageSeries(dir));
+  const files = ['shot-012.mp4', 'shot-013.mp4', 'shot-013b.mp4', 'shot-014.mp4'];
+
+  const first = plan();
+  assert.deepEqual(first.units.map(u => [u.unitType, u.shotNumbers.join(',')]), [['montage', '12,13,13,14']]);
+  assert.equal(first.units[0].montageBeats[2].shotIdSuffix, 'b');
+  const master = join(sceneDir, first.units[0].outputFile);
+  let queued = 0;
+  const client = {
+    async post(path, body) {
+      if (path === '/api/v1/video/complete') return {};
+      assert.equal(path, '/api/v1/video/queue', `unexpected POST ${path}`);
+      queued += 1;
+      return { queue_id: `q-${queued}`, model: body.model };
+    },
+    async postBinaryOrJson() { return { contentType: 'video/mp4', value: RUN_MASTER }; },
+  };
+  const { result } = await quietly(() => generateEpisodeVideos(client, montageSeries(dir), RUN, sceneDir, first));
+
+  // One generation, four clips, each with its own shot's footage: 13's clip is not overwritten by 13b's.
+  assert.equal(queued, 1);
+  assert.deepEqual(result.videoPaths.map(p => p.split('/').pop()), files);
+  assert.deepEqual(files.map(f => colourOf(join(sceneDir, f))), ['red', 'lime', 'blue', 'white']);
+  assert.deepEqual(readdirSync(sceneDir).filter(f => /-v\d+\.mp4$/.test(f)), [], 'no clip was archived to make room for another');
+  const segments = result.plan.units[0].segments;
+  assert.deepEqual(segments.map(s => [s.shotNumber, s.shotIdSuffix ?? '', s.outputFile]), [[12, '', files[0]], [13, '', files[1]], [13, 'b', files[2]], [14, '', files[3]]]);
+  // The media library holds the same four, and its manifest describes each from its own shot.
+  const library = join(episodeDir, 'media-library', 'scene-01');
+  assert.ok(files.every(f => existsSync(join(library, f))));
+  const manifest = JSON.parse(readFileSync(join(library, 'manifest.json'), 'utf-8'));
+  assert.deepEqual(manifest.cuts.map(c => [c.shot, c.file, c.type, /marker-(\d+)/.exec(c.description)[1]]), [
+    ['012', files[0], 'action', '12'], ['013', files[1], 'action', '13'], ['013b', files[2], 'insert', '1302'], ['014', files[3], 'action', '14'],
+  ]);
+
+  const nothingQueued = { async post(path) { throw new Error(`nothing may be queued (${path})`); } };
+  // The next run finds all four clips and the master, and skips the unit.
+  const again = await quietly(() => generateEpisodeVideos(nothingQueued, montageSeries(dir), RUN, sceneDir, plan()));
+  assert.deepEqual(again.result.videoPaths.map(p => p.split('/').pop()), files);
+  assert.ok(again.lines.some(line => /montage master and shot cuts exist, skipping/.test(line)), again.lines.join('\n'));
+
+  // With no master under the unit's name it still skips, names the shots with the insert, and QA reads the four clips.
+  const aside = `${master}.aside`;
+  execFileSync('mv', [master, aside]);
+  const noMaster = await quietly(() => generateEpisodeVideos(nothingQueued, montageSeries(dir), RUN, sceneDir, plan()));
+  assert.ok(noMaster.lines.some(line => /To render shots 12, 13, 13b, 14 again as one generation: .* --retake 12,13,14$/.test(line)), noMaster.lines.join('\n'));
+  assert.deepEqual(unitFootage(noMaster.result.plan.units[0], sceneDir).clips.map(p => p.split('/').pop()), files);
+  execFileSync('mv', [aside, master]);
+
+  // The skip check needs the insert's own clip: without it, the unit is rendered again.
+  execFileSync('mv', [join(sceneDir, files[2]), aside]);
+  await assert.rejects(quietly(() => generateEpisodeVideos(nothingQueued, montageSeries(dir), RUN, sceneDir, plan())), /nothing may be queued/);
+  execFileSync('mv', [aside, join(sceneDir, files[2])]);
+
+  // A re-take of 13 archives the master and all four clips, the insert's included.
+  const retakePlan = plan();
+  const archived = archiveRetakeUnits(sceneDir, RUN, retakePlan, unitIndicesForShots(retakePlan, [13]));
+  assert.deepEqual(archived.map(p => p.split('/').pop()), [first.units[0].outputFile, ...files]);
+  assert.ok(files.every(f => existsSync(join(sceneDir, f.replace(/\.mp4$/, '-v1.mp4')))));
+});
+
+test('the cutter refuses a beat map where two shots would write one clip', () => {
+  const scene = cutScene('shared', ['color=c=red:s=64x36:r=25:d=1', 'color=c=blue:s=64x36:r=25:d=1']);
+  const unit = {
+    unitId: 'montage-s01', unitType: 'montage', shotNumbers: [13, 13], outputFile: 'master.mp4', model: 'seedance-2-5-reference-to-video',
+    duration: '2s', sceneNumber: 1, decisionReasons: [], montageBeats: [{ shotNumber: 13, startSec: 0, endSec: 1 }, { shotNumber: 13, startSec: 1, endSec: 2 }],
+  };
+  assert.throws(() => cutMontageIntoShots({ montagePath: scene.master, unit, sceneDir: scene.sceneDir, episodeDir: scene.episodeDir, archiveExisting: () => {} }), /two of its shots would write shot-013\.mp4/);
+  assert.ok(!existsSync(join(scene.sceneDir, 'shot-013.mp4')));
 });
 
 test('a re-take validates before it archives', () => {

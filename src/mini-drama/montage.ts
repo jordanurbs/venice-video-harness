@@ -169,12 +169,18 @@ export function layoutMontageBeats(shots: ShotScript[]): MontageBeat[] {
     const dur = Math.max(1, parseShotDuration(shot.duration));
     beats.push({
       shotNumber: shot.shotNumber,
+      ...(shot.shotIdSuffix ? { shotIdSuffix: shot.shotIdSuffix } : {}),
       startSec: cursor,
       endSec: cursor + dur,
     });
     cursor += dur;
   }
   return beats;
+}
+
+/** A beat's shot id: its number, with a suffixed insert's suffix ("13b"). */
+function montageBeatShotId(beat: Pick<MontageBeat, 'shotNumber' | 'shotIdSuffix'>): number | string {
+  return beat.shotIdSuffix ? `${beat.shotNumber}${beat.shotIdSuffix}` : beat.shotNumber;
 }
 
 /** Format seconds as the vault pack's `M:SS` timestamp. */
@@ -536,7 +542,8 @@ export interface MontageCutResult {
  * `manifest.json` records the detected cuts, the boundaries and any cut
  * nobody planned.
  *
- * Every shot is written twice:
+ * Every shot is written twice, under its shot id with an insert's suffix
+ * (`shot-013b.mp4` for 13b, which shares 13's number):
  *   1. `<sceneDir>/shot-NNN.mp4` — the canonical path every downstream step
  *      (assemble-episode, subtitles, QA) already reads.
  *   2. `<episodeDir>/media-library/scene-NN/shot-NNN.mp4` — the organized
@@ -546,15 +553,22 @@ export interface MontageCutResult {
 export function cutMontageIntoShots(options: {
   montagePath: string;
   unit: GenerationUnit;
-  shotsByNumber: Map<number, ShotScript>;
+  /** The unit's shots: the manifest describes each cut from its own shot, an insert included. */
+  shots?: ShotScript[];
+  shotsByNumber?: Map<number, ShotScript>;
   sceneDir: string;
   episodeDir: string;
   archiveExisting: (path: string) => void;
 }): MontageCutResult {
-  const { montagePath, unit, shotsByNumber, sceneDir, episodeDir, archiveExisting } = options;
+  const { montagePath, unit, shots, shotsByNumber, sceneDir, episodeDir, archiveExisting } = options;
   const beats = unit.montageBeats ?? [];
   if (beats.length === 0) {
     throw new Error(`Montage unit ${unit.unitId} has no beat map — cannot cut.`);
+  }
+  const keys = beats.map(beat => shotKey(montageBeatShotId(beat)));
+  const shared = keys.filter((key, i) => keys.indexOf(key) !== i);
+  if (shared.length > 0) {
+    throw new Error(`Montage unit ${unit.unitId}: two of its shots would write shot-${shared[0]}.mp4; a suffixed insert's beat needs its shotIdSuffix.`);
   }
 
   const renderedSec = ffprobeDuration(montagePath);
@@ -601,7 +615,7 @@ export function cutMontageIntoShots(options: {
 
   for (let i = 0; i < beats.length; i++) {
     const beat = beats[i];
-    const key = shotKey(beat.shotNumber);
+    const key = keys[i];
 
     const canonicalPath = join(sceneDir, `shot-${key}.mp4`);
     archiveExisting(canonicalPath);
@@ -622,6 +636,7 @@ export function cutMontageIntoShots(options: {
 
     segments.push({
       shotNumber: beat.shotNumber,
+      ...(beat.shotIdSuffix ? { shotIdSuffix: beat.shotIdSuffix } : {}),
       startOffsetSec: Number((edgeFrames[i] / video.fps).toFixed(3)),
       durationSec: Number(((edgeFrames[i + 1] - edgeFrames[i]) / video.fps).toFixed(3)),
       outputFile: `shot-${key}.mp4`,
@@ -644,10 +659,11 @@ export function cutMontageIntoShots(options: {
     detectedCuts: detected,
     boundaries,
     extraCuts,
-    cuts: segments.map(seg => {
-      const shot = shotsByNumber.get(seg.shotNumber);
+    cuts: segments.map((seg, i) => {
+      const shot = shots?.find(s => s.shotNumber === seg.shotNumber && (s.shotIdSuffix ?? '') === (seg.shotIdSuffix ?? ''))
+        ?? shotsByNumber?.get(seg.shotNumber);
       return {
-        shot: shotKey(seg.shotNumber),
+        shot: keys[i],
         file: seg.outputFile,
         startSec: seg.startOffsetSec,
         durationSec: seg.durationSec,

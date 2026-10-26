@@ -177,7 +177,10 @@
   - `groupShotsIntoScenes` keeps a `continuity.from: 'continuous'` shot in the
     running scene across a change of location. `new-scene` always splits.
     Scripts without `continuity` group as before. A continuous insert rides in
-    its run.
+    its run and keeps its own clip: montage clips, library copies, the
+    manifest, the skip check and `--retake` archiving are keyed by the shot id
+    with an insert's suffix (`shot-013b.mp4`; `shotIdSuffix` on the beat and
+    the segment).
   - The default montage prompt is a shot list
     (`videoDefaults.montageGrammar: 'shots'`): places named in the first line,
     references in first-appearance order, one `Shot N | a-bs | <place>
@@ -208,7 +211,8 @@
     shot, so a change in grouping renamed units whose shots did not change and
     the next run billed them again. The log names the `--retake` command;
     moving a master aside no longer forces a re-render. `qa-videos` checks
-    such a unit from its clips (`unitFootage`).
+    such a unit from its clips (`unitFootage`); its continuity and speech
+    checks read the shot clips in any case.
   - `generate-videos --retake <shots>` archives (`-vN`) and re-renders the
     whole unit(s) holding those shots, and nothing else. An empty list or a
     shot the script does not have is refused, and the duration preflight runs
