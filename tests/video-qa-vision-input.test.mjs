@@ -1,9 +1,9 @@
 // qa-videos on a 1080p montage episode.
 //
-// Four vision calls came back HTTP 413: frames and reference sheets went to the model as full-size PNGs. Images are
-// now sent at most VISION_MAX_EDGE on the long edge, as JPEG. And every unit join in a montage episode is a change of
-// location, so the boundary-luma check flagged eight "critical" jumps that were ordinary scene cuts; joins that change
-// location are no longer compared. No network.
+// Vision calls came back HTTP 413: frames and reference sheets went to the model as full-size PNGs. Images are now
+// sent at most VISION_MAX_EDGE on the long edge, as JPEG. And every unit join in a montage episode is a change of
+// location, so the boundary-luma check flagged ordinary scene cuts as "critical" jumps; joins that change location
+// are no longer compared. No network.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
@@ -35,9 +35,9 @@ test('a 1080p frame goes to the vision model as a JPEG no wider than VISION_MAX_
 
 test('a join between two locations is a scene cut; a join inside one location is checked', () => {
   const shots = [
-    { shotNumber: 1, location: 'harbour-station' },
-    { shotNumber: 2, location: 'harbour-station' },
-    { shotNumber: 3, location: 'ferry-deck' },
+    { shotNumber: 1, location: 'lighthouse' },
+    { shotNumber: 2, location: 'lighthouse' },
+    { shotNumber: 3, location: 'boathouse' },
     { shotNumber: 4 },
   ];
   assert.equal(isLocationChange({ shotNumbers: [1] }, { shotNumbers: [2] }, shots), false);

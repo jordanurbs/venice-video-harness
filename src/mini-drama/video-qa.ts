@@ -36,7 +36,7 @@
 // ---------------------------------------------------------------------------
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -423,6 +423,14 @@ export async function saveVideoQaReport(episodeDir: string, report: VideoQaRepor
 // never passes through assemble-episode.
 // ---------------------------------------------------------------------------
 
+/**
+ * How a judged cut joins the clip before it when it is not one continuous
+ * action: `later` (the script says time passes) or `unknown` (the script does
+ * not say). Both are judged with the time-cut rule: only a different vehicle,
+ * person or prop counts, and never as critical.
+ */
+export type CutJoin = 'later' | 'unknown';
+
 /** One clip of a cut list, in play order. */
 export interface CutClip {
   id: string;
@@ -435,10 +443,15 @@ export interface CutClip {
   shotIdSuffix?: string;
   /** Where the clip is set (the script's location for a known shot). */
   location?: string;
-  /** The cut into this clip starts a new scene: not checked. */
+  /**
+   * The cut into this clip is not judged: a new scene, or a join the script
+   * cannot vouch for (see markJoins).
+   */
   newScene?: boolean;
-  /** Time passes at the cut into this clip (`continuity.from: later`): checked, never critical. */
-  timeCut?: boolean;
+  /** The cut into this clip is judged, but not as one continuous action. */
+  join?: CutJoin;
+  /** Why the clip cannot be read (a bad time or reference in the cut list): the cuts beside it are unchecked. */
+  problem?: string;
   /** The generation (unit, or source file) the clip was cut from, when known. */
   generation?: string;
   /** The cut mirrors the clip (a shot's `flip`, as assemble-episode applies it). */
@@ -471,8 +484,8 @@ export interface PairContinuityResult {
   kinds: string[];
   /** The two clips come from different generations (the riskier joins). */
   acrossGenerations: boolean;
-  /** Time passes at this cut: only the vehicle, people and props count, and never as critical. */
-  timeCut?: boolean;
+  /** Not one continuous action (a time cut, or a join the script does not state): never critical. */
+  join?: CutJoin;
   /** The check could not run, or the reply did not answer the checklist: the cut is UNCHECKED, not passed. */
   errored?: boolean;
 }
@@ -487,33 +500,47 @@ export function shotForClip<T extends { shotNumber: number; shotIdSuffix?: strin
 }
 
 /**
- * How each cut joins, read from the script. A cut into a shot marked
- * `new-scene` starts a new scene, and so does a change of location when the
- * shot does not say how it joins (scripts written before the continuity
- * field): neither is checked. A `later` cut is a time cut. A cut inside one
- * shot (the same shot on both sides) is continuous. A clip already marked
- * `newScene` keeps it.
+ * How each cut joins the clip before it.
+ * - Between two script shots, the shot's `continuity.from` counts only when
+ *   the clip before is the script's previous shot: an edit that reorders the
+ *   shots, or puts a cutaway between them, is not the join the script
+ *   describes. `continuous` is judged in full, even across a change of
+ *   location; `new-scene` is not judged; `later` is a time cut. With no
+ *   `from` (scripts written before the field) or a join the script does not
+ *   describe, only a cut known to stay in one place (both clips tagged with
+ *   the same location) is judged, and never as critical (`unknown`); with a
+ *   location missing on either side, or two different ones, it is not judged.
+ * - A cut inside one shot (the same shot on both sides) is one action.
+ * - A clip from outside the script follows the cut list: it is judged as
+ *   continuous with the clip before unless it sets `newScene`, or the two are
+ *   set in different locations.
+ * A clip already marked `newScene` keeps it.
  */
 export function markJoins<T extends CutClip>(clips: T[], shots: CutShot[] = []): T[] {
+  const order = new Map(shots.map((shot, index) => [shot, index]));
   return clips.map((clip, i) => {
     if (i === 0 || clip.newScene) return clip;
     const prev = clips[i - 1];
-    if (clip.shot !== undefined && clip.shot === prev.shot && (clip.shotIdSuffix ?? '') === (prev.shotIdSuffix ?? '')) return clip;
-    const shot = shotForClip(shots, clip);
-    const from = shot?.continuity?.from;
+    const a = shotForClip(shots, prev);
+    const b = shotForClip(shots, clip);
+    const before = a?.location ?? prev.location;
+    const after = b?.location ?? clip.location;
+    if (!a || !b) return before && after && before !== after ? { ...clip, newScene: true } : clip;
+    if (a === b) return clip;
+    const from = order.get(a) === order.get(b)! - 1 ? b.continuity?.from : undefined;
+    if (from === 'continuous') return clip;
     if (from === 'new-scene') return { ...clip, newScene: true };
-    if (from === 'later') return { ...clip, timeCut: true };
-    const before = shotForClip(shots, prev)?.location ?? prev.location;
-    const after = shot?.location ?? clip.location;
-    if (!from && before && after && before !== after) return { ...clip, newScene: true };
-    return clip;
+    if (from === 'later') return { ...clip, join: 'later' };
+    return before && after && before === after ? { ...clip, join: 'unknown' } : { ...clip, newScene: true };
   });
 }
 
 /**
  * The plan's shot clips in script order, each tagged with its generation, cut
  * as assemble-episode cuts them (assembler.ts `normalizeClip`): from
- * `trimStart`, to `trimEnd` before the file's end, mirrored by `flip`.
+ * `trimStart`, to `trimEnd` before the file's end, mirrored by `flip`. A shot
+ * whose clip is not on disk stays in the list, so the cuts beside it come out
+ * unchecked instead of its neighbours being paired.
  */
 export function cutListFromPlan(
   plan: { units: Array<{ unitId: string; shotNumbers: number[] }> },
@@ -526,9 +553,8 @@ export function cutListFromPlan(
   for (const shot of shots) {
     const key = `${String(shot.shotNumber).padStart(3, '0')}${shot.shotIdSuffix ?? ''}`;
     const file = join(sceneDir, `shot-${key}.mp4`);
-    if (!existsSync(file)) continue;
     const inSec = shot.trimStart && shot.trimStart > 0 ? shot.trimStart : 0;
-    const outSec = shot.trimEnd && shot.trimEnd > 0 ? ffprobeDurationSec(file) - shot.trimEnd : undefined;
+    const outSec = shot.trimEnd && shot.trimEnd > 0 && existsSync(file) ? ffprobeDurationSec(file) - shot.trimEnd : undefined;
     clips.push({
       id: `shot ${shot.shotNumber}${shot.shotIdSuffix ?? ''}`,
       file,
@@ -556,7 +582,9 @@ function parseShotRef(value: unknown): Pick<CutClip, 'shot' | 'shotIdSuffix'> {
  * A cut list from JSON: `{ "clips": [{ "file", "in", "out", "shot", "location", "newScene", "generation", "flip",
  * "text", "refs", "speech" }] }`, or an EDL with `cuts: [{ master, srcIn, srcOut, shot, location }]`. Relative paths
  * resolve against the first of `baseDir` that has the file. A clip's generation defaults to its source file: two
- * clips cut from one file are one generation.
+ * clips cut from one file are one generation. A clip with no file throws; a bad time or reference in a clip (an out
+ * point that is null, or not after the in point; a reference with no file) leaves that clip with a `problem`, and the
+ * cuts beside it come out unchecked.
  */
 export function cutListFromJson(json: unknown, baseDir: string | string[]): CutClip[] {
   const data = json as { clips?: Array<Record<string, unknown>>; cuts?: Array<Record<string, unknown>> };
@@ -566,21 +594,49 @@ export function cutListFromJson(json: unknown, baseDir: string | string[]): CutC
     if (isAbsolute(file)) return file;
     return bases.map(base => join(base, file)).find(path => existsSync(path)) ?? join(bases[0], file);
   };
-  const seconds = (value: unknown, where: string): number => {
-    const n = Number(value);
-    if (!Number.isFinite(n) || n < 0) throw new Error(`Cut list ${where} is not a time in seconds: ${JSON.stringify(value)}`);
-    return n;
+  const reader = () => {
+    const problems: string[] = [];
+    /** Absent (undefined) is the default; anything that is not a time is a problem, null included. */
+    const time = (value: unknown, name: string, fallback?: number): number | undefined => {
+      if (value === undefined) return fallback;
+      const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
+      if (Number.isFinite(n) && n >= 0) return n;
+      problems.push(`"${name}" is not a time in seconds (${JSON.stringify(value)})`);
+      return fallback;
+    };
+    const span = (inSec: number | undefined, outSec: number | undefined, names: [string, string]) => {
+      if (inSec !== undefined && outSec !== undefined && outSec <= inSec) problems.push(`"${names[1]}" (${outSec}) is not after "${names[0]}" (${inSec})`);
+    };
+    const refs = (value: unknown): Array<{ name: string; file: string }> | undefined => {
+      if (value === undefined) return undefined;
+      if (!Array.isArray(value)) { problems.push('"refs" is not a list'); return undefined; }
+      const out: Array<{ name: string; file: string }> = [];
+      value.forEach((ref: unknown, i) => {
+        const entry = ref && typeof ref === 'object' ? ref as { name?: unknown; file?: unknown } : undefined;
+        if (typeof ref === 'string' && ref) out.push({ name: ref.split('/').pop()!.replace(/\.[a-z]+$/i, ''), file: resolvePath(ref) });
+        else if (entry && typeof entry.file === 'string' && entry.file) out.push({ name: typeof entry.name === 'string' && entry.name ? entry.name : 'object', file: resolvePath(entry.file) });
+        else problems.push(`reference ${i + 1} has no file (${JSON.stringify(ref)})`);
+      });
+      return out;
+    };
+    const problem = () => (problems.length ? { problem: problems.join('; ') } : {});
+    return { time, span, refs, problem };
   };
   if (Array.isArray(data?.clips)) {
     return data.clips.map((clip, index) => {
       const where = `clip ${index + 1}`;
       if (typeof clip?.file !== 'string' || !clip.file) throw new Error(`Cut list ${where} has no "file".`);
       const file = resolvePath(clip.file);
+      const { time, span, refs, problem } = reader();
+      const inSec = time(clip.in, 'in', 0);
+      const outSec = time(clip.out, 'out');
+      span(inSec, outSec, ['in', 'out']);
+      const refList = refs(clip.refs);
       return {
         id: String(clip.id ?? clip.label ?? where),
         file,
-        inSec: seconds(clip.in ?? 0, `${where} "in"`),
-        ...(clip.out !== undefined ? { outSec: seconds(clip.out, `${where} "out"`) } : {}),
+        inSec: inSec ?? 0,
+        ...(outSec !== undefined ? { outSec } : {}),
         ...parseShotRef(clip.shot),
         ...(clip.location ? { location: String(clip.location) } : {}),
         ...(clip.newScene ? { newScene: true } : {}),
@@ -588,11 +644,8 @@ export function cutListFromJson(json: unknown, baseDir: string | string[]): CutC
         ...(clip.flip ? { flip: true } : {}),
         ...(clip.text ? { text: String(clip.text) } : {}),
         ...(clip.speech ? { speech: true } : {}),
-        ...(Array.isArray(clip.refs) ? {
-          refs: (clip.refs as Array<Record<string, unknown> | string>).map(ref => (typeof ref === 'string'
-            ? { name: ref.split('/').pop()!.replace(/\.[a-z]+$/i, ''), file: resolvePath(ref) }
-            : { name: String(ref.name ?? 'object'), file: resolvePath(String(ref.file)) })),
-        } : {}),
+        ...(refList ? { refs: refList } : {}),
+        ...problem(),
       };
     });
   }
@@ -602,18 +655,44 @@ export function cutListFromJson(json: unknown, baseDir: string | string[]): CutC
       if (typeof cut?.master !== 'string' || !cut.master) throw new Error(`Cut list ${where} has no "master".`);
       const file = resolvePath(cut.master);
       const ref = parseShotRef(cut.shot);
+      const { time, span, problem } = reader();
+      const inSec = time(cut.srcIn, 'srcIn', 0);
+      const outSec = time(cut.srcOut, 'srcOut');
+      span(inSec, outSec, ['srcIn', 'srcOut']);
       return {
         id: ref.shot !== undefined ? `shot ${ref.shot}${ref.shotIdSuffix ?? ''}` : where,
         file,
-        inSec: seconds(cut.srcIn ?? 0, `${where} "srcIn"`),
-        ...(cut.srcOut !== undefined ? { outSec: seconds(cut.srcOut, `${where} "srcOut"`) } : {}),
+        inSec: inSec ?? 0,
+        ...(outSec !== undefined ? { outSec } : {}),
         ...ref,
         ...(cut.location ? { location: String(cut.location) } : {}),
         generation: file,
+        ...problem(),
       };
     });
   }
   throw new Error('Not a cut list: expected "clips" (file, in, out) or an EDL with "cuts" (master, srcIn, srcOut).');
+}
+
+/** Whether a path is a file that can be read. */
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why a clip cannot be read, if it cannot: a problem in the cut list, a file
+ * that is not on disk, or a reference image that is not a file. The cuts
+ * beside such a clip are unchecked, and no call is made for them.
+ */
+export function clipProblem(clip: CutClip): string | undefined {
+  if (clip.problem) return clip.problem;
+  if (!isFile(clip.file)) return `${clip.file} is not on disk`;
+  const ref = (clip.refs ?? []).find(item => !isFile(item.file));
+  return ref ? `the reference for ${ref.name} (${ref.file}) is not a file on disk` : undefined;
 }
 
 /** Which cuts of a cut list to check: every cut, or only those between two generations; never into a new scene. */
@@ -636,7 +715,7 @@ Answer each question by looking hard at the frames. Describe before you judge.
 - facing: in A, which way does each person face (and each vehicle head) relative to the clearest landmark (a skyline, a shore, a doorway)? In B? The same, reversed, or n/a? A person seen from the front with the landmark behind them faces away from it.
 - action: does B plausibly continue from where A ends (moored or under way, open or shut, standing or seated)? continues or breaks.
 - light: the same time of day and light, or different?
-The shot text, when given, says what each shot should show; a change the text asks for (she turns round, the ferry pulls away) is not a fault, but a change it asks for that the frames do not show is.
+The shot text, when given, says what each shot should show; a change the text asks for (she turns round, the boat pulls away) is not a fault, but a change it asks for that the frames do not show is.
 Respond with JSON only, every key present: {"vehicle": {"answer": "same" | "different" | "n/a", "note": string}, "people": {"answer": "same" | "different" | "n/a", "note": string}, "props": {"answer": "same" | "different" | "n/a", "note": string}, "facing": {"answer": "same" | "reversed" | "n/a", "note": string}, "action": {"answer": "continues" | "breaks", "note": string}, "light": {"answer": "same" | "different", "note": string}}`;
 
 const PAIR_KEYS = ['vehicle', 'people', 'props', 'facing', 'action', 'light'] as const;
@@ -668,11 +747,14 @@ export interface PairVerdict {
 /**
  * The verdict follows from the answers. On a continuous cut a different
  * vehicle, person or prop, or a reversed facing, is critical, a broken action
- * moderate, a change of light low. On a time cut only a different vehicle,
- * person or prop counts, and as moderate. A reply that does not answer all six
- * questions with an allowed value is unchecked, never a pass (rule 46).
+ * moderate, a change of light low. On a cut that is not one continuous action
+ * (`join`: a time cut, or a join the script does not state) only a different
+ * vehicle, person or prop counts, and as moderate. A reply that does not
+ * answer all six questions with an allowed value is unchecked, never a pass
+ * (rule 46).
  */
-export function verdictFromAnswers(reply: unknown, options: { timeCut?: boolean } = {}): PairVerdict {
+export function verdictFromAnswers(reply: unknown, options: { join?: CutJoin } = {}): PairVerdict {
+  const capped = Boolean(options.join);
   const answers = new Map<PairKey, { answer: string; note: string }>();
   const unanswered: PairKey[] = [];
   for (const key of PAIR_KEYS) {
@@ -691,8 +773,8 @@ export function verdictFromAnswers(reply: unknown, options: { timeCut?: boolean 
     };
   }
   const broken = PAIR_KEYS.filter(key => answers.get(key)!.answer === PAIR_FAULT[key]);
-  const kinds = options.timeCut ? broken.filter(key => key === 'vehicle' || key === 'people' || key === 'props') : broken;
-  const severity = (key: PairKey) => (options.timeCut || key === 'action' ? 'moderate' : key === 'light' ? 'low' : 'critical');
+  const kinds = capped ? broken.filter(key => key === 'vehicle' || key === 'people' || key === 'props') : broken;
+  const severity = (key: PairKey) => (capped || key === 'action' ? 'moderate' : key === 'light' ? 'low' : 'critical');
   const verdict: VideoQaVerdict = kinds.some(key => severity(key) === 'critical') ? 'FLAG-CRITICAL'
     : kinds.some(key => severity(key) === 'moderate') ? 'FLAG-MODERATE'
       : kinds.length ? 'FLAG-LOW' : 'PASS';
@@ -712,6 +794,12 @@ function pictureEndSec(clip: CutClip): number {
   return stream > 0 ? Math.min(out, stream) : out;
 }
 
+/** What the judge is told about a cut that is not one continuous action. */
+const JOIN_NOTES: Record<CutJoin, string> = {
+  later: 'Time passes between shot A and shot B (a time cut): the action need not continue, and positions, facing and light may change. Answer every question all the same.',
+  unknown: 'The script does not say whether shot B follows straight on from shot A: time may pass between them, so positions, facing and light may change. Answer every question all the same.',
+};
+
 /** One vision call on one cut: the end of A against the start of B. */
 export async function checkPairContinuity(
   client: Pick<VeniceClient, 'chatJson'>,
@@ -721,53 +809,59 @@ export async function checkPairContinuity(
   options: { framesDir: string; aText?: string; bText?: string },
 ): Promise<PairContinuityResult> {
   const acrossGenerations = !a.generation || !b.generation || a.generation !== b.generation;
-  const base = { from: a.id, to: b.id, acrossGenerations, ...(b.timeCut ? { timeCut: true } : {}) };
+  const base = { from: a.id, to: b.id, acrossGenerations, ...(b.join ? { join: b.join } : {}) };
   const unchecked = (issue: string): PairContinuityResult => ({ ...base, verdict: 'FLAG-LOW', issues: [issue], kinds: [], errored: true });
   for (const clip of [a, b]) {
-    if (!existsSync(clip.file)) return unchecked(`${clip.id}: ${clip.file} is not on disk`);
+    const problem = clipProblem(clip);
+    if (problem) return unchecked(`${clip.id}: ${problem}`);
   }
-  mkdirSync(options.framesDir, { recursive: true });
-  const aEnd = pictureEndSec(a);
-  const bEnd = pictureEndSec(b);
-  const stamp = `${a.id}-${b.id}`.replace(/[^a-z0-9]+/gi, '-');
-  // A seek lands on the first frame at or after its time: 50 ms before the end
-  // is the last frame at 24-30 fps, and an earlier one is found by stepping back.
-  const frames: Array<[CutClip, number, string]> = [
-    [a, a.inSec + (aEnd - a.inSec) / 2, 'a-mid'],
-    [a, aEnd - 0.05, 'a-last'],
-    [b, Math.min(b.inSec + 0.08, b.inSec + (bEnd - b.inSec) / 2), 'b-first'],
-    [b, b.inSec + (bEnd - b.inSec) / 2, 'b-mid'],
-  ];
-  const images: string[] = [];
-  for (const [clip, at, name] of frames) {
-    const out = join(options.framesDir, `${stamp}-${name}.png`);
-    if (extractFrameAtOrBefore(clip.file, at, out, { notBeforeSec: clip.inSec, flip: clip.flip }) === undefined) {
-      return unchecked(`could not read a frame from ${clip.file} at ${at.toFixed(2)} s`);
-    }
-    images.push(visionDataUri(out));
-  }
-  const refs = [...(a.refs ?? []), ...(b.refs ?? [])]
-    .filter((ref, i, all) => all.findIndex(other => other.file === ref.file) === i && existsSync(ref.file))
-    .slice(0, 3);
-  for (const ref of refs) images.push(visionDataUri(ref.file));
-  const text = [
-    options.aText ? `Shot A (${a.id}) should show: ${options.aText}` : '',
-    options.bText ? `Shot B (${b.id}) should show: ${options.bText}` : '',
-    b.timeCut ? 'Time passes between shot A and shot B (a time cut): the action need not continue, and positions, facing and light may change. Answer every question all the same.' : '',
-    ...refs.map((ref, i) => `Image ${5 + i} is the reference for ${ref.name}: in either shot it must look like this.`),
-  ].filter(Boolean).join('\n');
+  // Everything that reads a file is inside the try: an unreadable frame or
+  // reference leaves this cut unchecked instead of ending the run.
   try {
+    mkdirSync(options.framesDir, { recursive: true });
+    const aEnd = pictureEndSec(a);
+    const bEnd = pictureEndSec(b);
+    const stamp = `${a.id}-${b.id}`.replace(/[^a-z0-9]+/gi, '-');
+    // A seek lands on the first frame at or after its time: 50 ms before the end
+    // is the last frame at 24-30 fps, and an earlier one is found by stepping back.
+    const frames: Array<[CutClip, number, string]> = [
+      [a, a.inSec + (aEnd - a.inSec) / 2, 'a-mid'],
+      [a, aEnd - 0.05, 'a-last'],
+      [b, Math.min(b.inSec + 0.08, b.inSec + (bEnd - b.inSec) / 2), 'b-first'],
+      [b, b.inSec + (bEnd - b.inSec) / 2, 'b-mid'],
+    ];
+    const images: string[] = [];
+    for (const [clip, at, name] of frames) {
+      const out = join(options.framesDir, `${stamp}-${name}.png`);
+      if (extractFrameAtOrBefore(clip.file, at, out, { notBeforeSec: clip.inSec, flip: clip.flip }) === undefined) {
+        return unchecked(`could not read a frame from ${clip.file} at ${at.toFixed(2)} s`);
+      }
+      images.push(visionDataUri(out));
+    }
+    const refs = [...(a.refs ?? []), ...(b.refs ?? [])]
+      .filter((ref, i, all) => all.findIndex(other => other.file === ref.file) === i)
+      .slice(0, 3);
+    for (const ref of refs) images.push(visionDataUri(ref.file));
+    const mirrored = ([['A', a], ['B', b]] as const).filter(([, clip]) => clip.flip).map(([label]) => label);
+    const text = [
+      options.aText ? `Shot A (${a.id}) should show: ${options.aText}` : '',
+      options.bText ? `Shot B (${b.id}) should show: ${options.bText}` : '',
+      b.join ? JOIN_NOTES[b.join] : '',
+      // The cut plays a flipped clip mirrored, and so do its frames here; the references are not.
+      ...mirrored.map(label => `Shot ${label}'s frames are mirrored (the cut flips it left to right), so lettering and markings on it read reversed: that alone is not a difference from a reference.`),
+      ...refs.map((ref, i) => `Image ${5 + i} is the reference for ${ref.name}: in either shot it must look like this.`),
+    ].filter(Boolean).join('\n');
     const reply = await client.chatJson<unknown>({
       model,
       systemPrompt: PAIR_SYSTEM_PROMPT,
-      userPrompt: `${text ? `${text}\n` : ''}Does the cut from ${a.id} to ${b.id} hold together${b.timeCut ? ' across the time cut' : ' as one continuous sequence'}?`,
+      userPrompt: `${text ? `${text}\n` : ''}Does the cut from ${a.id} to ${b.id} hold together${b.join ? '' : ' as one continuous sequence'}?`,
       images,
       // Reasoning vision models spend most of the budget thinking (rule 47).
       maxTokens: 8000,
       temperature: 0.2,
       label: `continuity ${a.id} → ${b.id}`,
     });
-    return { ...base, ...verdictFromAnswers(reply, { timeCut: b.timeCut }) };
+    return { ...base, ...verdictFromAnswers(reply, { join: b.join }) };
   } catch (err) {
     return unchecked(`continuity QA failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -798,20 +892,37 @@ export function speaksOnCamera(shot?: { characters?: string[]; dialogue?: { char
 }
 
 // ---------------------------------------------------------------------------
-// A spoken line cut off by the picture cut (2026-10-26). On a production cut
-// an on-camera line ended about 90 ms after the picture cut, and its last word
-// was clipped. The transcript's word edges were off by up to a third of a
-// second, so they cannot place a cut; the audio's silences can. The cut of a
-// clip with on-camera speech belongs in silence.
+// A spoken line cut off by the picture cut (2026-10-26). An on-camera line
+// that runs on past the cut loses its last word, and a transcript's word
+// edges are not precise enough to place a cut (they can be a third of a
+// second out); the audio's silences are. The cut of a clip with on-camera
+// speech belongs in silence.
 // ---------------------------------------------------------------------------
+
+/** The shortest pause the check looks for (silencedetect's `d`). */
+const SPEECH_PAUSE_SEC = 0.06;
+/** At the very end of the sound a shorter pause is enough: the line has ended. */
+const SPEECH_END_PAUSE_SEC = 0.02;
+
+/** Duration of the first audio stream (the container's when the stream carries none); 0 with no audio stream. */
+export function audioStreamDurationSec(path: string): number {
+  const r = spawnSync('ffprobe', [
+    '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=duration', '-of', 'csv=p=0', path,
+  ], { encoding: 'utf-8' });
+  const out = (r.stdout || '').trim();
+  if (r.status !== 0 || !out) return 0;
+  const v = parseFloat(out);
+  return Number.isFinite(v) && v > 0 ? v : ffprobeDurationSec(path);
+}
 
 /**
  * Silences (absolute seconds) in a file's audio between `startSec` and
  * `startSec + durSec`, as ffmpeg's silencedetect finds them: at least `minSec`
  * below `noiseDb` dBFS. Undefined when the audio cannot be read (ffmpeg
- * failed, or there is no audio stream), which is not the same as no silence.
+ * failed, there is no audio stream, or none of it lies in the window), which
+ * is not the same as no silence.
  */
-export function silencesIn(file: string, startSec: number, durSec: number, noiseDb = -35, minSec = 0.06): Array<[number, number]> | undefined {
+export function silencesIn(file: string, startSec: number, durSec: number, noiseDb = -35, minSec = SPEECH_PAUSE_SEC): Array<[number, number]> | undefined {
   const from = Math.max(0, startSec);
   const r = spawnSync('ffmpeg', [
     '-v', 'info', '-ss', String(from), '-t', String(Math.max(0.05, durSec)), '-i', file,
@@ -819,6 +930,7 @@ export function silencesIn(file: string, startSec: number, durSec: number, noise
   ], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
   if (r.status !== 0) return undefined;
   const log = `${r.stderr ?? ''}`;
+  if (/Output file is empty|nothing was encoded/i.test(log)) return undefined;
   const starts = [...log.matchAll(/silence_start: (-?[0-9.]+)/g)].map(m => from + parseFloat(m[1]));
   const ends = [...log.matchAll(/silence_end: (-?[0-9.]+)/g)].map(m => from + parseFloat(m[1]));
   return starts.map((start, i) => [Number(start.toFixed(3)), Number((ends[i] ?? from + durSec).toFixed(3))]);
@@ -837,24 +949,39 @@ export interface SpeechTailFinding {
 }
 
 /**
+ * The next clip plays on from this clip's sound: the same source picked up
+ * where this clip stops (an edit's contiguous cuts), or the next shot of the
+ * same generation with nothing trimmed between them (a montage's beat cuts).
+ * A line that carries over such a cut is not cut off.
+ */
+export function playsOn(clip: CutClip, next?: CutClip): boolean {
+  if (!next || next.problem || !isFile(next.file)) return false;
+  if (next.file === clip.file) return clip.outSec !== undefined && Math.abs(next.inSec - clip.outSec) <= 0.05;
+  return Boolean(clip.generation) && clip.generation === next.generation && clip.outSec === undefined && next.inSec === 0;
+}
+
+/**
  * A line still sounding at the clip's out point. The test is whether the out
  * point falls inside a stretch silencedetect calls silent (below -35 dBFS for
- * at least 60 ms), not how loud the cut is, because a word's last sound can be
- * as quiet as the background. The threshold is fixed, not set from the clip's
- * room tone, so loud ambience at a cut reads as sound: this is a warning, not
- * a block. When the source runs on past the out point (a trimEnd, a take trimmed
- * in an edit), it says how far the speech goes. A clip with no audio stream
- * has nothing to check.
+ * at least 60 ms, or 20 ms at the very end of the sound), not how loud the cut
+ * is, because a word's last sound can be as quiet as the background. The
+ * threshold is fixed, not set from the clip's room tone, so loud ambience at a
+ * cut reads as sound: this is a warning, not a block. When the source runs on
+ * past the out point (a trimEnd, a take trimmed in an edit), it says how far
+ * the speech goes. A clip with no audio stream, or whose sound has stopped
+ * before the cut, has nothing to check.
  */
 export function checkSpeechTail(clip: CutClip): SpeechTailFinding | undefined {
-  if (!existsSync(clip.file) || !hasAudioStream(clip.file)) return undefined;
-  const fileEnd = ffprobeDurationSec(clip.file);
+  if (clip.problem || !isFile(clip.file) || !hasAudioStream(clip.file)) return undefined;
+  const soundEnd = audioStreamDurationSec(clip.file);
   const out = clipOutSec(clip);
+  if (!(soundEnd > 0) || out - soundEnd > SPEECH_PAUSE_SEC) return undefined;
   const from = Math.max(clip.inSec, out - 0.4);
-  const to = Math.min(fileEnd || out, out + 0.6);
+  const to = Math.min(soundEnd, out + 0.6);
   if (!(to > from)) return undefined;
   const base = { clip: clip.id, ...(clip.shot !== undefined ? { shot: clip.shot } : {}), outSec: Number(out.toFixed(3)) };
-  const quiet = silencesIn(clip.file, from, to - from);
+  const atSoundEnd = soundEnd - out <= SPEECH_PAUSE_SEC;
+  const quiet = silencesIn(clip.file, from, to - from, -35, atSoundEnd ? SPEECH_END_PAUSE_SEC : SPEECH_PAUSE_SEC);
   if (!quiet) {
     return { ...base, unmeasured: true, message: `${clip.id}: could not read the audio at the cut (${out.toFixed(2)} s); check by ear that no line is cut off.` };
   }

@@ -3347,7 +3347,7 @@ program
   .option('--model <model>', "Override the project's vision model for this run")
   .option('--skip-vision', 'Run only the free programmatic checks (no vision calls)', false)
   .option('--continuity <scope>', 'Neighbour continuity at the cuts, one vision call per cut (vehicle, people, props, facing, action, light): joins = the cuts between two generations (the default), all = every cut (the default with --cut-list), off = skip')
-  .option('--cut-list <file>', 'Check an edit instead of the generation plan: a cut list {"clips":[{file,in,out,shot,text,refs}]} or an EDL {"cuts":[{master,srcIn,srcOut,shot}]}. Runs the continuity and speech checks; the report goes next to the file.')
+  .option('--cut-list <file>', 'Check an edit instead of the generation plan: a cut list {"clips":[{file,in,out,shot,location,newScene,text,refs,speech}]} or an EDL {"cuts":[{master,srcIn,srcOut,shot,location}]}. A clip that names a script shot takes its join from the script; one that does not is judged as continuous with the clip before unless it sets newScene: true or the two set different locations. Runs the continuity and speech checks; the report goes next to the file.')
   .action(async (opts: { project: string; episode: number; model?: string; skipVision: boolean; continuity?: string; cutList?: string }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -3375,14 +3375,16 @@ program
 
     // Neighbour continuity: one vision call per cut, counted before any is made.
     // No client (so no key) unless a call will be made: a cut with a clip that
-    // is not on disk is unchecked without one.
+    // cannot be read is unchecked without one.
     const checkCuts = async (clips: CutClip[], getClient: () => Promise<Pick<VeniceClient, 'chatJson'>>, indent: string) => {
       const pairs = qa.pairsToCheck(clips, scope === 'all' ? 'all' : 'joins');
-      const calls = pairs.filter(([a, b]) => existsSync(a.file) && existsSync(b.file)).length;
+      const calls = pairs.filter(([a, b]) => !qa.clipProblem(withRefs(a)) && !qa.clipProblem(withRefs(b))).length;
       console.log(`${indent}Neighbour continuity (${scope === 'all' ? 'every cut' : 'cuts between generations'}): ${pairs.length} cut(s) to check, ${calls} vision call(s) on ${qaModel}`);
+      // The judge decides what is caught: say who judged, every time.
+      console.log(`${indent}  The judge is ${qaModel}; a weaker one misses breaks. Pass a stronger vision model with --model, within the project's privacy tier.`);
       const client = calls > 0
         ? await getClient()
-        : { chatJson: () => Promise.reject(new Error('no vision call: a clip of this cut is not on disk')) };
+        : { chatJson: () => Promise.reject(new Error('no vision call: a clip of this cut cannot be read')) };
       const framesDir = join(tmpdir(), `continuity-qa-${process.pid}-${Date.now()}`);
       const results: import('./video-qa.js').PairContinuityResult[] = [];
       for (const [a, b] of pairs) {
@@ -3392,14 +3394,17 @@ program
           bText: b.text ?? shotOf(b)?.description,
         });
         results.push(result);
-        console.log(`${indent}  ${icon(result)} ${a.id} → ${b.id}${result.timeCut ? ' (time cut)' : ''}: ${result.errored ? 'UNCHECKED' : result.verdict}${result.issues.length ? ` — ${result.issues[0]}` : ''}`);
+        const join = result.join === 'later' ? ' (time cut)' : result.join === 'unknown' ? ' (join not stated: never critical)' : '';
+        console.log(`${indent}  ${icon(result)} ${a.id} → ${b.id}${join}: ${result.errored ? 'UNCHECKED' : result.verdict}${result.issues.length ? ` — ${result.issues[0]}` : ''}`);
       }
       return results;
     };
 
-    // A line cut off by the picture cut: the cut of a clip with an on-camera speaker belongs in silence (free).
+    // A line cut off by the picture cut: the cut of a clip with an on-camera
+    // speaker belongs in silence (free). Not at a cut where the next clip plays
+    // on from the same sound (a montage's beat cuts, an edit's contiguous cuts).
     const checkSpeechTails = (clips: CutClip[], indent: string) => {
-      const spoken = clips.filter(clip => clip.speech || qa.speaksOnCamera(shotOf(clip)));
+      const spoken = clips.filter((clip, i) => (clip.speech || qa.speaksOnCamera(shotOf(clip))) && !qa.playsOn(clip, clips[i + 1]));
       const findings = spoken
         .map(clip => qa.checkSpeechTail(clip))
         .filter((finding): finding is import('./video-qa.js').SpeechTailFinding => Boolean(finding));
@@ -3414,7 +3419,8 @@ program
       const clips = qa.markJoins(qa.cutListFromJson(JSON.parse(readFileSync(listPath, 'utf-8')), [dirname(listPath), series.outputDir]), script.shots);
       console.log(`QA Videos: ${clips.length} clip(s) in ${listPath}\n`);
       for (const clip of clips) {
-        if (!existsSync(clip.file)) console.warn(`  ⚠ ${clip.id}: ${clip.file} is not on disk; the cuts on either side of it are unchecked`);
+        const problem = qa.clipProblem(clip);
+        if (problem) console.warn(`  ⚠ ${clip.id}: ${problem}; the cuts beside it cannot be checked`);
       }
       const speechTails = checkSpeechTails(clips, '  ');
       const skipped = opts.skipVision ? '--skip-vision' : scope === 'off' ? '--continuity off' : undefined;
@@ -3493,7 +3499,11 @@ program
     if (locationCuts > 0) console.log(`  · ${locationCuts} join(s) change location (a scene cut, so the light may change): not compared`);
 
     // The shot clips as assemble-episode cuts them (trims, flip), each tagged with its generation.
+    // A shot with no clip on disk stays in the list: the cuts beside it are unchecked.
     const planClips = qa.cutListFromPlan(plan, sceneDir, script.shots);
+    for (const clip of planClips) {
+      if (!existsSync(clip.file)) console.log(`  ⚠ ${clip.id}: ${clip.file} is not on disk; the cuts beside it cannot be checked`);
+    }
     const speechTails = checkSpeechTails(planClips, '  ');
 
     // ---- Layer 2: vision ----

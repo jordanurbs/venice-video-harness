@@ -178,21 +178,32 @@ const STAGING_TERMS = [...VEHICLES, ...LAND_VEHICLES, ...VESSEL_PARTS, ...PLACES
 /**
  * Small objects an action turns on. A close-up of one that the rest of its
  * scene never shows is a continuity risk. Words with another sense count only
- * in the object's: a "key light", "low-key" or a crossed-keys mark is not a
- * key, an "85mm lens" or a "lens flare" is the camera's, and "she notes the
- * time", "he locks the door" and "she cups her hands" are verbs.
+ * in the object's: a key light, a key witness or a keys logo is not a key; an 85mm lens, a longer lens or a lens flare is the camera's; a lock
+ * of hair, the letters of a sign, a lamp-lit room and lantern glow are not the
+ * object; and "she notes the time", "he locks the door", "she cups her hands",
+ * "books passage" and "maps the route" are verbs.
  */
+const KEY_SENSES = '(?:lights?|lighting|lit|frames?|art|moments?|beats?|points?|details?|figures?|scenes?|shots?|questions?|witness(?:es)?|grips?|players?|roles?|parts?|factors?|issues?|evidence|members?|words?|ingredients?|decisions?|signatures?|logos?|emblems?|crests?|insignias?|badges?)';
+const LENS_KINDS = '(?:wide|wider|wide-angle|long|longer|short|shorter|tight|tighter|telephoto|anamorphic|macro|fisheye|fish-eye|zoom|prime|portrait|normal|standard|tilt-shift|fast|faster|slow|slower|camera)';
+const LETTERING = '(?:brass|gold|golden|silver|painted|neon|carved|stencil(?:l?ed)?|block|capital|bold|raised|metal|iron|bronze|wooden|enamel|chalk|giant|large|big|red|white|black)';
 const OBJECTS: Term[] = [
-  { key: 'key', pattern: /(?<!crossed[\s-])(?<!\b(?:low|high)[\s-])\bkeys?\b(?![\s-]+(?:lights?|lighting|lit|frames?|art|moments?|beats?|points?|details?|figures?|scenes?|shots?|questions?)\b)/i },
-  { key: 'lock', pattern: new RegExp(`\\b(?:${NOUN_CUE}|brass|iron|steel|bronze|heavy|rusted|rusty|old|combination|bicycle)\\s+locks?\\b|\\b(?:keyholes?|padlocks?)\\b`, 'i'), loose: /\b(?:locks?|keyholes?|padlocks?)\b/i },
-  term('reader', ['reader', 'scanner']),
-  { key: 'lens', pattern: /(?<!\d\s?mm[\s-])(?<!\b(?:wide|wide-angle|long|telephoto|anamorphic|macro|fisheye|fish-eye|zoom|prime|portrait|tilt-shift|camera)[\s-])(?<!\b(?:into|on|across|at|toward|towards) the )\blens(?:es)?\b(?![\s-]+flares?\b)/i },
-  { key: 'note', pattern: new RegExp(`\\b(?:${NOUN_CUE}|folded|handwritten|hand-written|sealed|crumpled|written|scribbled|torn|paper|sticky)\\s+(?:notes?|scrolls?)\\b|\\b(?:letters?|envelopes?)\\b`, 'i'), loose: /\b(?:notes?|letters?|envelopes?|scrolls?)\b/i },
+  { key: 'key', pattern: new RegExp(`(?<!\\b(?:low|high)[\\s-])\\bkeys?\\b(?![\\s-]+${KEY_SENSES}\\b)`, 'i') },
+  {
+    key: 'lock',
+    pattern: new RegExp(`\\b(?:${NOUN_CUE}|brass|iron|steel|bronze|heavy|rusted|rusty|old|combination|bicycle)\\s+locks?\\b(?!\\s+of\\s+(?:(?:her|his|their|the|a)\\s+)?(?:[\\w'-]+\\s+)?hair\\b)|\\b(?:keyholes?|padlocks?)\\b`, 'i'),
+    loose: /\b(?:locks?|keyholes?|padlocks?)\b/i,
+  },
+  { key: 'lens', pattern: new RegExp(`(?<!\\d\\s?mm[\\s-])(?<!\\b${LENS_KINDS}[\\s-])(?<!\\b(?:into|on|across|at|toward|towards) the )\\blens(?:es)?\\b(?![\\s-]+flares?\\b)`, 'i') },
+  {
+    key: 'note',
+    pattern: new RegExp(`\\b(?:${NOUN_CUE}|folded|handwritten|hand-written|sealed|crumpled|written|scribbled|torn|paper|sticky)\\s+(?:notes?|scrolls?)\\b|\\benvelopes?\\b|(?<!\\b${LETTERING}\\s)\\bletters?\\b(?!\\s+(?:of|on|in|above|across|over)\\s+(?:the|a|an|its|his|her|their)\\s+(?:[\\w'-]+\\s+)?(?:signs?|names?|words?|titles?|banners?|plaques?|boards?|alphabet|shopfronts?|facades?)\\b|\\s+spell)`, 'i'),
+    loose: /\b(?:notes?|letters?|envelopes?|scrolls?)\b/i,
+  },
   term('coin', ['coin']),
-  term('book', ['book', 'ledger']),
-  term('lamp', ['lamp', 'lantern']),
+  { key: 'book', pattern: /\b(?:books?|ledgers?)\b(?!\s+(?:passage|tickets?|seats?|rooms?|tables?|berths?|cabins?|flights?|it|them)\b|\s+(?:a|an)\s+(?:room|table|ticket|seat|berth|cabin|flight|trip|passage)\b)/i },
+  { key: 'lamp', pattern: /\b(?:lamps?|lanterns?)\b(?![\s-]+(?:glow|light|lit)\b)/i },
   { key: 'cup', pattern: new RegExp(`\\b(?:${NOUN_CUE}|tea|coffee|tin|clay|china|paper|silver|empty|full)\\s+cups?\\b|\\b(?:teacups?|goblets?)\\b`, 'i'), loose: /\b(?:cups?|teacups?|goblets?)\b/i },
-  term('map', ['map']),
+  { key: 'map', pattern: /(?<!\bto\s)\bmap(?:s(?!\s+(?:out|the|a|an|its|his|her|their)\b))?\b(?!\s+out\b)/i },
 ];
 
 /**
@@ -488,8 +499,8 @@ export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
 
   // A close-up's object that the neighbouring shots of its scene never show:
   // those shots draw that spot from the plate, so the object changes at the
-  // cut (a key turned in a plate on a bench in the close-up, whatever the
-  // plate shows there in the wide shot after it). Words, so a warning.
+  // cut (a ledger open on a desk in the insert, and in the wide shot after it
+  // whatever the plate has on that desk). Words, so a warning.
   const placeOf = (shot: PlanShot) => findLocation(shot.location)?.slug ?? shot.location;
   input.shots.forEach((shot, i) => {
     if (shot.type !== 'close-up' && shot.type !== 'insert') return;
@@ -505,7 +516,7 @@ export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
     const loc = findLocation(shot.location);
     const placeText = loc ? `${loc.name}. ${loc.description}. ${typeof loc.spatialAnchors === 'string' ? loc.spatialAnchors : ''}` : '';
     for (const t of objects) {
-      // Cast as an object, it has a reference. By name only: a vehicle's "crossed-keys mark" is not a key.
+      // Cast as an object, it has a reference. By name only: a prop whose description mentions the word does not cast it.
       if (props.some(prop => placePattern(t).test(prop.name))) continue;
       if (neighbours.some(other => placePattern(t).test(shotText(other))) || placePattern(t).test(placeText)) continue;
       const others = neighbours.map(shotId);
