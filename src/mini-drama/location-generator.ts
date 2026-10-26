@@ -286,9 +286,7 @@ export async function generateLocationReferences(
         await derivePlateFromHero(client, {
           dir, imgPath, angle, heroPath, editModel, aspect,
           location, aestheticStr, cleanPlateClause,
-          viewClause: KNOWN_ANGLE_NAMES.has(angle)
-            ? (KNOWN_ANGLE_VIEWS[angle] ?? options.promptOverride!)
-            : options.promptOverride!,
+          viewClause: options.promptOverride ?? KNOWN_ANGLE_VIEWS[angle]!,
         });
       }
       generated.push(imgPath);

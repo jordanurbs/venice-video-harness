@@ -113,3 +113,37 @@ test('slot allocator still reads legacy plate names on old projects', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('--prompt replaces the built-in view clause on a derived canonical plate', async () => {
+  const { generateLocationReferences } = await import('../dist/mini-drama/location-generator.js');
+  const sharp = (await import('sharp')).default;
+  const dir = mkdtempSync(join(tmpdir(), 'venice-plates-override-'));
+  try {
+    const locDir = join(dir, 'locations', 'room');
+    mkdirSync(locDir, { recursive: true });
+    const png = await sharp({ create: { width: 64, height: 36, channels: 3, background: '#555' } }).png().toBuffer();
+    writeFileSync(join(locDir, 'north.png'), png);
+    writeFileSync(join(locDir, 'east.png'), png);
+
+    const prompts = [];
+    const client = {
+      async postBinary(_path, body) { prompts.push(body.prompt); return png; },
+    };
+    const series = {
+      name: 't', slug: 't', concept: '', genre: '', setting: '',
+      aesthetic: { style: 's', palette: 'p', lighting: 'l', lensCharacteristics: 'c' },
+      characters: [], locations: [{ name: 'Room', slug: 'room', description: 'a room', seed: 1 }],
+      episodes: [], videoDefaults: { actionModel: 'x', atmosphereModel: 'x' },
+      outputDir: dir, createdAt: '', updatedAt: '', storyboardAspectRatio: '16:9',
+    };
+    const view = 'Face the right-hand wall; the armchair now sits in the far-left corner';
+    await generateLocationReferences(client, series, series.locations[0], {
+      angles: ['east'], force: true, promptOverride: view,
+    });
+    assert.equal(prompts.length, 1);
+    assert.ok(prompts[0].includes(view), 'override missing from the edit prompt');
+    assert.ok(!prompts[0].includes('RIGHT-hand wall of the SAME room'), 'built-in east view still present');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
