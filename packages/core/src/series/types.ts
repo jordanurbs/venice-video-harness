@@ -590,6 +590,38 @@ export interface ShotContinuity {
   endState?: string;
 }
 
+/**
+ * An edited image a person picked for one shot (`stage-ref`): a copy of a
+ * location plate or of a frame, changed by an image-edit model, so the video
+ * model draws the fix instead of the original. It belongs to this shot alone;
+ * the location's own plates are never changed.
+ */
+export interface ShotStagingRef {
+  /** The image, relative to the project directory. */
+  path: string;
+  /**
+   * `plate`: stands in for the location view it was edited from, in the
+   * shot's reference stack (R2V). `start-frame`: the first frame the shot is
+   * re-generated from (i2v), so it keeps the frame's place, people, light and
+   * lens and only the edit changes.
+   */
+  use: 'plate' | 'start-frame';
+  /** The image it was edited from, relative to the project directory when inside it. */
+  source: string;
+  /** With `plate`: the view of the shot's location it replaces (that view is not sent). */
+  replacesView?: PlateView;
+  /** The edit model that made the picked image, and the edit prompt. */
+  model: string;
+  prompt: string;
+  /** sha256 of the picked image. A clip not rendered from it is rendered again. */
+  sha256: string;
+  /** The stage-ref session folder holding every candidate, relative to the project directory. */
+  session: string;
+  pickedAt: string;
+  /** The shot's `mustStaySingle` before the pick (a staged shot renders on its own); restored on clear. */
+  mustStaySingleBefore?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Storyboard reference (composed blocking plate)
 //
@@ -839,6 +871,8 @@ export interface ShotScript {
   stagedOn?: string;
   /** How this shot joins the previous one, and the state it ends in. */
   continuity?: ShotContinuity;
+  /** An edited plate or first frame a person picked for this shot (`stage-ref`, rule 65). */
+  stagingRef?: ShotStagingRef;
   dialogue: { character: string; line: string; delivery?: string } | null;
   sfx: string | null;
   cameraMovement: string;

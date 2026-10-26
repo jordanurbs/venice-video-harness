@@ -48,10 +48,19 @@ import {
 } from './voice-reference.js';
 import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
-import { getVideoModel, modelSupportsDuration, resolveBitrateMode, validateCameraTrajectory, type BitrateMode } from 'venice-video-harness/core/venice/models.js';
+import { getVideoModel, i2vRejectsFaceStartFrame, modelSupportsDuration, resolveBitrateMode, validateCameraTrajectory, type BitrateMode } from 'venice-video-harness/core/venice/models.js';
 import type { CameraKeyframe } from 'venice-video-harness/core/venice/types.js';
 import { assertFacesOffCompatible, FacesOffModelError } from '../venice/seedance-preflight.js';
-import { appendRecipePass } from '../venice/recipe.js';
+import { appendRecipePass, readShotRecipe } from '../venice/recipe.js';
+import { readImageProvenance } from '../venice/provenance.js';
+import {
+  stagedClipIsStale,
+  stagedPlate,
+  stagedStartFrame,
+  stagingJobTag,
+  stagingMetadata,
+  stagingRefPath,
+} from './staging.js';
 import { classifyVideoRetrieveStatus, VideoGenerationFailedError } from '../venice/video.js';
 import {
   clearPendingJob,
@@ -265,13 +274,19 @@ async function renderSeedanceKeyframe(
   const keyframePngPath = outputVideoPath.replace(/\.mp4$/, '-r2v-keyframe.png');
 
   if (existsSync(keyframePngPath) && existsSync(stageAVideoPath)) {
-    console.log(`  Stage A: reusing existing keyframe ${keyframePngPath}`);
-    const refs = collectReferenceImagePathsForShot(series, shot);
-    return {
-      keyframePngPath,
-      stageAVideoPath,
-      referenceImagePaths: refs,
-    };
+    // A keyframe rendered before the shot's plate staging ref was picked does
+    // not carry the pick; Stage A renders again so the pick reaches the clip.
+    const plate = stagedPlate(series, shot);
+    const sentRefs = await renderedReferencePaths(stageAVideoPath);
+    if (!plate || sentRefs?.some(path => resolvePath(path) === resolvePath(plate.path))) {
+      console.log(`  Stage A: reusing existing keyframe ${keyframePngPath}`);
+      return {
+        keyframePngPath,
+        stageAVideoPath,
+        referenceImagePaths: sentRefs ?? collectReferenceImagePathsForShot(series, shot),
+      };
+    }
+    console.log('  Stage A: the existing keyframe predates the shot\'s staging ref; rendering it again');
   }
 
   // Re-route the shot to Seedance R2V by cloning it with no dialogue and
@@ -333,6 +348,13 @@ async function renderSeedanceKeyframe(
   };
 }
 
+/** The reference images the latest render of a clip was sent, from its recipe sidecar. */
+async function renderedReferencePaths(videoPath: string): Promise<string[] | undefined> {
+  const recipe = await readShotRecipe(videoPath);
+  const pass = recipe?.passes.filter(item => item.kind === 'video-generate').pop();
+  return pass?.referenceImagePaths;
+}
+
 function collectReferenceImagePathsForShot(
   series: SeriesState,
   shot: ShotScript,
@@ -364,8 +386,12 @@ function imageToDataUri(imagePath: string, mimeType = 'image/png'): string {
  * (close-up / reaction / insert) prefer the medium ref; everything else
  * prefers the wide establishing ref. Falls back through the other angles.
  * Returns undefined when the shot has no location or no ref images exist.
+ * A plate staging ref (stage-ref) stands in for the plates: the view it was
+ * edited from must not reach the model, or what the edit removed comes back.
  */
 function getLocationRefPath(series: SeriesState, shot: ShotScript): string | undefined {
+  const staged = stagedPlate(series, shot);
+  if (staged) return staged.path;
   if (!shot.location) return undefined;
   const loc = getLocation(series, shot.location);
   if (!loc) return undefined;
@@ -614,6 +640,15 @@ export interface RenderVideoOptions {
    * Set automatically when a resumed job turns out to be gone on Venice's side.
    */
   forceRequeue?: boolean;
+  /**
+   * What the request is made from beyond its output path (a staging ref's
+   * hash). Recorded with the pending job. A recorded job is re-attached by
+   * output path whatever its tag (it is paid for, rule 43); `onResumed` tells
+   * the caller which tag the collected render was queued with.
+   */
+  jobTag?: string;
+  /** Called when a re-attached (not freshly queued) render is saved. */
+  onResumed?: (job: { queueId: string; model: string; tag?: string }) => void;
   /**
    * Explicit output resolution override. Honored ONLY when the effective model
    * actually lists it (so a bad value can't 400), otherwise the model-family
@@ -1104,6 +1139,9 @@ export async function renderVideoFile(
   const recordedJob = options.forceRequeue ? undefined : await findPendingJob(jobKey);
   if (recordedJob && recordedJob.kind === 'video') {
     console.log(`  Re-attaching to in-flight job ${recordedJob.queueId} (${recordedJob.model}) — not re-queueing.`);
+    if (recordedJob.tag !== options.jobTag) {
+      console.warn('  ⚠ That job was queued from other inputs than this request (a staging ref picked or changed since); collecting it anyway, it is paid for.');
+    }
     return pollRenderedVideo(client, {
       ...options,
       queueId: recordedJob.queueId,
@@ -1111,6 +1149,7 @@ export async function renderVideoFile(
       effectiveModel,
       body,
       resumed: true,
+      resumedTag: recordedJob.tag,
     });
   }
 
@@ -1126,6 +1165,7 @@ export async function renderVideoFile(
     project: options.project,
     episode: options.episode,
     prompt: prompt.prompt,
+    ...(options.jobTag ? { tag: options.jobTag } : {}),
   });
 
   return pollRenderedVideo(client, {
@@ -1135,6 +1175,7 @@ export async function renderVideoFile(
     effectiveModel,
     body,
     resumed: false,
+    resumedTag: undefined,
   });
 }
 
@@ -1148,6 +1189,8 @@ interface PollRenderedVideoOptions extends RenderVideoOptions {
   body: Record<string, unknown>;
   /** True when the queue id came from the pending-job registry, not a fresh queue. */
   resumed: boolean;
+  /** The tag the re-attached job was recorded with. */
+  resumedTag?: string;
 }
 
 /**
@@ -1200,6 +1243,7 @@ async function pollRenderedVideo(
         await writeFile(outputPath, videoBuffer);
         await clearPendingJob(jobKey);
         console.log(`  Video saved: ${outputPath} (${(videoBuffer.length / 1024 / 1024).toFixed(1)} MB, ${(elapsed / 1000).toFixed(0)}s)`);
+        if (resumed) options.onResumed?.({ queueId: queue_id, model, tag: options.resumedTag });
 
         try {
           await client.post(VIDEO_COMPLETE_PATH, { model, queue_id });
@@ -1407,13 +1451,23 @@ export function resolveShotReferenceInputs(
   // Location environment references. The slot plan already interleaves location
   // angles for @Image-tag models; this legacy fold only runs when no plan
   // exists. Kling O3 R2V takes environment refs via scene_image_urls; hand-set
-  // sceneImagePaths always win.
-  const locationRefPath = getLocationRefPath(series, shot);
+  // sceneImagePaths always win, except over a plate staging ref (stage-ref),
+  // which leads them in place of the view it was edited from. A staged first
+  // frame is the whole stage: no location plate goes with it.
+  const locationRefPath = shot.stagingRef?.use === 'start-frame' ? undefined : getLocationRefPath(series, shot);
+  const plate = stagedPlate(series, shot);
   if (locationRefPath) {
     if (MODELS_SUPPORTING_SCENE_IMAGES.has(videoPrompt.model)) {
       if (!sceneImagePaths || sceneImagePaths.length === 0) {
         sceneImagePaths = [locationRefPath];
-        console.log(`  Location ref -> scene_image_urls (${shot.location})`);
+        console.log(`  Location ref -> scene_image_urls (${shot.location}${plate ? ', staging ref' : ''})`);
+      } else if (plate) {
+        const loc = shot.location ? getLocation(series, shot.location) : undefined;
+        const replaced = loc && plate.ref.replacesView
+          ? resolvePath(join(getLocationDir(series, loc.slug), `${plate.ref.replacesView}.png`))
+          : undefined;
+        sceneImagePaths = [plate.path, ...sceneImagePaths.filter(p => resolvePath(p) !== resolvePath(plate.path) && resolvePath(p) !== replaced)].slice(0, 4);
+        console.log('  Staging ref -> scene_image_urls (leads the hand-set scene images)');
       }
     } else if (!hasSlotPlan && videoPrompt.locationEnvSlot) {
       referenceImagePaths = foldLocationIntoReferences(
@@ -1572,6 +1626,12 @@ function splitRenderedUnitIntoShots(
   return segments;
 }
 
+/** A staged shot (stage-ref) that generate-videos did not render from its staging ref, and why. */
+export interface UnrenderedStagedShot {
+  shot: string;
+  reason: string;
+}
+
 async function renderSingleShotUnit(
   client: VeniceClient,
   series: SeriesState,
@@ -1582,6 +1642,7 @@ async function renderSingleShotUnit(
   nextShotNumber: number | undefined,
   previousShot?: ShotScript,
   episodeAudioMix?: import('venice-video-harness/core/series/types.js').AudioMixDefaults,
+  unrenderedStaged: UnrenderedStagedShot[] = [],
 ): Promise<string[]> {
   // Suffixed inserts ("3b") must key their own panel/video files — using the
   // bare shotNumber here made every suffixed shot collide with its base shot
@@ -1595,7 +1656,22 @@ async function renderSingleShotUnit(
   const panelExists = existsSync(panelPath);
 
   const videoPath = getShotVideoPath(sceneDir, shotId);
-  if (existsSync(videoPath)) {
+
+  // stage-ref (rule 65): a staged shot renders only from its pick. Every
+  // reason not to render it is decided before anything is billed or moved,
+  // and reported (generate-videos exits non-zero). The clip on disk stays as
+  // it is; a stale one is archived only when its replacement lands.
+  const staging = shot.stagingRef;
+  const staleForPick = Boolean(staging) && existsSync(videoPath) && stagedClipIsStale(videoPath, shot);
+  const refuse = (reason: string): string[] => {
+    const kept = existsSync(videoPath)
+      ? ` Its clip on disk (${basename(videoPath)}) was not rendered from the pick and is left as it is.`
+      : '';
+    unrenderedStaged.push({ shot: String(shotId), reason: `${reason}.${kept}` });
+    console.warn(`  ⚠ Shot ${shotKey(shotId)}: not rendered from its staging ref: ${reason}.`);
+    return [];
+  };
+  if (existsSync(videoPath) && !staleForPick) {
     console.log(`  Shot ${shotKey(shotId)}: video exists, skipping`);
     unit.renderedDurationSec = getVideoDuration(videoPath);
     unit.segments = [{
@@ -1605,6 +1681,16 @@ async function renderSingleShotUnit(
       outputFile: `shot-${shotKey(shotId)}.mp4`,
     }];
     return [videoPath];
+  }
+  // From here the shot renders, so a staged one needs its pick.
+  if (staging && staging.use !== 'plate' && staging.use !== 'start-frame') {
+    return refuse(`its staging ref has use "${String(staging.use)}" (plate or start-frame); pick again with stage-ref --pick`);
+  }
+  if (staging && !existsSync(stagingRefPath(series, staging))) {
+    return refuse(`the staging ref image ${staging.path} is not on disk (pick again with stage-ref --pick, or stage-ref --clear)`);
+  }
+  if (staleForPick) {
+    console.log(`  Shot ${shotKey(shotId)}: the clip predates its staging ref (${staging!.use}, picked ${staging!.pickedAt.slice(0, 16)}); rendering it from the pick (the old clip is archived when the new one lands)`);
   }
 
   // Ensure the dialogue speaker has a voice-donor reference clip before the
@@ -1626,7 +1712,7 @@ async function renderSingleShotUnit(
 
   if (videoPrompt.modelResolution) {
     const res = videoPrompt.modelResolution;
-    console.log(`  Model: ${res.modelId}${res.upgraded ? ` (upgraded: ${res.reason})` : ''}`);
+    console.log(`  Model: ${res.modelId}${res.upgraded ? ` (upgraded: ${res.reason})` : staging?.use === 'start-frame' ? ` (${res.reason})` : ''}`);
     if (res.autoUseElements) console.log('  Auto-enabled: elements (character identity anchoring)');
     if (res.autoUseReferenceImages) console.log('  Auto-enabled: reference images');
   }
@@ -1634,15 +1720,49 @@ async function renderSingleShotUnit(
   const { elements, referenceImagePaths, sceneImagePaths, voiceReferencePaths, hasSlotPlan } =
     resolveShotReferenceInputs(series, shot, videoPrompt);
 
+  // An edited first frame picked with stage-ref is the shot's start frame,
+  // over the panel and over a chained last frame.
+  const stagedFrame = stagedStartFrame(series, shot);
+  const plate = stagedPlate(series, shot);
+  if (stagedFrame && i2vRejectsFaceStartFrame(videoPrompt.model)) {
+    const provenance = await readImageProvenance(stagedFrame);
+    if (provenance?.hasFace !== false) {
+      return refuse(
+        `${videoPrompt.model} fails server-side, after billing, on a start frame that shows a face (anti-pattern 31), and this staged frame may show one. ` +
+        `Render the shot on a Seedance image-to-video lane, or, if the frame shows no face, set "hasFace": false in ${staging!.path.replace(/\.(png|jpe?g|webp)$/i, '.provenance.json')}`,
+      );
+    }
+  }
+
   // Refs-only shots (Seedance R2V slot plan) don't anchor on the panel, so a
   // missing panel is fine there. Everything else still requires it.
-  if (!panelExists && !hasSlotPlan) {
+  if (!panelExists && !hasSlotPlan && !stagedFrame) {
+    if (staging) return refuse(`${videoPrompt.model} starts from the shot's panel, and ${basename(panelPath)} is missing`);
     console.warn(`  Panel not found: ${panelPath}, skipping shot ${shotId}`);
     return [];
   }
 
-  let anchorImagePath = chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath, panelPath);
-  const endFramePath = chooseEndFrameImagePath(unit, sceneDir, nextShotNumber);
+  // A plate staging ref must reach the model as a reference. A lane that
+  // sends no location reference (image-to-video from the panel, text-to-video,
+  // an R2V lane without @Image tags or scene images) cannot carry it, and a
+  // render without it would be stamped as made from a pick it never saw. The
+  // keyframe pipeline below carries it through its Stage A references.
+  const sentPlate = (paths?: string[]): boolean =>
+    Boolean(plate) && (paths ?? []).some(path => resolvePath(path) === resolvePath(plate!.path));
+  // What renderVideoFile attaches: reference images and scene images only on the lanes that take them.
+  const sentReferences = MODELS_SUPPORTING_REFERENCE_IMAGES.has(videoPrompt.model) ? referenceImagePaths : undefined;
+  const sentScenes = MODELS_SUPPORTING_SCENE_IMAGES.has(videoPrompt.model) ? sceneImagePaths : undefined;
+  if (plate && unit.useSeedanceKeyframe !== true && !sentPlate(sentReferences) && !sentPlate(sentScenes)) {
+    return refuse(
+      `${videoPrompt.model} sends no location reference, so its plate staging ref cannot reach the model. ` +
+      'Pick it as a start frame instead (stage-ref --pick <n> --use start-frame), or route the shot to an R2V lane with @Image tags',
+    );
+  }
+
+  let anchorImagePath = stagedFrame
+    ?? chooseAnchorImagePath(unit, sceneDir, videoPath, previousRenderedShotPath, panelPath);
+  if (stagedFrame) console.log(`  Start frame: staging ref ${staging!.path} (${staging!.model})`);
+  const endFramePath = stagedFrame ? undefined : chooseEndFrameImagePath(unit, sceneDir, nextShotNumber);
 
   // --- AGENTS.md rule 32: Seedance R2V keyframe pipeline ---
   // Only for lip-sync models with no `reference_image_urls` lane (Wan 2.7
@@ -1654,7 +1774,7 @@ async function renderSingleShotUnit(
   let dialogueAudioPath: string | undefined;
   let stageAFailed = false;
   let stageAFailureReason: string | undefined;
-  if (unit.useSeedanceKeyframe === true) {
+  if (unit.useSeedanceKeyframe === true && !stagedFrame) {
     try {
       keyframeArtifacts = await renderSeedanceKeyframe(
         client,
@@ -1676,6 +1796,26 @@ async function renderSingleShotUnit(
     }
   }
 
+  // The plate staging ref reached the model: as a reference of this render,
+  // or through the Stage A keyframe it starts from.
+  const plateSent = !plate
+    || sentPlate(sentReferences)
+    || sentPlate(sentScenes)
+    || (keyframeArtifacts !== undefined && sentPlate(keyframeArtifacts.referenceImagePaths));
+  if (!plateSent) {
+    return refuse(
+      stageAFailed
+        ? `the keyframe pass that carries its plate staging ref failed (${stageAFailureReason}), and ${videoPrompt.model} alone cannot carry it`
+        : `the keyframe pass for ${videoPrompt.model} did not carry its plate staging ref (check the reference budget)`,
+    );
+  }
+  if (plate && !keyframeArtifacts && !(hasSlotPlan && MODELS_USING_IMAGE_TAGS.has(videoPrompt.model)) && existsSync(anchorImagePath)) {
+    console.warn(
+      `  ⚠ Shot ${shotKey(shotId)}: ${videoPrompt.model} also starts from ${anchorImagePath === panelPath ? 'the shot\'s panel' : 'a frame'} that was not edited. ` +
+      'If it shows what the plate edit removed, stage the first frame instead (stage-ref --from <that image> --use start-frame).',
+    );
+  }
+
   // Exact lip-sync: wire the dialogue MP3 into the model so it follows the
   // real recording instead of synthesizing a voice. This is the step that
   // actually produces the lip-sync, so it runs for every audio-driven route —
@@ -1690,6 +1830,9 @@ async function renderSingleShotUnit(
     dialogueAudioPath = await ensureDialogueAudio(client, series, shot, audioDir);
   }
 
+  // A render queued before the pick (or for another pick) is told apart when
+  // it is re-attached after an interruption (rule 43).
+  const resumed: { job?: { tag?: string } } = {};
   const renderOptions: RenderVideoOptions = {
     prompt: videoPrompt,
     anchorImagePath,
@@ -1705,6 +1848,8 @@ async function renderSingleShotUnit(
     characters: shot.characters,
     project: series.outputDir,
     resolution: series.videoDefaults.resolution,
+    jobTag: stagingJobTag(shot),
+    onResumed: job => { resumed.job = job; },
   };
   let savedPath = await renderVideoFile(client, renderOptions);
 
@@ -1728,8 +1873,12 @@ async function renderSingleShotUnit(
       console.warn(`  ⚠ Lip-sync check: take re-performed the line (${summary}); set aside as ${rejectedPath.split('/').pop()}`);
       if (attempt >= maxAttempts) {
         console.warn(`  ⚠ Shot ${shotKey(shotId)} left unrendered after ${attempt} take(s); re-run generate-videos to try again.`);
+        if (staging) {
+          unrenderedStaged.push({ shot: String(shotId), reason: `the lip-sync check rejected ${attempt} take(s) rendered from its staging ref (set aside as .rejected-N.mp4); the shot has no current clip.` });
+        }
         return [];
       }
+      delete resumed.job;
       savedPath = await renderVideoFile(client, { ...renderOptions, forceRequeue: true });
     }
   }
@@ -1744,6 +1893,21 @@ async function renderSingleShotUnit(
   }];
 
   const extraMetadata: Record<string, unknown> = { generationUnit: unit.unitId };
+  // The clip is marked as made from the pick only when it was: the pick was
+  // sent (refused above otherwise), and this is not a re-attached render that
+  // was queued before the pick. Such a render is paid for, so it is kept, but
+  // unmarked: it is stale, and the next run renders the shot from the pick.
+  const resumedOtherInputs = resumed.job !== undefined && resumed.job.tag !== stagingJobTag(shot);
+  const fromPick = Boolean(staging) && (staging!.use === 'plate' ? plateSent : anchorImagePath === stagedFrame);
+  if (fromPick && !resumedOtherInputs) {
+    extraMetadata.stagingRef = stagingMetadata(shot);
+  } else if (staging) {
+    const reason = resumedOtherInputs
+      ? 'generate-videos re-attached to a render queued before this staging ref was picked; it is paid for, so it is saved as the clip, but it is not from the pick. Run generate-videos again to render the shot from the pick.'
+      : 'the render did not use its staging ref.';
+    unrenderedStaged.push({ shot: String(shotId), reason });
+    console.warn(`  ⚠ Shot ${shotKey(shotId)}: ${reason}`);
+  }
   if (lipSyncFidelity) extraMetadata.lipSyncFidelity = lipSyncFidelity;
   if (keyframeArtifacts) {
     extraMetadata.seedanceKeyframe = {
@@ -2109,6 +2273,11 @@ async function renderMultiShotUnitUntilSuccess(
 export interface GenerateEpisodeVideosResult {
   videoPaths: string[];
   plan: GenerationPlan;
+  /**
+   * Staged shots (stage-ref) whose clip on disk is not from their staging ref
+   * after this run, with why. The caller reports them and exits non-zero.
+   */
+  unrenderedStaged: UnrenderedStagedShot[];
 }
 
 /**
@@ -2312,6 +2481,7 @@ export async function generateEpisodeVideos(
   let finished = 0;
   // Keyed by plan position: a suffixed insert ("13b") shares its base shot's unit id.
   const inProgress = new Map<number, string>();
+  const unrenderedStaged: UnrenderedStagedShot[] = [];
 
   // Feeds the shell's `/jobs` view, so a backgrounded episode render reports
   // which units are under way instead of only whatever the latest poll said.
@@ -2344,6 +2514,7 @@ export async function generateEpisodeVideos(
         nextShotNumber,
         unitPreviousShot,
         episodeAudioMix,
+        unrenderedStaged,
       );
     }
     if (unit.unitType === 'montage') {
@@ -2404,5 +2575,5 @@ export async function generateEpisodeVideos(
     throw failure.error;
   }
   const outcomes = await Promise.all(rendered);
-  return { videoPaths: outcomes.flatMap(paths => paths ?? []), plan };
+  return { videoPaths: outcomes.flatMap(paths => paths ?? []), plan, unrenderedStaged };
 }

@@ -159,6 +159,26 @@ export function faceCapableTwinId(modelId: string): string {
   return isFacesOffModel(modelId) ? modelId.replace(/-basic$/i, '') : modelId;
 }
 
+/**
+ * The image-to-video lane of a model's family: the model that animates a
+ * supplied first frame (`image_url`). An i2v id is returned as it is; a
+ * reference-to-video id maps to its family's i2v id
+ * (`seedance-2-5-reference-to-video` -> `seedance-2-5-image-to-video`,
+ * `wan-3-0-enhanced-reference-to-video` -> `wan-3-0-image-to-video`), keeping
+ * a `-basic` or `-private` suffix. Undefined when the family has no i2v lane
+ * in the registry (and for text-to-video ids).
+ */
+export function imageToVideoTwin(modelId: string): string | undefined {
+  const spec = getVideoModel(modelId);
+  if (spec?.type === 'image-to-video' && !modelId.includes('reference-to-video')) return modelId;
+  if (!modelId.includes('reference-to-video')) return undefined;
+  const candidates = [
+    modelId.replace('reference-to-video', 'image-to-video'),
+    modelId.replace(/-enhanced-reference-to-video/, '-image-to-video'),
+  ];
+  return candidates.find(id => id !== modelId && getVideoModel(id)?.type === 'image-to-video');
+}
+
 // ---- Image generation prompt-length budgets () -----------------------
 
 /**

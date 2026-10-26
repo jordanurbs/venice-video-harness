@@ -25,7 +25,7 @@ import {
 } from 'venice-video-harness/core/series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { parseShotDuration } from './generation-planner.js';
-import { faceCapableTwinId, getMaxPositivePromptChars, modelWantsSimplePrompt } from 'venice-video-harness/core/venice/models.js';
+import { faceCapableTwinId, getMaxPositivePromptChars, imageToVideoTwin, modelWantsSimplePrompt } from 'venice-video-harness/core/venice/models.js';
 import { getLocation } from '../series/manager.js';
 import { buildReferenceSlotPlan, type ReferenceSlot } from './reference-slots.js';
 
@@ -206,6 +206,26 @@ export function resolveVideoModel(
   series: SeriesState,
   _previousShot?: ShotScript,
 ): ModelResolution {
+  // A shot re-generated from an edited first frame (stage-ref, use
+  // start-frame) animates that frame on its family's image-to-video lane: the
+  // frame carries the place, the people, the light and the fix, so no
+  // reference stack is sent and nothing can redraw what the edit removed.
+  if (shot.stagingRef?.use === 'start-frame') {
+    const { stagingRef: _staged, ...unstaged } = shot;
+    const lane = resolveVideoModel(unstaged as ShotScript, series, _previousShot).modelId;
+    const i2v = imageToVideoTwin(lane)
+      ?? imageToVideoTwin(series.videoDefaults.atmosphereModel)
+      ?? 'seedance-2-5-image-to-video';
+    return {
+      modelId: i2v,
+      upgraded: false,
+      reason: `staged start frame (stage-ref): ${i2v} animates the picked frame${i2v === lane ? '' : ` (the shot's lane is ${lane})`}`,
+      autoUseElements: false,
+      autoUseReferenceImages: false,
+      useImageTags: false,
+    };
+  }
+
   const baseModel = shot.videoModel === 'action'
     ? series.videoDefaults.actionModel
     : series.videoDefaults.atmosphereModel;
@@ -538,6 +558,14 @@ export function buildVideoPrompt(
   const cameraTerm = CAMERA_TERMS[shot.cameraMovement.toLowerCase()] ?? shot.cameraMovement;
   parts.push(`${cameraTerm}.`);
 
+  // From an edited first frame (stage-ref): the frame is the stage. The
+  // location's words are left out below, because they describe the plate as
+  // it was before the edit (the very thing the edit removed).
+  const fromStagedFrame = shot.stagingRef?.use === 'start-frame';
+  if (fromStagedFrame) {
+    parts.push('One continuous shot that starts exactly on the first frame: the same place, people, objects, light and lens; only what the action moves changes, and nothing removed from the frame comes back.');
+  }
+
   // Up-front identity declarations for @Image-tag models ("@Image1 is Bob").
   // Restating the invariant identity per shot (rule 37) plus the explicit
   // tag→name binding keeps multi-reference prompts unambiguous for the model.
@@ -677,7 +705,7 @@ export function buildVideoPrompt(
   // inject its locked description + lighting so consecutive shots in the same
   // place stay consistent (anti-pattern 7).
   let locationEnvSlot: { slug: string; imageIndex: number } | undefined;
-  if (shot.location && !simplePrompt) {
+  if (shot.location && !simplePrompt && !fromStagedFrame) {
     const loc = getLocation(series, shot.location);
     if (loc) {
       const envNote = [

@@ -164,6 +164,71 @@
 
 ### Added
 
+- **`stage-ref`: edit the reference first, then generate from it (rule 65).**
+  The video model copies a reference's whole composition, not just the thing
+  it is bound to: a plate's moored boats come back where the shot needs another
+  vessel, a lowered gangway re-stages a departure, and an object painted out of
+  moving footage flickers. The fix that works is the same move each time, so it
+  is now a command.
+  - `venice-video stage-ref -p <project> -e <n> --shot <id>` takes one source:
+    `--from-plate <view>` (a view of the shot's location), `--from-shot <id>
+    [--at <s>]` (a frame of a rendered clip: its first frame, or 0.5 s in for a
+    clip cut from a montage or multi-shot render, whose first frames can belong
+    to the shot before), or `--from <image|video>`. `--crop`, up to two `--ref`
+    images and a `--prompt` complete it.
+  - It edits on gpt-image-2-edit and nano-banana-2-edit at once (`--models`).
+    The two differ in useful ways: on one frame both removed the object, one
+    rewrote lettering beside it and the other kept it. Each result keeps the
+    source's aspect and gets provenance and recipe sidecars (rule 39), in
+    `episodes/episode-NNN/staging/shot-NNN/<session>/` with a side-by-side
+    `pick.html`; a model that fails is recorded and the other result still
+    lands. `hasFace` is false only when the source and every `--ref` are
+    recorded face-free (or with `--no-face`), so a character sheet used as a
+    ref keeps the face checks (anti-pattern 31, rule 62) on.
+  - A person picks (`--pick <n|model|file>`, or the terminal prompt; `--use`
+    can change the role). The pick becomes the shot's `stagingRef` (core type
+    `ShotStagingRef`). A `plate` leads the shot's R2V references (on Kling O3
+    R2V, its scene image) and the view it was edited from is not sent. A
+    `start-frame` re-generates the shot i2v on its family's image-to-video lane
+    (`imageToVideoTwin` in core), with no reference stack and without the
+    location's words. `--clear` and `--list` complete it.
+  - A staged shot renders on its own: the pick sets `mustStaySingle`, and the
+    planner keeps a staged shot out of every group. Its clip's `.video.json`
+    records the pick's hash; a clip not made from the current pick is rendered
+    again, and archived only when the new one lands.
+  - `generate-videos` refuses, before anything is billed or moved, a staged
+    shot it cannot render from its pick: the picked image is gone, a MiniMax
+    i2v lane with a frame that may show a face, or a plate pick on a lane that
+    sends no location reference. It lists each shot and why, exits non-zero and
+    does not mark the episode produced; `produce-episode` stops there.
+    `stage-ref` warns about such lanes when the pick is made, and prints the
+    generation units a pick (or a clear) changes: a pick inside a montage run
+    splits it, and the units around it get new names.
+  - A staged shot's pending job carries the pick's hash (`PendingJob.tag`). A
+    render queued before the pick is still re-attached, because it is paid for
+    (rule 43), but it is saved unmarked and reported, and the next run renders
+    the shot from the pick.
+  - Loop mode renders a shot as it was before a start-frame pick: it picks its
+    own lanes, and routed through the pick a character shot would go i2v off
+    its face panel, which MiniMax fails after billing.
+  - Tests: `tests/stage-ref.test.mjs`, `tests/stage-ref-render.test.mjs`,
+    `tests/loop-engine.test.mjs`.
+- **The plan check reads what a plate image shows, when a caller has read it.**
+  `PlanLocation.inventory` (per view: vehicles, the places an action can use,
+  loose objects, each near / mid / far) joins the location's words as evidence;
+  `WorkshopOptions.plateInventory` supplies it to the workshop review. It can
+  show a thing close that the words leave out. A far mention in it never makes
+  a thing look far off, and the parts of a boat it lists are checked against
+  the words only (a barge's bow is not the ferry's).
+  - New `competing-vehicle` finding: the staged view shows a vehicle close to
+    the camera that is not the shot's own. It blocks for another class of
+    vehicle the action uses (gondolas where the shot boards the ferry, a bus at
+    a train platform) and warns for the same class (a "motor launch" where the
+    shot says "the ferry", which only a vision pass tells apart) or a vehicle
+    the shot only names. It points to `stage-ref --from-plate`.
+  - A shot whose staging ref replaced its view, or that renders from a staged
+    first frame, is not checked against the old plate.
+  - Test: `tests/plan-check-inventory.test.mjs`.
 - **Shots are planned against their location plates, and checked before any
   spend (rule 64).** The video model draws what a reference plate shows, not
   what the shot text asks: a boarding staged on a station platform whose plates

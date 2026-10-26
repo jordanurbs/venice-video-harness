@@ -146,7 +146,8 @@ function padShot(n: number): string {
  * rides the montage.
  */
 function shotBlocksMontage(shot: ShotScript, videoDefaults?: VideoModelDefaults): boolean {
-  if (shot.mustStaySingle) return true;
+  // A staging ref (stage-ref) belongs to its shot alone: only a single sends it.
+  if (shot.mustStaySingle || shot.stagingRef) return true;
   if (shot.type === 'insert') return true;
   if (/title card/i.test(shot.description)) return true;
   // Exact-lip-sync dialogue keeps its dedicated single-clip pipeline —

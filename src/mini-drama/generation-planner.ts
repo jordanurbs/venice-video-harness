@@ -186,6 +186,8 @@ export function shouldUseSeedanceKeyframe(
   videoDefaults?: VideoModelDefaults,
 ): boolean {
   if (!mustRenderAsExactLipSync(shot, videoDefaults)) return false;
+  // A staged first frame (stage-ref) is the keyframe already.
+  if (shot.stagingRef?.use === 'start-frame') return false;
   if (!lipSyncModelNeedsKeyframe(lipSyncModelFor(videoDefaults))) return false;
   if (shot.characters.length === 0) return false;
   if (shot.disableSeedanceKeyframe === true) return false;
@@ -200,7 +202,17 @@ function buildSingleUnit(
   videoDefaults?: VideoModelDefaults,
 ): GenerationUnit {
   const reasons = ['standalone render'];
-  if (shot.mustStaySingle) reasons.push('forced single via script override');
+  // A staging ref (stage-ref) belongs to its shot alone, so a staged shot
+  // always renders as a single: the pick sets mustStaySingle, and the planner
+  // also keeps it out of every group should that flag be edited away.
+  const fromStagedFrame = shot.stagingRef?.use === 'start-frame';
+  if (shot.stagingRef) {
+    reasons.push(fromStagedFrame
+      ? 'staged start frame (stage-ref): re-generated i2v from the picked frame'
+      : `staged plate (stage-ref): the picked image replaces ${shot.stagingRef.replacesView ? `the ${shot.stagingRef.replacesView} view` : 'its source'} in the references`);
+  } else if (shot.mustStaySingle) {
+    reasons.push('forced single via script override');
+  }
   if (isTitleLikeInsert(shot)) reasons.push('insert or title card');
   if (isIdentitySensitive(shot)) reasons.push('identity-sensitive framing');
 
@@ -219,8 +231,8 @@ function buildSingleUnit(
     outputFile: `shot-${padShotNumber(shot.shotNumber)}.mp4`,
     model: shot.videoModel,
     duration: shot.duration,
-    startFrameStrategy: chooseStartFrameStrategy(previousShot, shot),
-    endFrameStrategy: chooseEndFrameStrategy(shot, nextShot, videoDefaults),
+    startFrameStrategy: fromStagedFrame ? 'panel' : chooseStartFrameStrategy(previousShot, shot),
+    endFrameStrategy: fromStagedFrame ? 'natural' : chooseEndFrameStrategy(shot, nextShot, videoDefaults),
     decisionReasons: reasons,
     fallbackToSingles: false,
     useSeedanceKeyframe: useSeedanceKeyframe || undefined,
@@ -244,7 +256,7 @@ function canUseMultiShotWindow(
   videoDefaults?: VideoModelDefaults,
 ): { ok: boolean; reasons: string[] } {
   if (window.length < 2) return { ok: false, reasons: ['window too short'] };
-  if (window.some(shot => shot.mustStaySingle || shot.allowMultiShot === false)) {
+  if (window.some(shot => shot.mustStaySingle || shot.stagingRef || shot.allowMultiShot === false)) {
     return { ok: false, reasons: ['script override blocks grouping'] };
   }
   if (window.some(isTitleLikeInsert)) {

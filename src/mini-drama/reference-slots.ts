@@ -10,7 +10,8 @@
 // Slot order (within the per-model budget, default 9 on Seedance R2V):
 //   1. One primary angle per character (front.png)      — identity
 //   2. Storyboard blocking plate(s) for the shot's beat — PROTECTED
-//   3. Location angles (wide, then medium, then detail) — environment
+//   3. Location angles (wide, then medium, then detail) — environment;
+//      a staged plate (stage-ref) leads them and replaces its source view
 //   4. Second character angles (three-quarter.png)      — extra identity
 //
 // Overflow policy (user decision 2026-07-30): drop second character angles
@@ -20,6 +21,7 @@
 
 import { join } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
+import { stagedPlate } from './staging.js';
 import type { SeriesState, ShotScript } from 'venice-video-harness/core/series/types.js';
 import { getMaxReferenceImages } from 'venice-video-harness/core/series/types.js';
 import {
@@ -154,6 +156,22 @@ export function buildReferenceSlotPlan(
 
   // --- Tier 3: location angles ---
   const location: CandidateSlot[] = [];
+  // A staged plate (stage-ref) leads the location slots and the view it was
+  // edited from is not sent: the original would bring back what the edit
+  // removed (a boat the plate shows where the shot needs another one).
+  const staged = stagedPlate(series, shot);
+  const stagedLoc = shot.location ? getLocation(series, shot.location) : undefined;
+  if (staged) {
+    const where = stagedLoc
+      ? `${stagedLoc.name}${staged.ref.replacesView ? `, the ${staged.ref.replacesView} view` : ''}, edited for this shot`
+      : 'edited for this shot';
+    location.push({
+      kind: 'location',
+      path: staged.path,
+      label: stagedLoc?.slug ?? 'staging',
+      roleClause: `is the view this shot is staged on, as it must look in this shot (${where}) — match its background, architecture, lighting and every vehicle and object in it exactly; where it differs from the location's description, this image is right; it is not a character`,
+    });
+  }
   if (shot.location) {
     const loc = getLocation(series, shot.location);
     if (loc) {
@@ -192,10 +210,11 @@ export function buildReferenceSlotPlan(
         // No location dir — canonical loop below reports nothing either.
       }
 
-      let angleCount = 0;
+      let angleCount = staged ? 1 : 0;
+      const replaced = staged?.ref.replacesView ? `${staged.ref.replacesView}.png` : null;
       for (const f of [...order, ...customAngles]) {
         const p = join(dir, f);
-        if (!existsSync(p)) continue;
+        if (!existsSync(p) || f === replaced) continue;
         angleCount += 1;
         const customName = canonical.has(f) ? null : f.replace(/\.png$/i, '').replace(/-/g, ' ');
         const stagedView = angleCount === 1 && shot.plateView && f === `${shot.plateView}.png`;
