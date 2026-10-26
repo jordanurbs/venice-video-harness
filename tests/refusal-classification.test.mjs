@@ -34,6 +34,7 @@ import {
 import { VeniceRequestError } from '../dist/venice/client.js';
 import { runInOperation, OperationAbortedError } from '../dist/venice/operation-context.js';
 import { renderVideoFile, VideoRefusalError } from '../dist/mini-drama/video-generator.js';
+import { findPendingJob } from '../dist/venice/job-store.js';
 
 // Isolate the pending-job store: renderVideoFile records a pending job in the
 // config dir on its way to the queue call, and without this a test run leaves
@@ -268,6 +269,32 @@ test('a plain 400 validation error passes through unchanged', async () => {
       (e) => e instanceof VeniceRequestError && !(e instanceof VideoRefusalError) && e.status === 400,
     );
     assert.equal(client.bodies.length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a content-policy refusal at retrieve time is final: one poll, and the pending record is cleared', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'refusal-'));
+  try {
+    let polls = 0;
+    const client = {
+      async post(path) {
+        assert.equal(path, '/api/v1/video/queue');
+        return { queue_id: 'q-refused', model: R2V };
+      },
+      async postBinaryOrJson() {
+        polls += 1;
+        throw err(422, REFUNDED, 'The selected model provider rejected this request due to its content policies.');
+      },
+    };
+    const opts = renderOpts(dir);
+    await assert.rejects(
+      quiet(() => renderVideoFile(client, opts)),
+      (e) => e instanceof VideoRefusalError && e.refusal.kind === 'provider-content-policy' && !e.refusal.retryable,
+    );
+    assert.equal(polls, 1, 'a refused job is not polled again');
+    assert.equal(await findPendingJob(opts.outputPath), undefined, 'the next run must queue fresh, not re-attach');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

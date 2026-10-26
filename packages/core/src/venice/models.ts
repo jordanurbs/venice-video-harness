@@ -1080,6 +1080,17 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
     supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
     maxDurationSec: 30, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
   },
+  {
+    // Seedance 2.5 R2V Enhanced: delisted from GET /models (like 2.0 Enhanced) but
+    // live on quote/queue. Quote-probed 2026-10-25: same 4-30s ladder as 2.5 R2V,
+    // 720p and 1080p accepted, and the same price as standard 2.5 R2V at 720p.
+    id: 'seedance-2-5-enhanced-reference-to-video', name: 'Seedance 2.5 R2V Enhanced', type: 'image-to-video',
+    durations: Array.from({ length: 27 }, (_, i) => `${i + 4}s`),
+    resolutions: ['480p', '720p', '1080p'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+    audio: true, audioConfigurable: true, audioInput: true, videoInput: true,
+    supportsElements: false, supportsReferenceImages: true, supportsSceneImages: false, supportsEndImage: false,
+    maxDurationSec: 30, supportsReferenceAudio: true, privacy: 'anonymized', offline: false,
+  },
   // -- Sora 2 --
   // Offline 2026-10-06: no longer in GET /models (with or without a key), and
   // /video/quote now validates these ids against a different ladder (5-15s at 480P/768P/1080P)
@@ -1845,6 +1856,11 @@ export interface MusicModelSpec {
   minPromptLength?: number;
   /** Default generation length in seconds. */
   defaultDurationSec?: number;
+  /**
+   * False when the queue rejects `duration_seconds` (Seed Audio, since 2026-10:
+   * "This model does not support duration_seconds"); length then follows the prompt.
+   */
+  supportsDuration?: boolean;
   /** Per-second price in USD (for budgeting without a `/audio/quote` round-trip). */
   pricingPerSecondUsd?: number;
   /** One-line human summary. */
@@ -1888,6 +1904,7 @@ export const MUSIC_MODELS: MusicModelSpec[] = [
     promptCharacterLimit: 2048,
     minPromptLength: 1,
     defaultDurationSec: 120,
+    supportsDuration: false,
     pricingPerSecondUsd: 0.0028750000000000004,
     description: 'Generate expressive speech and audio from a text prompt with BytePlus Seed Audio 1.0.',
   },

@@ -32,6 +32,26 @@
   whose two sides are tagged with different locations is now skipped and
   counted (`isLocationChange`). Test:
   `tests/video-qa-vision-input.test.mjs`.
+
+- **Seed Audio stopped accepting `duration_seconds`.** The queue now answers
+  "This model does not support duration_seconds", so every
+  `generate-voice-reference` and `generate-audio` call failed with a bare
+  "Invalid request parameters". The spec now sets `supportsDuration: false`
+  and the field is left out. Clip length follows the prompt.
+- **A content-policy refusal at retrieve time trapped the shot.** The poll
+  loop treated it as a transient error, retried it six times, then gave up
+  and left the pending-job record behind. Every later run re-attached to the
+  same refused job instead of queueing a fresh one. A refusal now ends the
+  poll on the first answer, clears the record, and raises
+  `VideoRefusalError`.
+- **Big reference stacks failed with HTTP 413.** A montage with four
+  characters (two angles each) and four location plates inlined twelve
+  ~2 MB PNGs, which is past Venice's request-body limit. Reference and scene
+  images over 1 MB are now sent as quality-92 JPEG.
+- **`generate-voice-reference --file` sent non-mp3 clips mislabelled.** An
+  `.m4a` or `.wav` was copied byte for byte into `voice-reference.mp3` and
+  sent as `audio/mpeg`. Non-mp3 imports are now transcoded.
+
 - **Video registry corrections checked against `/video/quote` (drift issue
   #50).** Quote is free and validates `duration` and `resolution` with the
   same enum errors as the queue, so each change below rests on it plus the
@@ -249,6 +269,19 @@
   behaviour is unchanged. Test: `tests/validate-before-quote.test.mjs`.
 
 ### Added
+
+- **Seedance 2.5 R2V Enhanced (`seedance-2-5-enhanced-reference-to-video`).**
+  Like 2.0 Enhanced, it is missing from `GET /models` but works on quote and
+  queue. The 2026-10-25 quote probe showed the same 4-30s ladder as 2.5 R2V,
+  480p/720p/1080p, and the same 720p price ($8.67 for 30s). It joins every
+  capability set 2.5 R2V is in (reference images, `@Image` tags, `audio_url`,
+  reference audio, 30-image budget). Pick it per project with `videoDefaults`.
+  It is not a default.
+- **`videoDefaults.improviseDialogue: false`.** Simple-prompt models (MiniMax
+  H3 Max) improvise from the scripted line by default (rule 59). With this
+  set, the line is quoted verbatim, for scripts where the exact words are the
+  point. A 2026-10-26 probe showed H3 Max R2V delivers a quoted line word for
+  word.
 
 - **`stage-ref`: edit the reference first, then generate from it (rule 65).**
   The video model copies a reference's whole composition, not just the thing

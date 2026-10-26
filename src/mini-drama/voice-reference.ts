@@ -162,7 +162,13 @@ export async function generateVoiceReference(
   if (options.file) {
     const src = resolve(options.file);
     if (!existsSync(src)) throw new Error(`--file voice reference not found: ${src}`);
-    await copyFile(src, absPath);
+    // The clip is sent as audio/mpeg, so anything that isn't already mp3
+    // (m4a, wav, aac...) is transcoded rather than copied under an .mp3 name.
+    if (/\.mp3$/i.test(src)) {
+      await copyFile(src, absPath);
+    } else {
+      runCommand('ffmpeg', ['-y', '-i', src, '-vn', '-c:a', 'libmp3lame', '-q:a', '2', absPath]);
+    }
     model = 'user-supplied';
     console.log(`  Imported voice reference from ${src}`);
   } else {
