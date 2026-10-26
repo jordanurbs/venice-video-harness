@@ -34,6 +34,8 @@ export interface PlanLocation {
 export interface PlanShot {
   shotNumber: number;
   shotIdSuffix?: string;
+  /** The shot type ('close-up', 'insert', ...): a close-up's object is checked against its neighbours. */
+  type?: string;
   location?: string;
   description?: string;
   blocking?: string;
@@ -57,6 +59,8 @@ export type PlanFindingKind =
   | 'distant-in-plates'
   | 'vessel-changes'
   | 'recurring-vehicle'
+  /** A close-up's object that no neighbouring shot of the scene, and no plate of the place, shows. */
+  | 'prop-continuity'
   /** The vision plate check (a `readPlates` pass) found no view that carries the shot. */
   | 'plate-misfit';
 
@@ -170,6 +174,26 @@ const PLACES: Term[] = [
 ];
 
 const STAGING_TERMS = [...VEHICLES, ...LAND_VEHICLES, ...VESSEL_PARTS, ...PLACES];
+
+/**
+ * Small objects an action turns on. A close-up of one that the rest of its
+ * scene never shows is a continuity risk. Words with another sense count only
+ * in the object's: a "key light", "low-key" or a crossed-keys mark is not a
+ * key, an "85mm lens" or a "lens flare" is the camera's, and "she notes the
+ * time", "he locks the door" and "she cups her hands" are verbs.
+ */
+const OBJECTS: Term[] = [
+  { key: 'key', pattern: /(?<!crossed[\s-])(?<!\b(?:low|high)[\s-])\bkeys?\b(?![\s-]+(?:lights?|lighting|lit|frames?|art|moments?|beats?|points?|details?|figures?|scenes?|shots?|questions?)\b)/i },
+  { key: 'lock', pattern: new RegExp(`\\b(?:${NOUN_CUE}|brass|iron|steel|bronze|heavy|rusted|rusty|old|combination|bicycle)\\s+locks?\\b|\\b(?:keyholes?|padlocks?)\\b`, 'i'), loose: /\b(?:locks?|keyholes?|padlocks?)\b/i },
+  term('reader', ['reader', 'scanner']),
+  { key: 'lens', pattern: /(?<!\d\s?mm[\s-])(?<!\b(?:wide|wide-angle|long|telephoto|anamorphic|macro|fisheye|fish-eye|zoom|prime|portrait|tilt-shift|camera)[\s-])(?<!\b(?:into|on|across|at|toward|towards) the )\blens(?:es)?\b(?![\s-]+flares?\b)/i },
+  { key: 'note', pattern: new RegExp(`\\b(?:${NOUN_CUE}|folded|handwritten|hand-written|sealed|crumpled|written|scribbled|torn|paper|sticky)\\s+(?:notes?|scrolls?)\\b|\\b(?:letters?|envelopes?)\\b`, 'i'), loose: /\b(?:notes?|letters?|envelopes?|scrolls?)\b/i },
+  term('coin', ['coin']),
+  term('book', ['book', 'ledger']),
+  term('lamp', ['lamp', 'lantern']),
+  { key: 'cup', pattern: new RegExp(`\\b(?:${NOUN_CUE}|tea|coffee|tin|clay|china|paper|silver|empty|full)\\s+cups?\\b|\\b(?:teacups?|goblets?)\\b`, 'i'), loose: /\b(?:cups?|teacups?|goblets?)\b/i },
+  term('map', ['map']),
+];
 
 /**
  * The action touches the thing: it has to be in the frame, near the camera.
@@ -461,6 +485,36 @@ export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
     }
     last = { shot, place, vessels, inferred };
   }
+
+  // A close-up's object that the neighbouring shots of its scene never show:
+  // those shots draw that spot from the plate, so the object changes at the
+  // cut (a key turned in a plate on a bench in the close-up, whatever the
+  // plate shows there in the wide shot after it). Words, so a warning.
+  const placeOf = (shot: PlanShot) => findLocation(shot.location)?.slug ?? shot.location;
+  input.shots.forEach((shot, i) => {
+    if (shot.type !== 'close-up' && shot.type !== 'insert') return;
+    const objects = OBJECTS.filter(t => hasTerm(shotText(shot), t));
+    if (objects.length === 0) return;
+    const prevShot = input.shots[i - 1];
+    const nextShot = input.shots[i + 1];
+    const neighbours = [
+      prevShot && shot.continuity?.from !== 'new-scene' && placeOf(prevShot) === placeOf(shot) ? prevShot : undefined,
+      nextShot && nextShot.continuity?.from !== 'new-scene' && placeOf(nextShot) === placeOf(shot) ? nextShot : undefined,
+    ].filter((other): other is PlanShot => Boolean(other));
+    if (neighbours.length === 0) return;
+    const loc = findLocation(shot.location);
+    const placeText = loc ? `${loc.name}. ${loc.description}. ${typeof loc.spatialAnchors === 'string' ? loc.spatialAnchors : ''}` : '';
+    for (const t of objects) {
+      // Cast as an object, it has a reference. By name only: a vehicle's "crossed-keys mark" is not a key.
+      if (props.some(prop => placePattern(t).test(prop.name))) continue;
+      if (neighbours.some(other => placePattern(t).test(shotText(other))) || placePattern(t).test(placeText)) continue;
+      const others = neighbours.map(shotId);
+      findings.push({
+        shot: shotId(shot), kind: 'prop-continuity', severity: 'warn', location: shot.location, noun: t.key,
+        message: `Shot ${shotId(shot)} shows the ${t.key}, which neither ${others.length > 1 ? `shots ${others.join(' and ')}` : `shot ${others[0]}`} nor ${loc ? `any plate of ${loc.slug}` : 'its location'} shows. Those shots draw that spot from the plate, so the ${t.key} will change at the cut: show it there too, or cast it as an object with a reference.`,
+      });
+    }
+  });
 
   // A vessel seen at two or more places is drawn fresh at each unless it has its own reference.
   for (const [vessel, locations] of vesselShots) {

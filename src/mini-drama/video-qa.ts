@@ -15,7 +15,10 @@
 //        second; a spike-and-revert inside the first ~10 frames is the
 //        Seedance transition-junk flash that survived the beat cut.
 //      - boundary luma jump: mean-luma delta across every unit join in
-//        assembly order (matches cut-qa's lighting-discontinuity check).
+//        assembly order (matches cut-qa's lighting-discontinuity check). A
+//        join that changes location is a scene cut and is not compared.
+//      - speech tail: a clip with an on-camera speaker whose cut does not fall
+//        in silence (the line is cut off). A warning.
 //
 //   2. VISION (per-unit sampled frames, same intelligence layer as panel QA):
 //      - identity: one mid-beat frame per character-bearing shot, sent WITH
@@ -23,16 +26,19 @@
 //      - cross-unit: the per-unit hero frames sent TOGETHER in one call —
 //        "is this the same person in every frame?" This is the check that
 //        would have caught canopy-run's three Wrens.
+//      - neighbour continuity: one call per cut, the end of one shot against
+//        the start of the next (vehicle, props, people, facing, action,
+//        light), on the generation plan or on any edit's cut list.
 //
 // The report lands next to qa-report.json as video-qa-report.json, and
 // assemble-episode refuses (without --skip-video-qa) to stitch units that
-// have a FLAG-CRITICAL cross-unit verdict.
+// have a FLAG-CRITICAL verdict or a check that could not run.
 // ---------------------------------------------------------------------------
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { VeniceClient } from '../venice/client.js';
 import type { SeriesState, EpisodeScript } from 'venice-video-harness/core/series/types.js';
@@ -87,6 +93,10 @@ export interface VideoQaReport {
   boundaries: BoundaryFinding[];
   unitIdentity: UnitIdentityResult[];
   crossUnit: CrossUnitResult;
+  /** Neighbour continuity: one result per checked cut (vehicle, people, props, facing, action, light). */
+  continuity?: PairContinuityResult[];
+  /** Clips whose on-camera line is still sounding at the cut (warnings). */
+  speechTails?: SpeechTailFinding[];
   summary: {
     units: number;
     criticals: number;
@@ -107,12 +117,57 @@ export function ffprobeDurationSec(path: string): number {
   return Number.isFinite(v) ? v : 0;
 }
 
-export function extractFrame(videoPath: string, atSec: number, outPath: string): boolean {
+export function extractFrame(videoPath: string, atSec: number, outPath: string, options: { flip?: boolean } = {}): boolean {
+  // A seek past the last frame exits 0 and writes nothing: an older file at
+  // the same path must not pass for the new frame.
+  rmSync(outPath, { force: true });
   const r = spawnSync('ffmpeg', [
     '-y', '-v', 'error', '-ss', String(atSec), '-i', videoPath,
+    ...(options.flip ? ['-vf', 'hflip'] : []),
     '-frames:v', '1', outPath,
   ], { encoding: 'utf-8' });
   return r.status === 0 && existsSync(outPath);
+}
+
+/**
+ * Duration of the first video stream, or of the container when the stream
+ * carries none. A longer audio track puts the container's end past the last
+ * decodable frame (extractLastFrame in video-generator.ts probes the same way).
+ */
+export function videoStreamDurationSec(path: string): number {
+  const r = spawnSync('ffprobe', [
+    '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=duration', '-of', 'csv=p=0', path,
+  ], { encoding: 'utf-8' });
+  const v = parseFloat((r.stdout || '').trim());
+  return Number.isFinite(v) && v > 0 ? v : ffprobeDurationSec(path);
+}
+
+/**
+ * The frame at `atSec`, or the nearest earlier one that decodes: steps back in
+ * widening offsets (as extractLastFrame does), never before `notBeforeSec`.
+ * Returns the time read, or undefined when no frame came out.
+ */
+export function extractFrameAtOrBefore(
+  videoPath: string,
+  atSec: number,
+  outPath: string,
+  options: { notBeforeSec?: number; flip?: boolean } = {},
+): number | undefined {
+  const floor = Math.max(0, options.notBeforeSec ?? 0);
+  for (const back of [0, 0.1, 0.3, 0.6, 1.0]) {
+    const at = Math.max(floor, atSec - back);
+    if (extractFrame(videoPath, at, outPath, { flip: options.flip })) return at;
+    if (at === floor) break;
+  }
+  return undefined;
+}
+
+/** Whether a file has an audio stream. */
+export function hasAudioStream(path: string): boolean {
+  const r = spawnSync('ffprobe', [
+    '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', path,
+  ], { encoding: 'utf-8' });
+  return r.status === 0 && (r.stdout || '').trim().length > 0;
 }
 
 /**
@@ -356,4 +411,459 @@ export async function saveVideoQaReport(episodeDir: string, report: VideoQaRepor
   const reportPath = join(episodeDir, 'video-qa-report.json');
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf-8');
   return reportPath;
+}
+
+// ---------------------------------------------------------------------------
+// Neighbour continuity (2026-10-26): one vision call per cut between two
+// clips meant to play as one sequence. The identity checks compare only
+// people, so a vehicle that changes between two generations, a person who
+// faces the other way after the cut, or an object a close-up shows and the
+// next shot does not, all passed. The check runs on a generation plan's shot
+// clips or on any cut list, including an EDL, since a film cut in an editor
+// never passes through assemble-episode.
+// ---------------------------------------------------------------------------
+
+/** One clip of a cut list, in play order. */
+export interface CutClip {
+  id: string;
+  file: string;
+  /** Source in point (seconds). */
+  inSec: number;
+  /** Source out point (seconds); the clip's end when absent. */
+  outSec?: number;
+  shot?: number;
+  shotIdSuffix?: string;
+  /** Where the clip is set (the script's location for a known shot). */
+  location?: string;
+  /** The cut into this clip starts a new scene: not checked. */
+  newScene?: boolean;
+  /** Time passes at the cut into this clip (`continuity.from: later`): checked, never critical. */
+  timeCut?: boolean;
+  /** The generation (unit, or source file) the clip was cut from, when known. */
+  generation?: string;
+  /** The cut mirrors the clip (a shot's `flip`, as assemble-episode applies it). */
+  flip?: boolean;
+  /** What the shot should show, for an edit with no script behind it. */
+  text?: string;
+  /** Reference images of the objects and vehicles in the shot (a vehicle that changes is the commonest break). */
+  refs?: Array<{ name: string; file: string }>;
+  /** Someone speaks on camera in this clip: its cut belongs in silence. */
+  speech?: boolean;
+}
+
+/** The fields of a script shot the cut checks read. */
+export interface CutShot {
+  shotNumber: number;
+  shotIdSuffix?: string;
+  location?: string;
+  continuity?: { from?: string };
+  trimStart?: number;
+  trimEnd?: number;
+  flip?: boolean;
+}
+
+export interface PairContinuityResult {
+  from: string;
+  to: string;
+  verdict: VideoQaVerdict;
+  issues: string[];
+  /** What broke: vehicle, people, props, facing, action, light. */
+  kinds: string[];
+  /** The two clips come from different generations (the riskier joins). */
+  acrossGenerations: boolean;
+  /** Time passes at this cut: only the vehicle, people and props count, and never as critical. */
+  timeCut?: boolean;
+  /** The check could not run, or the reply did not answer the checklist: the cut is UNCHECKED, not passed. */
+  errored?: boolean;
+}
+
+/** The script shot a clip shows, by number and suffix. */
+export function shotForClip<T extends { shotNumber: number; shotIdSuffix?: string }>(
+  shots: T[],
+  clip: Pick<CutClip, 'shot' | 'shotIdSuffix'>,
+): T | undefined {
+  if (clip.shot === undefined) return undefined;
+  return shots.find(s => s.shotNumber === clip.shot && (s.shotIdSuffix ?? '') === (clip.shotIdSuffix ?? ''));
+}
+
+/**
+ * How each cut joins, read from the script. A cut into a shot marked
+ * `new-scene` starts a new scene, and so does a change of location when the
+ * shot does not say how it joins (scripts written before the continuity
+ * field): neither is checked. A `later` cut is a time cut. A cut inside one
+ * shot (the same shot on both sides) is continuous. A clip already marked
+ * `newScene` keeps it.
+ */
+export function markJoins<T extends CutClip>(clips: T[], shots: CutShot[] = []): T[] {
+  return clips.map((clip, i) => {
+    if (i === 0 || clip.newScene) return clip;
+    const prev = clips[i - 1];
+    if (clip.shot !== undefined && clip.shot === prev.shot && (clip.shotIdSuffix ?? '') === (prev.shotIdSuffix ?? '')) return clip;
+    const shot = shotForClip(shots, clip);
+    const from = shot?.continuity?.from;
+    if (from === 'new-scene') return { ...clip, newScene: true };
+    if (from === 'later') return { ...clip, timeCut: true };
+    const before = shotForClip(shots, prev)?.location ?? prev.location;
+    const after = shot?.location ?? clip.location;
+    if (!from && before && after && before !== after) return { ...clip, newScene: true };
+    return clip;
+  });
+}
+
+/**
+ * The plan's shot clips in script order, each tagged with its generation, cut
+ * as assemble-episode cuts them (assembler.ts `normalizeClip`): from
+ * `trimStart`, to `trimEnd` before the file's end, mirrored by `flip`.
+ */
+export function cutListFromPlan(
+  plan: { units: Array<{ unitId: string; shotNumbers: number[] }> },
+  sceneDir: string,
+  shots: CutShot[],
+): CutClip[] {
+  const generationOf = new Map<number, string>();
+  for (const unit of plan.units) for (const n of unit.shotNumbers) generationOf.set(n, unit.unitId);
+  const clips: CutClip[] = [];
+  for (const shot of shots) {
+    const key = `${String(shot.shotNumber).padStart(3, '0')}${shot.shotIdSuffix ?? ''}`;
+    const file = join(sceneDir, `shot-${key}.mp4`);
+    if (!existsSync(file)) continue;
+    const inSec = shot.trimStart && shot.trimStart > 0 ? shot.trimStart : 0;
+    const outSec = shot.trimEnd && shot.trimEnd > 0 ? ffprobeDurationSec(file) - shot.trimEnd : undefined;
+    clips.push({
+      id: `shot ${shot.shotNumber}${shot.shotIdSuffix ?? ''}`,
+      file,
+      inSec,
+      ...(outSec !== undefined && outSec > inSec ? { outSec } : {}),
+      shot: shot.shotNumber,
+      ...(shot.shotIdSuffix ? { shotIdSuffix: shot.shotIdSuffix } : {}),
+      ...(shot.location ? { location: shot.location } : {}),
+      ...(shot.flip ? { flip: true } : {}),
+      generation: generationOf.get(shot.shotNumber),
+    });
+  }
+  return markJoins(clips, shots);
+}
+
+/** A shot reference from a cut list: 8, "8" or "8b". */
+function parseShotRef(value: unknown): Pick<CutClip, 'shot' | 'shotIdSuffix'> {
+  if (value === undefined || value === null) return {};
+  const match = /^(\d+)([a-z]*)$/i.exec(String(value).trim());
+  if (!match) return {};
+  return { shot: Number(match[1]), ...(match[2] ? { shotIdSuffix: match[2].toLowerCase() } : {}) };
+}
+
+/**
+ * A cut list from JSON: `{ "clips": [{ "file", "in", "out", "shot", "location", "newScene", "generation", "flip",
+ * "text", "refs", "speech" }] }`, or an EDL with `cuts: [{ master, srcIn, srcOut, shot, location }]`. Relative paths
+ * resolve against the first of `baseDir` that has the file. A clip's generation defaults to its source file: two
+ * clips cut from one file are one generation.
+ */
+export function cutListFromJson(json: unknown, baseDir: string | string[]): CutClip[] {
+  const data = json as { clips?: Array<Record<string, unknown>>; cuts?: Array<Record<string, unknown>> };
+  // An EDL may name its media from the project root, not from its own folder: the first base that has the file wins.
+  const bases = Array.isArray(baseDir) ? baseDir : [baseDir];
+  const resolvePath = (file: string) => {
+    if (isAbsolute(file)) return file;
+    return bases.map(base => join(base, file)).find(path => existsSync(path)) ?? join(bases[0], file);
+  };
+  const seconds = (value: unknown, where: string): number => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) throw new Error(`Cut list ${where} is not a time in seconds: ${JSON.stringify(value)}`);
+    return n;
+  };
+  if (Array.isArray(data?.clips)) {
+    return data.clips.map((clip, index) => {
+      const where = `clip ${index + 1}`;
+      if (typeof clip?.file !== 'string' || !clip.file) throw new Error(`Cut list ${where} has no "file".`);
+      const file = resolvePath(clip.file);
+      return {
+        id: String(clip.id ?? clip.label ?? where),
+        file,
+        inSec: seconds(clip.in ?? 0, `${where} "in"`),
+        ...(clip.out !== undefined ? { outSec: seconds(clip.out, `${where} "out"`) } : {}),
+        ...parseShotRef(clip.shot),
+        ...(clip.location ? { location: String(clip.location) } : {}),
+        ...(clip.newScene ? { newScene: true } : {}),
+        generation: clip.generation ? String(clip.generation) : file,
+        ...(clip.flip ? { flip: true } : {}),
+        ...(clip.text ? { text: String(clip.text) } : {}),
+        ...(clip.speech ? { speech: true } : {}),
+        ...(Array.isArray(clip.refs) ? {
+          refs: (clip.refs as Array<Record<string, unknown> | string>).map(ref => (typeof ref === 'string'
+            ? { name: ref.split('/').pop()!.replace(/\.[a-z]+$/i, ''), file: resolvePath(ref) }
+            : { name: String(ref.name ?? 'object'), file: resolvePath(String(ref.file)) })),
+        } : {}),
+      };
+    });
+  }
+  if (Array.isArray(data?.cuts)) {
+    return data.cuts.map((cut, index) => {
+      const where = `cut ${index + 1}`;
+      if (typeof cut?.master !== 'string' || !cut.master) throw new Error(`Cut list ${where} has no "master".`);
+      const file = resolvePath(cut.master);
+      const ref = parseShotRef(cut.shot);
+      return {
+        id: ref.shot !== undefined ? `shot ${ref.shot}${ref.shotIdSuffix ?? ''}` : where,
+        file,
+        inSec: seconds(cut.srcIn ?? 0, `${where} "srcIn"`),
+        ...(cut.srcOut !== undefined ? { outSec: seconds(cut.srcOut, `${where} "srcOut"`) } : {}),
+        ...ref,
+        ...(cut.location ? { location: String(cut.location) } : {}),
+        generation: file,
+      };
+    });
+  }
+  throw new Error('Not a cut list: expected "clips" (file, in, out) or an EDL with "cuts" (master, srcIn, srcOut).');
+}
+
+/** Which cuts of a cut list to check: every cut, or only those between two generations; never into a new scene. */
+export function pairsToCheck(clips: CutClip[], scope: 'all' | 'joins'): Array<[CutClip, CutClip]> {
+  const pairs: Array<[CutClip, CutClip]> = [];
+  for (let i = 1; i < clips.length; i++) {
+    const [a, b] = [clips[i - 1], clips[i]];
+    if (b.newScene) continue;
+    if (scope === 'joins' && a.generation && b.generation && a.generation === b.generation) continue;
+    pairs.push([a, b]);
+  }
+  return pairs;
+}
+
+const PAIR_SYSTEM_PROMPT = `You are a film-continuity supervisor checking ONE cut between two shots meant to play one after the other as a continuous sequence. Images 1 and 2 are the end of shot A (its middle, then its last frame). Images 3 and 4 are the start of shot B (its first frame, then its middle). Any further images are references for objects and vehicles, named in the request.
+Answer each question by looking hard at the frames. Describe before you judge.
+- vehicle: describe the vehicle in A (kind, length, hull or body colour, cabin shape, windows, marks) and in B. Same vehicle, a different one, or n/a (in neither)? When a reference image of the vehicle is given, a vehicle in either shot that does not match the reference is "different", even if only one shot shows it.
+- people: for each person who appears in BOTH shots, the same face and clothes? same, different, or n/a when no person appears in both. Different people in the two shots (one person in A, another in B) is not a fault.
+- props: the object in use in A and in B. The same object, a different one, or n/a? An object that does not match its reference image is "different".
+- facing: in A, which way does each person face (and each vehicle head) relative to the clearest landmark (a skyline, a shore, a doorway)? In B? The same, reversed, or n/a? A person seen from the front with the landmark behind them faces away from it.
+- action: does B plausibly continue from where A ends (moored or under way, open or shut, standing or seated)? continues or breaks.
+- light: the same time of day and light, or different?
+The shot text, when given, says what each shot should show; a change the text asks for (she turns round, the ferry pulls away) is not a fault, but a change it asks for that the frames do not show is.
+Respond with JSON only, every key present: {"vehicle": {"answer": "same" | "different" | "n/a", "note": string}, "people": {"answer": "same" | "different" | "n/a", "note": string}, "props": {"answer": "same" | "different" | "n/a", "note": string}, "facing": {"answer": "same" | "reversed" | "n/a", "note": string}, "action": {"answer": "continues" | "breaks", "note": string}, "light": {"answer": "same" | "different", "note": string}}`;
+
+const PAIR_KEYS = ['vehicle', 'people', 'props', 'facing', 'action', 'light'] as const;
+type PairKey = typeof PAIR_KEYS[number];
+
+/** The answers each question allows (the reply schema in PAIR_SYSTEM_PROMPT). */
+const PAIR_ANSWERS: Record<PairKey, readonly string[]> = {
+  vehicle: ['same', 'different', 'n/a'],
+  people: ['same', 'different', 'n/a'],
+  props: ['same', 'different', 'n/a'],
+  facing: ['same', 'reversed', 'n/a'],
+  action: ['continues', 'breaks'],
+  light: ['same', 'different'],
+};
+
+/** The answer that marks a break. */
+const PAIR_FAULT: Record<PairKey, string> = {
+  vehicle: 'different', people: 'different', props: 'different', facing: 'reversed', action: 'breaks', light: 'different',
+};
+
+export interface PairVerdict {
+  verdict: VideoQaVerdict;
+  issues: string[];
+  kinds: string[];
+  /** The reply did not answer every question with an allowed value: the cut is unchecked, not passed. */
+  errored?: boolean;
+}
+
+/**
+ * The verdict follows from the answers. On a continuous cut a different
+ * vehicle, person or prop, or a reversed facing, is critical, a broken action
+ * moderate, a change of light low. On a time cut only a different vehicle,
+ * person or prop counts, and as moderate. A reply that does not answer all six
+ * questions with an allowed value is unchecked, never a pass (rule 46).
+ */
+export function verdictFromAnswers(reply: unknown, options: { timeCut?: boolean } = {}): PairVerdict {
+  const answers = new Map<PairKey, { answer: string; note: string }>();
+  const unanswered: PairKey[] = [];
+  for (const key of PAIR_KEYS) {
+    const entry = reply && typeof reply === 'object' && !Array.isArray(reply) ? (reply as Record<string, unknown>)[key] : undefined;
+    const fields = entry && typeof entry === 'object' ? entry as { answer?: unknown; note?: unknown } : {};
+    const answer = typeof fields.answer === 'string' ? fields.answer.trim().toLowerCase() : '';
+    if (!PAIR_ANSWERS[key].includes(answer)) { unanswered.push(key); continue; }
+    answers.set(key, { answer, note: typeof fields.note === 'string' ? fields.note.trim() : '' });
+  }
+  if (unanswered.length) {
+    return {
+      verdict: 'FLAG-LOW',
+      issues: [`the reply did not answer the checklist (${unanswered.join(', ')}: missing, or not one of the allowed answers)`],
+      kinds: [],
+      errored: true,
+    };
+  }
+  const broken = PAIR_KEYS.filter(key => answers.get(key)!.answer === PAIR_FAULT[key]);
+  const kinds = options.timeCut ? broken.filter(key => key === 'vehicle' || key === 'people' || key === 'props') : broken;
+  const severity = (key: PairKey) => (options.timeCut || key === 'action' ? 'moderate' : key === 'light' ? 'low' : 'critical');
+  const verdict: VideoQaVerdict = kinds.some(key => severity(key) === 'critical') ? 'FLAG-CRITICAL'
+    : kinds.some(key => severity(key) === 'moderate') ? 'FLAG-MODERATE'
+      : kinds.length ? 'FLAG-LOW' : 'PASS';
+  const issues = kinds.map(key => (answers.get(key)!.note ? `${key}: ${answers.get(key)!.note}` : key));
+  return { verdict, issues, kinds: [...kinds] };
+}
+
+/** The clip's out point: its `outSec`, or the end of the file (audio included). */
+function clipOutSec(clip: CutClip): number {
+  return clip.outSec ?? ffprobeDurationSec(clip.file);
+}
+
+/** The clip's last moment with picture: its out point, or the end of the video stream when that comes first. */
+function pictureEndSec(clip: CutClip): number {
+  const stream = videoStreamDurationSec(clip.file);
+  const out = clip.outSec ?? stream;
+  return stream > 0 ? Math.min(out, stream) : out;
+}
+
+/** One vision call on one cut: the end of A against the start of B. */
+export async function checkPairContinuity(
+  client: Pick<VeniceClient, 'chatJson'>,
+  model: string,
+  a: CutClip,
+  b: CutClip,
+  options: { framesDir: string; aText?: string; bText?: string },
+): Promise<PairContinuityResult> {
+  const acrossGenerations = !a.generation || !b.generation || a.generation !== b.generation;
+  const base = { from: a.id, to: b.id, acrossGenerations, ...(b.timeCut ? { timeCut: true } : {}) };
+  const unchecked = (issue: string): PairContinuityResult => ({ ...base, verdict: 'FLAG-LOW', issues: [issue], kinds: [], errored: true });
+  for (const clip of [a, b]) {
+    if (!existsSync(clip.file)) return unchecked(`${clip.id}: ${clip.file} is not on disk`);
+  }
+  mkdirSync(options.framesDir, { recursive: true });
+  const aEnd = pictureEndSec(a);
+  const bEnd = pictureEndSec(b);
+  const stamp = `${a.id}-${b.id}`.replace(/[^a-z0-9]+/gi, '-');
+  // A seek lands on the first frame at or after its time: 50 ms before the end
+  // is the last frame at 24-30 fps, and an earlier one is found by stepping back.
+  const frames: Array<[CutClip, number, string]> = [
+    [a, a.inSec + (aEnd - a.inSec) / 2, 'a-mid'],
+    [a, aEnd - 0.05, 'a-last'],
+    [b, Math.min(b.inSec + 0.08, b.inSec + (bEnd - b.inSec) / 2), 'b-first'],
+    [b, b.inSec + (bEnd - b.inSec) / 2, 'b-mid'],
+  ];
+  const images: string[] = [];
+  for (const [clip, at, name] of frames) {
+    const out = join(options.framesDir, `${stamp}-${name}.png`);
+    if (extractFrameAtOrBefore(clip.file, at, out, { notBeforeSec: clip.inSec, flip: clip.flip }) === undefined) {
+      return unchecked(`could not read a frame from ${clip.file} at ${at.toFixed(2)} s`);
+    }
+    images.push(visionDataUri(out));
+  }
+  const refs = [...(a.refs ?? []), ...(b.refs ?? [])]
+    .filter((ref, i, all) => all.findIndex(other => other.file === ref.file) === i && existsSync(ref.file))
+    .slice(0, 3);
+  for (const ref of refs) images.push(visionDataUri(ref.file));
+  const text = [
+    options.aText ? `Shot A (${a.id}) should show: ${options.aText}` : '',
+    options.bText ? `Shot B (${b.id}) should show: ${options.bText}` : '',
+    b.timeCut ? 'Time passes between shot A and shot B (a time cut): the action need not continue, and positions, facing and light may change. Answer every question all the same.' : '',
+    ...refs.map((ref, i) => `Image ${5 + i} is the reference for ${ref.name}: in either shot it must look like this.`),
+  ].filter(Boolean).join('\n');
+  try {
+    const reply = await client.chatJson<unknown>({
+      model,
+      systemPrompt: PAIR_SYSTEM_PROMPT,
+      userPrompt: `${text ? `${text}\n` : ''}Does the cut from ${a.id} to ${b.id} hold together${b.timeCut ? ' across the time cut' : ' as one continuous sequence'}?`,
+      images,
+      // Reasoning vision models spend most of the budget thinking (rule 47).
+      maxTokens: 8000,
+      temperature: 0.2,
+      label: `continuity ${a.id} → ${b.id}`,
+    });
+    return { ...base, ...verdictFromAnswers(reply, { timeCut: b.timeCut }) };
+  } catch (err) {
+    return unchecked(`continuity QA failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * Reference images of the object cast members among a shot's characters
+ * (props and vehicles cast like people, with traits that start "inanimate
+ * object"): the judge compares the boat with the boat's reference.
+ */
+export function objectRefsFor(series: SeriesState, names: string[]): Array<{ name: string; file: string }> {
+  const refs: Array<{ name: string; file: string }> = [];
+  for (const name of names) {
+    const member = series.characters.find(c => c.name.toUpperCase() === name.toUpperCase());
+    if (!member || !/^\s*inanimate object/i.test(member.baseTraits ?? '')) continue;
+    const dir = getCharacterDir(series, member.name);
+    const file = ['anchor.png', 'front.png', 'three-quarter.png'].map(f => join(dir, f)).find(path => existsSync(path));
+    if (file) refs.push({ name: member.name, file });
+  }
+  return refs;
+}
+
+/** Someone speaks on camera: the shot has a line, and its speaker is in the shot and is not the narrator. */
+export function speaksOnCamera(shot?: { characters?: string[]; dialogue?: { character?: string; line?: string } | null }): boolean {
+  const who = shot?.dialogue?.line?.trim() ? (shot.dialogue.character ?? '').trim().toUpperCase() : '';
+  if (!who || who === 'NARRATOR' || who === 'VO' || who === 'V.O.') return false;
+  return (shot?.characters ?? []).some(name => name.toUpperCase() === who);
+}
+
+// ---------------------------------------------------------------------------
+// A spoken line cut off by the picture cut (2026-10-26). On a production cut
+// an on-camera line ended about 90 ms after the picture cut, and its last word
+// was clipped. The transcript's word edges were off by up to a third of a
+// second, so they cannot place a cut; the audio's silences can. The cut of a
+// clip with on-camera speech belongs in silence.
+// ---------------------------------------------------------------------------
+
+/**
+ * Silences (absolute seconds) in a file's audio between `startSec` and
+ * `startSec + durSec`, as ffmpeg's silencedetect finds them: at least `minSec`
+ * below `noiseDb` dBFS. Undefined when the audio cannot be read (ffmpeg
+ * failed, or there is no audio stream), which is not the same as no silence.
+ */
+export function silencesIn(file: string, startSec: number, durSec: number, noiseDb = -35, minSec = 0.06): Array<[number, number]> | undefined {
+  const from = Math.max(0, startSec);
+  const r = spawnSync('ffmpeg', [
+    '-v', 'info', '-ss', String(from), '-t', String(Math.max(0.05, durSec)), '-i', file,
+    '-vn', '-af', `silencedetect=noise=${noiseDb}dB:d=${minSec}`, '-f', 'null', '-',
+  ], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) return undefined;
+  const log = `${r.stderr ?? ''}`;
+  const starts = [...log.matchAll(/silence_start: (-?[0-9.]+)/g)].map(m => from + parseFloat(m[1]));
+  const ends = [...log.matchAll(/silence_end: (-?[0-9.]+)/g)].map(m => from + parseFloat(m[1]));
+  return starts.map((start, i) => [Number(start.toFixed(3)), Number((ends[i] ?? from + durSec).toFixed(3))]);
+}
+
+export interface SpeechTailFinding {
+  clip: string;
+  shot?: number;
+  /** The clip's out point (seconds into its file). */
+  outSec: number;
+  /** How far the speech runs past the out point, when the source continues. */
+  runsPastMs?: number;
+  /** The audio at the cut could not be read: check it by ear. */
+  unmeasured?: boolean;
+  message: string;
+}
+
+/**
+ * A line still sounding at the clip's out point. The test is whether the out
+ * point falls inside a stretch silencedetect calls silent (below -35 dBFS for
+ * at least 60 ms), not how loud the cut is, because a word's last sound can be
+ * as quiet as the background. The threshold is fixed, not set from the clip's
+ * room tone, so loud ambience at a cut reads as sound: this is a warning, not
+ * a block. When the source runs on past the out point (a trimEnd, a take trimmed
+ * in an edit), it says how far the speech goes. A clip with no audio stream
+ * has nothing to check.
+ */
+export function checkSpeechTail(clip: CutClip): SpeechTailFinding | undefined {
+  if (!existsSync(clip.file) || !hasAudioStream(clip.file)) return undefined;
+  const fileEnd = ffprobeDurationSec(clip.file);
+  const out = clipOutSec(clip);
+  const from = Math.max(clip.inSec, out - 0.4);
+  const to = Math.min(fileEnd || out, out + 0.6);
+  if (!(to > from)) return undefined;
+  const base = { clip: clip.id, ...(clip.shot !== undefined ? { shot: clip.shot } : {}), outSec: Number(out.toFixed(3)) };
+  const quiet = silencesIn(clip.file, from, to - from);
+  if (!quiet) {
+    return { ...base, unmeasured: true, message: `${clip.id}: could not read the audio at the cut (${out.toFixed(2)} s); check by ear that no line is cut off.` };
+  }
+  if (quiet.some(([start, end]) => start <= out + 0.04 && end >= out - 0.02)) return undefined;
+  const next = quiet.map(([start]) => start).filter(start => start > out).sort((x, y) => x - y)[0];
+  if (next !== undefined) {
+    const ms = Math.round((next - out) * 1000);
+    return { ...base, runsPastMs: ms, message: `${clip.id}: the speech runs ${ms} ms past the cut at ${out.toFixed(2)} s (it falls silent at ${next.toFixed(2)} s). Run the clip to ${(next + 0.05).toFixed(2)} s, or move the cut.` };
+  }
+  const runsOn = to - out > 0.05 ? `, and the sound runs on for at least ${(to - out).toFixed(1)} s after it` : '';
+  return { ...base, message: `${clip.id}: the clip ends on sound at ${out.toFixed(2)} s, not in silence${runsOn}. If a line is still being spoken there, it is cut off: run the clip to the end of the word.` };
 }

@@ -207,6 +207,49 @@
     none, so no new paid call runs by default.
   - Tests: `tests/plan-check.test.mjs`, `tests/plan-check-gates.test.mjs`.
 
+- **`qa-videos` checks the cuts: neighbour continuity, on a generation plan or
+  any edit (rule 52).** The identity checks compare only people, so a vehicle
+  that changes between two generations, a person who faces the other way after
+  the cut, or an object a close-up shows and the next shot does not, all
+  passed.
+  - Each checked cut gets one vision call (`checkPairContinuity`): the middle
+    and last frame of shot A, the first and middle frame of shot B, cut as
+    `assemble-episode` cuts them (`trimStart`, `trimEnd`, `flip`), the shot
+    text, and the reference images of the object cast members in the two
+    shots. The calls are counted and printed before any is made. The last
+    frame is read from the video stream's end, so a clip whose audio runs
+    longer still gives a frame.
+  - The model answers a checklist: vehicle, people in both shots, props,
+    facing, action, light. The verdict follows from it (`verdictFromAnswers`):
+    a different vehicle, person or prop, or a reversed facing, is critical and
+    blocks assembly; a broken action is moderate, a light change low. A reply
+    that does not answer all six questions with an allowed value leaves the
+    cut unchecked, which also blocks (rule 46).
+  - `--continuity joins|all|off` picks the cuts; joins between generations is
+    the default. A cut into a `new-scene` shot is skipped, and so is a change
+    of location in a script with no `continuity` field, so projects that
+    passed before are not judged on their scene changes. A `later` cut is a
+    time cut: the judge is told, and nothing it finds is critical.
+  - `--cut-list <file>` checks an edit instead: `{"clips":[{file,in,out,shot,text,refs}]}`
+    or an EDL with `cuts: [{master,srcIn,srcOut,shot}]`. Joins come from the
+    script when a clip names its shot. The report goes next to the file; an
+    unchecked cut fails the run, and `--skip-vision` / `--continuity off` make
+    no call. `qa-videos` now exits non-zero whenever its report does not pass.
+  - Validated on known breaks from a continuity bakeoff: `claude-opus-5` with
+    the checklist and a vehicle reference flagged a boat swap and a facing
+    flip as critical and a stuck departure as moderate, and passed the clean
+    cuts. `kimi-k3` missed them. The default judge stays the project's vision
+    model.
+  - `qa-videos` warns (free, never blocks) when a clip with an on-camera
+    speaker is cut where its audio is not silent (`checkSpeechTail`), and says
+    how far the speech runs past the cut when the source continues. A clip
+    with no audio stream has nothing to check.
+  - The plan check adds `prop-continuity` (a warning): a close-up's object
+    (a key, a lock, a note, a lens) that no neighbouring shot of its scene and
+    no plate of the place shows. Senses that are not the object are left out:
+    a key light, a crossed-keys mark, an 85mm lens, "she notes", "he locks".
+  - Tests: `tests/continuity-qa.test.mjs`, `tests/speech-tail.test.mjs`.
+
 - **`generate-videos` renders up to three units at once.** Units used to
   render one after another, and nearly all of an episode's time went to
   waiting in Venice's queue for one clip at a time. `generateEpisodeVideos`

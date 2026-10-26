@@ -109,7 +109,7 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
   },
   {
     id: 'qa-videos',
-    name: 'QA the rendered units (cross-unit identity, head glitches)',
+    name: 'QA the rendered units (cross-unit identity, continuity at the cuts, head glitches)',
     scope: 'episode',
     produces: 'video-qa-report.json',
     command: 'qa-videos -p <project> -e <n>',
