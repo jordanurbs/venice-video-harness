@@ -79,7 +79,7 @@ import {
   throwIfAborted,
 } from '../venice/operation-context.js';
 import { hasLinePrefix, runWithLinePrefix } from '../venice/line-prefix.js';
-import { classifyVideoQueueRefusal, type VideoRefusal } from '../venice/refusal.js';
+import { classifyVideoQueueRefusal, parseProviderRefusal, type VideoRefusal } from '../venice/refusal.js';
 
 const VIDEO_QUEUE_PATH = '/api/v1/video/queue';
 const VIDEO_RETRIEVE_PATH = '/api/v1/video/retrieve';
@@ -1388,7 +1388,25 @@ async function pollRenderedVideo(
     } catch (err) {
       if (isAbortError(err)) throw err;
       // Terminal verdicts are not transient poll errors; never count or retry them.
-      if (err instanceof VideoGenerationFailedError) throw err;
+      if (err instanceof VideoGenerationFailedError || err instanceof VideoRefusalError) throw err;
+
+      // A provider content-policy refusal at retrieve time is final: the job
+      // will never produce a video and its credits were refunded. Polling it
+      // again only burns a minute, and leaving the pending record makes every
+      // later run re-attach to the same dead job instead of queueing afresh.
+      const providerRefusal = err instanceof VeniceRequestError ? parseProviderRefusal(err.body) : undefined;
+      if (providerRefusal) {
+        process.stdout.write('\n');
+        await clearPendingJob(jobKey);
+        const refusal: VideoRefusal = {
+          kind: 'provider-content-policy',
+          model,
+          refusal: providerRefusal,
+          retryable: false,
+          message: `${providerRefusal.message} (${model}, ${queue_id})`,
+        };
+        throw new VideoRefusalError(refusal, (err as VeniceRequestError).status, (err as VeniceRequestError).body);
+      }
 
       // A resumed queue id Venice has already reaped can never complete —
       // without this the loop below would retry it forever.

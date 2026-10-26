@@ -45,6 +45,12 @@
   `generate-voice-reference` and `generate-audio` call failed with a bare
   "Invalid request parameters". The spec now sets `supportsDuration: false`
   and the field is left out. Clip length follows the prompt.
+- **A content-policy refusal at retrieve time trapped the shot.** The poll
+  loop treated it as a transient error, retried it six times, then gave up
+  and left the pending-job record behind. Every later run re-attached to the
+  same refused job instead of queueing a fresh one. A refusal now ends the
+  poll on the first answer, clears the record, and raises
+  `VideoRefusalError`.
 - **Big reference stacks failed with HTTP 413.** A montage with four
   characters (two angles each) and four location plates inlined twelve
   ~2 MB PNGs, which is past Venice's request-body limit. Reference and scene
