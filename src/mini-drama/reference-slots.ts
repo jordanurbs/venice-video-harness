@@ -77,6 +77,21 @@ const LOCATION_ANGLE_ORDER_DEFAULT = [
 const LOCATION_ANGLE_ORDER_CLOSER = LOCATION_ANGLE_ORDER_DEFAULT;
 
 /**
+ * Location plate files in reference order for a shot. A shot that names its
+ * `plateView` (the view it is staged on) puts that plate first, so panels and
+ * video draw that background; every other shot keeps the north-first order.
+ * Every caller that picks a location plate (slot plan, panel pass, panel
+ * approval digest, legacy fold) reads this, so they cannot disagree.
+ */
+export function locationPlateOrder(shot?: Pick<ShotScript, 'plateView' | 'type'>): string[] {
+  const base = shot && (shot.type === 'close-up' || shot.type === 'reaction' || shot.type === 'insert')
+    ? LOCATION_ANGLE_ORDER_CLOSER
+    : LOCATION_ANGLE_ORDER_DEFAULT;
+  const lead = shot?.plateView ? `${shot.plateView}.png` : null;
+  return lead && base.includes(lead) ? [lead, ...base.filter(file => file !== lead)] : [...base];
+}
+
+/**
  * Build the ordered reference slot plan for a shot on an @Image-tag model.
  *
  * The returned slots array is the exact push order of reference_image_urls;
@@ -143,8 +158,7 @@ export function buildReferenceSlotPlan(
     const loc = getLocation(series, shot.location);
     if (loc) {
       const dir = getLocationDir(series, loc.slug);
-      const closer = shot.type === 'close-up' || shot.type === 'reaction' || shot.type === 'insert';
-      const order = closer ? LOCATION_ANGLE_ORDER_CLOSER : LOCATION_ANGLE_ORDER_DEFAULT;
+      const order = locationPlateOrder(shot);
       const angleRole: Record<string, string> = {
         'north.png': 'a wide establishing plate of the location, facing the north wall',
         'south.png': 'the south wall of the same location',
@@ -184,7 +198,10 @@ export function buildReferenceSlotPlan(
         if (!existsSync(p)) continue;
         angleCount += 1;
         const customName = canonical.has(f) ? null : f.replace(/\.png$/i, '').replace(/-/g, ' ');
-        const anglePhrase = angleCount === 1
+        const stagedView = angleCount === 1 && shot.plateView && f === `${shot.plateView}.png`;
+        const anglePhrase = stagedView
+          ? `is the view this shot is staged on (${loc.name}, ${shot.plateView} view) — the camera looks along this frame: match its background, architecture, and lighting; it is not a character`
+          : angleCount === 1
           ? `is the location environment reference (${loc.name}) — match its setting, architecture, and lighting; it is not a character`
           : customName
             ? `is another angle of the same location (${loc.name}: ${customName}) — same place, different angle; keep the environment consistent with it`

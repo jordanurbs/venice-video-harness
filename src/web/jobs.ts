@@ -31,7 +31,8 @@ export const COMMAND_WHITELIST: Record<string, CommandSpec> = {
   // omitted ones fall back to the previous revision's inputs or defaults.
   'workshop': {
     options: ['outcome', 'duration', 'audience', 'must-include', 'avoid', 'references', 'delivery', 'feedback', 'model'],
-    flags: ['approve'],
+    // --force mirrors qa-approve: the operator checked the plates themselves (rule 64).
+    flags: ['approve', 'recheck', 'force', 'no-plate-check'],
   },
   'workshop-script': { options: ['concept', 'model', 'part'], flags: [], episode: true },
   'approve-script': { options: ['notes'], flags: [], episode: true },
