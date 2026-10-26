@@ -404,6 +404,41 @@ export function buildGenerationPlan(
   };
 }
 
+/**
+ * Each unit's shots, in plan order. Suffixed inserts ("13b") share their base
+ * shotNumber, so a lookup by number collapses "13" and "13b" onto one shot.
+ * The plan is built from the script in order with each shot in exactly one
+ * unit, so shots are matched with a cursor through the script; the lookup by
+ * number is only the fallback for hand-edited plans. Pass the whole plan:
+ * the cursor needs every unit before the ones you care about.
+ */
+export function resolveUnitShots(plan: Pick<GenerationPlan, 'units'>, shots: ShotScript[]): ShotScript[][] {
+  const shotsByNumber = new Map(shots.map(shot => [shot.shotNumber, shot]));
+  let cursor = 0;
+  return plan.units.map(unit => unit.shotNumbers
+    .map(shotNumber => {
+      const candidate = shots[cursor];
+      if (candidate && candidate.shotNumber === shotNumber) {
+        cursor += 1;
+        return candidate;
+      }
+      return shotsByNumber.get(shotNumber);
+    })
+    .filter((shot): shot is ShotScript => Boolean(shot)));
+}
+
+/**
+ * Positions in `plan.units` of the units that hold any of these shot numbers,
+ * for a re-take of whole units (`generate-videos --retake`). A number covers
+ * its suffixed inserts (13 covers 13 and 13b), as `--shots` does elsewhere.
+ * Positions, not unit ids: an insert's single shares its base shot's id
+ * (`unit-013`).
+ */
+export function unitIndicesForShots(plan: Pick<GenerationPlan, 'units'>, shotNumbers: number[]): number[] {
+  const wanted = new Set(shotNumbers);
+  return plan.units.flatMap((unit, index) => (unit.shotNumbers.some(n => wanted.has(n)) ? [index] : []));
+}
+
 export async function saveGenerationPlan(episodeDir: string, plan: GenerationPlan): Promise<string> {
   const planPath = join(episodeDir, 'generation-plan.json');
   await writeFile(planPath, JSON.stringify(plan, null, 2), 'utf-8');

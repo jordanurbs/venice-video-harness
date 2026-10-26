@@ -26,16 +26,20 @@ export function stagingRefPath(series: Pick<SeriesState, 'outputDir'>, ref: Pick
   return isAbsolute(ref.path) ? ref.path : join(series.outputDir, ref.path);
 }
 
-/** The shot's staged plate, when it has one on disk. */
-export function stagedPlate(series: Pick<SeriesState, 'outputDir'>, shot: Pick<ShotScript, 'stagingRef'>): { path: string; ref: ShotStagingRef } | null {
+/**
+ * The shot's picked plate (its staging ref, use `plate`), when it is on disk.
+ * Not the view a shot is staged on (`plateView`): that is `stagedPlateFor` in
+ * reference-slots.ts, which this pick stands in for.
+ */
+export function pickedPlate(series: Pick<SeriesState, 'outputDir'>, shot: Pick<ShotScript, 'stagingRef'>): { path: string; ref: ShotStagingRef } | null {
   const ref = shot.stagingRef;
   if (!ref || ref.use !== 'plate') return null;
   const path = stagingRefPath(series, ref);
   return existsSync(path) ? { path, ref } : null;
 }
 
-/** The shot's staged first frame (absolute path), when it has one on disk. */
-export function stagedStartFrame(series: Pick<SeriesState, 'outputDir'>, shot: Pick<ShotScript, 'stagingRef'>): string | null {
+/** The shot's picked first frame (its staging ref, use `start-frame`; absolute path), when it is on disk. */
+export function pickedStartFrame(series: Pick<SeriesState, 'outputDir'>, shot: Pick<ShotScript, 'stagingRef'>): string | null {
   const ref = shot.stagingRef;
   if (!ref || ref.use !== 'start-frame') return null;
   const path = stagingRefPath(series, ref);
@@ -111,6 +115,39 @@ export function staleStagedShots(
     }
   }
   return stale;
+}
+
+/**
+ * Mark the clips of a cut list (qa-videos) that show a staged shot from
+ * footage not rendered from its current pick: a clip from before the pick, a
+ * media-library cut or a montage master. `problem` is set, so the cuts beside
+ * them come out unchecked, never passed. A clip with no file keeps its own
+ * problem ("not on disk"), and a clip that names no script shot is left alone.
+ */
+export function markStaleStagedClips<T extends CutListClip>(
+  clips: T[],
+  shots: Array<Pick<ShotScript, 'shotNumber' | 'shotIdSuffix' | 'stagingRef'>>,
+): T[] {
+  return clips.map(clip => {
+    const shot = staleStagedClipShot(clip, shots);
+    if (!shot) return clip;
+    const note = `shot ${shot} has a staging ref (stage-ref) and this footage is not rendered from its pick`;
+    return { ...clip, problem: clip.problem ? `${clip.problem}; ${note}` : note };
+  });
+}
+
+/** The fields of a cut-list clip (video-qa.ts `CutClip`) the staged-shot check reads. */
+type CutListClip = { file: string; shot?: number; shotIdSuffix?: string; problem?: string };
+
+/** The staged shot ("8", "8b") a cut-list clip shows from footage not rendered from its current pick, if it does. */
+export function staleStagedClipShot(
+  clip: CutListClip,
+  shots: Array<Pick<ShotScript, 'shotNumber' | 'shotIdSuffix' | 'stagingRef'>>,
+): string | undefined {
+  if (clip.shot === undefined) return undefined;
+  const shot = shots.find(item => item.shotNumber === clip.shot && (item.shotIdSuffix ?? '') === (clip.shotIdSuffix ?? ''));
+  if (!shot?.stagingRef || !existsSync(clip.file) || !stagedClipIsStale(clip.file, shot)) return undefined;
+  return `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
 }
 
 /** A runnable generate-videos command for an episode (rule 44). */

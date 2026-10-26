@@ -2,7 +2,9 @@
 // renders the shot i2v from the pick and the clip from before it is archived
 // only when the new one lands; a plate pick goes to R2V (or Kling's scene
 // images) in place of the view it was edited from. A shot that cannot render
-// from its pick is refused before anything is billed or moved, and reported.
+// from its pick is refused before anything is billed or moved, and reported;
+// so is one a --retake leaves alone, and the neighbours a pick splits off a
+// montage keep their clips.
 // Scripted client, no network. Needs ffmpeg (builds the stub mp4 the client
 // "delivers").
 import test from 'node:test';
@@ -16,6 +18,7 @@ import sharp from 'sharp';
 process.env.VENICE_VIDEO_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'stage-render-config-'));
 
 const { generateEpisodeVideos, renderVideoFile } = await import('../dist/mini-drama/video-generator.js');
+const { buildGenerationPlan } = await import('../dist/mini-drama/generation-planner.js');
 const { recordPendingJob, listPendingJobs } = await import('../dist/venice/job-store.js');
 
 const MP4 = (() => {
@@ -349,4 +352,84 @@ test('a render queued for the same pick and re-attached is marked as made from i
   assert.equal(c.bodies.length, 0);
   assert.deepEqual(result.unrenderedStaged, []);
   assert.equal(JSON.parse(readFileSync(join(sceneDir, 'shot-008.video.json'), 'utf-8')).metadata.stagingRef.sha256, 'pick-2');
+});
+
+test('after a pick dissolves a montage run, only the staged shot renders: its neighbours\' new units find their clips', async () => {
+  const { sceneDir, series } = await setup();
+  const s7 = shot({ shotNumber: 7, description: 'marker-7' });
+  const s9 = shot({ shotNumber: 9, description: 'marker-9' });
+  const before = buildGenerationPlan({ episode: 1, title: 'one', shots: [s7, shot(), s9] }, series);
+  assert.deepEqual(before.units.map(u => [u.unitType, u.shotNumbers]), [['montage', [7, 8, 9]]]);
+  // The montage's cuts, from before the pick (no master under the new units' names).
+  for (const key of ['007', '008', '009']) writeFileSync(join(sceneDir, `shot-${key}.mp4`), MP4);
+  const s8 = shot({ stagingRef: staged('start-frame', 'pick-1'), mustStaySingle: true });
+  const after = buildGenerationPlan({ episode: 1, title: 'one', shots: [s7, s8, s9] }, series);
+  assert.deepEqual(after.units.map(u => u.shotNumbers), [[7], [8], [9]]);
+  const c = client();
+  const result = await quietly(() => generateEpisodeVideos(c, series, [s7, s8, s9], sceneDir, after, undefined, { concurrency: 1 }));
+  assert.equal(c.bodies.length, 1, 'one render: shot 8 from its pick');
+  assert.equal(c.bodies[0].model, 'seedance-2-5-image-to-video');
+  assert.equal(existsSync(join(sceneDir, 'shot-007-v1.mp4')), false);
+  assert.equal(existsSync(join(sceneDir, 'shot-009-v1.mp4')), false);
+  assert.ok(existsSync(join(sceneDir, 'shot-008-v1.mp4')), 'the cut from before the pick is archived when the new clip lands');
+  assert.deepEqual(result.unrenderedStaged, []);
+});
+
+test('a re-take leaves a staged shot outside it as it is, reports it, and a re-taken unit chained to it waits', async () => {
+  const { sceneDir, series } = await setup();
+  writeFileSync(join(sceneDir, 'shot-007.mp4'), MP4); // from before shot 7's pick
+  const s7 = shot({ shotNumber: 7, stagingRef: staged('start-frame', 'pick-7'), mustStaySingle: true });
+  const s8 = shot({ description: 'marker-8' });
+  const plan = { episode: 1, units: [
+    { ...unit, unitId: 'unit-007', shotNumbers: [7], outputFile: 'shot-007.mp4', startFrameStrategy: 'panel', endFrameStrategy: 'natural' },
+    { ...unit, startFrameStrategy: 'previous-last-frame', endFrameStrategy: 'natural' },
+  ] };
+  const c = client();
+  const result = await quietly(() => generateEpisodeVideos(c, series, [s7, s8], sceneDir, plan, undefined, { concurrency: 1, onlyUnits: new Set([1]) }));
+  assert.equal(c.bodies.length, 0, 'shot 8 is not rendered from the last frame of shot 7\'s clip from before its pick');
+  assert.deepEqual(result.unrenderedStaged.map(item => item.shot), ['7', '8']);
+  assert.match(result.unrenderedStaged[0].reason, /this re-take leaves it as it is; render it too: venice-video generate-videos -p "[^"]+" -e 1 --retake 7/);
+  assert.match(result.unrenderedStaged[1].reason, /starts from the last frame of shot 7/);
+  assert.ok(existsSync(join(sceneDir, 'shot-007.mp4')), 'left as it is');
+});
+
+function writeProject(dir, series, shots) {
+  writeFileSync(join(dir, 'series.json'), JSON.stringify({ ...series, episodes: [{ number: 1, title: 'one', status: 'scripted' }] }));
+  writeFileSync(join(dir, 'episodes', 'episode-001', 'script.json'), JSON.stringify({ episode: 1, title: 'one', seriesName: 'S', totalDuration: '15s', status: 'approved', shots }));
+}
+
+const generateVideos = (dir, ...args) => spawnSync(process.execPath, [cli, 'generate-videos', '-p', dir, '-e', '1', '--skip-qa', '--concurrency', '1', ...args], {
+  encoding: 'utf-8', env: { ...process.env, VENICE_API_KEY: 'test-key-never-sent' },
+});
+
+test('generate-videos --retake refuses a staged shot it cannot render from its pick before it archives anything', async () => {
+  const { dir, sceneDir, series } = await setup();
+  writeFileSync(join(sceneDir, 'shot-008.mp4'), MP4);
+  writeProject(dir, series, [shot({ stagingRef: staged('plate', 'gone', { path: 'episodes/episode-001/staging/shot-008/gone.png' }), mustStaySingle: true })]);
+  const run = generateVideos(dir, '--retake', '8');
+  assert.equal(run.status, 1, run.stdout + run.stderr);
+  assert.match(run.stderr, /--retake 8: 1 staged shot\(s\) cannot render from their staging ref\. Nothing was archived or rendered\./);
+  assert.match(run.stderr, /shot 8: the staging ref image \S+gone\.png is not on disk/);
+  assert.ok(existsSync(join(sceneDir, 'shot-008.mp4')));
+  assert.equal(existsSync(join(sceneDir, 'shot-008-v1.mp4')), false, 'not archived');
+});
+
+test('a --retake run with a staged shot outside it that has no clip from its pick exits 1 and names it once', async () => {
+  const { dir, sceneDir, series } = await setup({ atmosphereModel: 'seedance-2-5-image-to-video' });
+  for (const key of ['007', '008', '009']) writeFileSync(join(sceneDir, `shot-${key}.mp4`), MP4);
+  writeProject(dir, series, [
+    // Re-taken: a plate pick on an image-to-video lane with no panel is refused when its render starts (no call).
+    shot({ shotNumber: 7, videoModel: 'atmosphere', characters: [], description: 'marker-7', stagingRef: staged('plate', 'pick-7'), mustStaySingle: true }),
+    shot({ description: 'marker-8' }),
+    // Outside the re-take: its clip is from before its pick.
+    shot({ shotNumber: 9, description: 'marker-9', stagingRef: staged('start-frame', 'pick-9'), mustStaySingle: true }),
+  ]);
+  const run = generateVideos(dir, '--retake', '7');
+  assert.equal(run.status, 1, run.stdout + run.stderr);
+  assert.match(run.stdout, /Re-taking 1 unit\(s\), whole/);
+  assert.match(run.stderr, /2 shot\(s\) have no clip from their staging ref, or wait on one/);
+  assert.match(run.stderr, /shot 9: it has no clip from its staging ref, and this re-take leaves it as it is; render it too: venice-video generate-videos -p "[^"]+" -e 1 --retake 9/);
+  assert.equal((run.stderr.match(/^ {2}shot 9:/gm) ?? []).length, 1, 'named once');
+  assert.match(run.stderr, /^ {2}shot 7: /m);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'series.json'), 'utf-8')).episodes[0].status, 'scripted', 'not marked produced');
 });

@@ -12,10 +12,10 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 
 const { imageToVideoTwin, stagedFrameLane, getVideoModel, VIDEO_MODELS } = await import('../packages/core/dist/venice/models.js');
-const { buildReferenceSlotPlan } = await import('../dist/mini-drama/reference-slots.js');
-const { resolveVideoModel, buildVideoPrompt } = await import('../dist/mini-drama/prompt-builder.js');
+const { buildReferenceSlotPlan, stagedPlateFor } = await import('../dist/mini-drama/reference-slots.js');
+const { resolveVideoModel, buildVideoPrompt, buildMontagePrompt } = await import('../dist/mini-drama/prompt-builder.js');
 const { buildGenerationPlan } = await import('../dist/mini-drama/generation-planner.js');
-const { stagedClipIsStale, stagedPlate, stagedStartFrame, staleStagedShots } = await import('../dist/mini-drama/staging.js');
+const { stagedClipIsStale, pickedPlate, pickedStartFrame, staleStagedShots } = await import('../dist/mini-drama/staging.js');
 const stageRef = await import('../dist/mini-drama/stage-ref.js');
 
 const ffmpegAvailable = spawnSync('ffmpeg', ['-version']).status === 0;
@@ -149,7 +149,7 @@ test('a staged plate leads the location slots and its source view is not sent', 
   assert.equal(slots.some(s => s.path.endsWith('north.png')), false, 'the replaced view is not sent');
   assert.equal(slots.length, 4);
   assert.match(slots[1].roleClause, /same place/);
-  assert.ok(stagedPlate(series, s8));
+  assert.ok(pickedPlate(series, s8));
 });
 
 test('a staged start frame renders i2v from the frame, without the location words', async () => {
@@ -168,7 +168,7 @@ test('a staged start frame renders i2v from the frame, without the location word
   const normal = buildVideoPrompt(shot(8), series);
   assert.equal(normal.model, 'seedance-2-5-reference-to-video');
   assert.match(normal.prompt, /Location:/);
-  assert.equal(stagedStartFrame(series, s8), null, 'missing file');
+  assert.equal(pickedStartFrame(series, s8), null, 'missing file');
 });
 
 test('a staged shot renders on its own; its neighbours keep their run', async () => {
@@ -191,6 +191,42 @@ test('a staged shot stays a single even when its mustStaySingle is edited away',
     const plan = buildGenerationPlan(script, series);
     assert.deepEqual(plan.units.find(u => u.shotNumbers.includes(8)).shotNumbers, [8], `montageMode ${montageMode}`);
   }
+});
+
+test('a continuous insert rides in its montage run, until it is staged: then it renders alone', async () => {
+  const { script, series, shot } = await project();
+  script.shots[1] = shot(8, { type: 'insert', continuity: { from: 'continuous' } });
+  script.shots[2] = shot(9, { continuity: { from: 'continuous' } });
+  const before = buildGenerationPlan(script, series);
+  assert.deepEqual(before.units.map(u => u.shotNumbers), [[7, 8, 9]], 'the shot-list grammar carries the insert in its run');
+  script.shots[1].stagingRef = startFrameRef();
+  const after = buildGenerationPlan(script, series);
+  assert.deepEqual(after.units.find(u => u.shotNumbers.includes(8)).shotNumbers, [8]);
+  assert.equal(after.units.find(u => u.shotNumbers.includes(8)).unitType, 'single');
+  // A montage unit that holds a staged shot (a hand-edited plan) gets no prompt.
+  const run = before.units[0];
+  assert.throws(() => buildMontagePrompt(script.shots, run, series), /holds shot 8, which has a staging ref \(stage-ref\): it renders as a single/);
+});
+
+test('the view a shot is staged on (stagedPlateFor) and its picked plate (pickedPlate) are told apart', async () => {
+  const { dir, series, shot } = await project();
+  const staging = join(dir, 'episodes', 'episode-001', 'staging', 'shot-008', 's1');
+  mkdirSync(staging, { recursive: true });
+  writeFileSync(join(staging, '1-gpt-image-2-edit.png'), await png(320, 180, '#224466'));
+  const pick = { path: 'episodes/episode-001/staging/shot-008/s1/1-gpt-image-2-edit.png', use: 'plate', source: 'locations/harbour-steps/east.png', replacesView: 'east', model: 'gpt-image-2-edit', prompt: 'p', sha256: 'x', session: 's', pickedAt: '' };
+  const s8 = shot(8, { plateView: 'east', stagingRef: pick });
+  assert.equal(stagedPlateFor(series, s8).file, 'east.png', 'the plate the shot is staged on');
+  assert.ok(pickedPlate(series, s8).path.endsWith('1-gpt-image-2-edit.png'), 'the pick that stands in for it');
+  const slots = buildReferenceSlotPlan(series, s8, 'seedance-2-5-reference-to-video').slots.filter(s => s.kind === 'location');
+  assert.ok(slots[0].path.endsWith('1-gpt-image-2-edit.png'));
+  assert.equal(slots.some(s => s.path.endsWith('east.png')), false, 'the staged view it replaced is not sent');
+  assert.equal(slots.some(s => /the view this shot is staged on \(Harbour Steps, east view\)/.test(s.roleClause)), false);
+
+  // A shot whose location the project does not have still sends its pick.
+  const elsewhere = buildReferenceSlotPlan(series, shot(8, { location: 'nowhere', stagingRef: pick }), 'seedance-2-5-reference-to-video').slots;
+  const pickSlot = elsewhere.find(s => s.kind === 'location');
+  assert.ok(pickSlot.path.endsWith('1-gpt-image-2-edit.png'));
+  assert.equal(pickSlot.label, 'staging');
 });
 
 test('a clip is stale until it was rendered from the pick', () => {
@@ -414,6 +450,13 @@ test('staleStagedShots lists staged shots whose clip is not from the pick, and n
   script.shots[0].stagingRef = startFrameRef('gone.png');
   writeFileSync(join(sceneDir, 'shot-007.mp4'), 'clip');
   assert.deepEqual(staleStagedShots(series, script, sceneDir).map(item => item.shot), ['7', '8']);
+
+  // An insert's clip carries its suffix (shot-008b.mp4), as a montage writes it.
+  script.shots.splice(2, 0, { ...script.shots[1], shotIdSuffix: 'b', stagingRef: { ...startFrameRef('gone.png'), sha256: 'ins' } });
+  assert.deepEqual(staleStagedShots(series, script, sceneDir).map(item => `${item.shot}: ${item.reason.split(';')[0]}`), ['7: its clip was not rendered from the pick', '8: its clip was not rendered from the pick', '8b: no clip yet']);
+  writeFileSync(join(sceneDir, 'shot-008b.mp4'), 'clip');
+  writeFileSync(join(sceneDir, 'shot-008b.video.json'), JSON.stringify({ metadata: { stagingRef: { sha256: 'ins' } } }));
+  assert.deepEqual(staleStagedShots(series, script, sceneDir).map(item => item.shot), ['7', '8'], '8b reads its own clip, not shot 8\'s');
 });
 
 test('the shot\'s montage cut in media-library is listed as the pre-pick archive', async () => {
@@ -474,6 +517,46 @@ test('--from-shot takes a clip cut from a longer render a little after its first
   assert.match(readFileSync(pickPage, 'utf-8'), /first frames can belong to the shot before/);
 });
 
+test('--from-shot reads the montage manifest: one frame in after a detected cut, 0.5 s after a planned one or on the first clip; an insert by its suffix', { skip: !ffmpegAvailable }, async () => {
+  const { dir, series, script, shot } = await project();
+  script.shots.splice(2, 0, shot(8, { shotIdSuffix: 'b', type: 'insert', description: 'marker-8b' }));
+  const sceneDir = join(dir, 'episodes', 'episode-001', 'scene-001');
+  mkdirSync(sceneDir, { recursive: true });
+  const master = 'montage-s01-007-009.mp4';
+  for (const key of ['007', '008', '008b', '009']) {
+    execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10:duration=2', '-pix_fmt', 'yuv420p', '-y', join(sceneDir, `shot-${key}.mp4`)]);
+    writeFileSync(join(sceneDir, `shot-${key}.video.json`), JSON.stringify({ metadata: { generationUnit: 'montage-s01-007-009', generatedFromUnit: master, montageScene: 1 } }));
+  }
+  const library = join(dir, 'episodes', 'episode-001', 'media-library', 'scene-01');
+  mkdirSync(library, { recursive: true });
+  const manifest = {
+    unitId: 'montage-s01-007-009', scene: 1, master,
+    boundaries: [{ planned: 2, at: 1.9, snapped: true, offset: -0.1 }, { planned: 4, at: 4, snapped: false }, { planned: 6, at: 5.6, snapped: true, offset: -0.4 }],
+    cuts: ['007', '008', '008b', '009'].map(key => ({ shot: key, file: `shot-${key}.mp4` })),
+  };
+  writeFileSync(join(library, 'manifest.json'), JSON.stringify(manifest));
+  assert.deepEqual(['7', '8', '8b', '9'].map(id => stageRef.montageClipHead(series, 1, master, id)), ['first', 'snapped', 'planned', 'snapped']);
+
+  const s7 = stageRef.findShot(script, '7');
+  const from = id => stageRef.prepareStageSource(series, script, s7, { episode: 1, shot: '7', fromShot: id, prompt: 'p' }, join(dir, `s-${id}`));
+  const after8 = await from('8');
+  assert.match(after8.note, /shot 8's clip at 0\.10 s/, 'one frame in (10 fps)');
+  assert.equal(after8.warning, undefined);
+  const insert = await from('8b');
+  assert.match(insert.note, /shot 8b's clip at 0\.50 s/, 'the insert is read from its own clip, shot-008b.mp4');
+  assert.match(insert.warning, /at a planned time \(no scene cut was detected near it\)/);
+  const first = await from('7');
+  assert.match(first.note, /at 0\.50 s/);
+  assert.match(first.warning, /first cut from montage-s01-007-009\.mp4, whose first frames can carry a short transition flash/);
+
+  // A manifest a later unit of the scene replaced says nothing about this clip: 0.5 s.
+  writeFileSync(join(library, 'manifest.json'), JSON.stringify({ ...manifest, unitId: 'montage-s01-010-012', master: 'montage-s01-010-012.mp4' }));
+  assert.equal(stageRef.montageClipHead(series, 1, master, '8'), undefined);
+  const unknown = await from('8');
+  assert.match(unknown.note, /at 0\.50 s/);
+  assert.match(unknown.warning, /cut from montage-s01-007-009\.mp4 at a planned time, so its first frames/);
+});
+
 test('a pick in a montage run lists the units it splits', async () => {
   const { script, series } = await project();
   const before = buildGenerationPlan(script, series);
@@ -503,7 +586,8 @@ test('the stage-ref command records a pick, lists the units it splits, and --cle
   assert.match(pick.stdout, /replaces the north view/);
   assert.match(pick.stdout, /was: montage-s01-007-009 \(montage, shots 7, 8, 9\)/);
   assert.match(pick.stdout, /now: unit-008 \(single, shot 8\)/);
-  assert.match(pick.stdout, /can render again on the next generate-videos \(billed\)/);
+  assert.match(pick.stdout, /The shots around it keep their clips: generate-videos skips a unit whose clips are all on disk, whatever its name/);
+  assert.doesNotMatch(pick.stdout, /can render again/);
   const saved = JSON.parse(readFileSync(join(episodeDir, 'script.json'), 'utf-8'));
   assert.equal(saved.shots[1].stagingRef.model, 'nano-banana-2-edit');
   assert.equal(saved.shots[1].mustStaySingle, true);

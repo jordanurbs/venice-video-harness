@@ -65,9 +65,12 @@ export const DEFAULT_STAGE_REF_MODELS: MultiEditModel[] = ['gpt-image-2-edit', '
 export const MAX_STAGE_REFS = 2;
 /**
  * Seconds into a clip cut from a longer render (a montage or multi-shot unit)
- * where `--from-shot` takes its frame by default. Those clips are cut at
- * planned times, which can be about half a second off the rendered cut, so
- * their first frames can belong to the shot before.
+ * where `--from-shot` takes its frame by default, unless the montage manifest
+ * says the clip's cut landed on a detected scene cut (then one frame in: see
+ * `montageClipHead`). A cut at a planned time can be about half a second off
+ * the render's own cut, so the clip's first frames can belong to the shot
+ * before; a unit's first clip starts on the render's first frames, which can
+ * carry a short transition flash (anti-pattern 30).
  */
 export const UNIT_CUT_FRAME_OFFSET_SEC = 0.5;
 const VIEWS: PlateView[] = ['north', 'east', 'south', 'west'];
@@ -200,6 +203,52 @@ function videoDurationSec(video: string): number | undefined {
   return Number.isFinite(sec) && sec > 0 ? sec : undefined;
 }
 
+/** One frame of a video, in seconds (1/24 s when its frame rate cannot be read). */
+function oneFrameSec(video: string): number {
+  const result = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=avg_frame_rate', '-of', 'csv=p=0', video], { encoding: 'utf-8' });
+  const [num, den] = (result.stdout || '').trim().split('/').map(Number);
+  const fps = den ? num / den : num;
+  return Number.isFinite(fps) && fps > 0 ? 1 / fps : 1 / 24;
+}
+
+/**
+ * How a montage cut a clip's head, from the unit's media-library manifest
+ * (`cutMontageIntoShots`): `snapped` when the cut landed on a detected scene
+ * cut (ffmpeg reports it at the new shot's first frame, so the clip starts on
+ * its own first frame), `planned` when no scene cut was found near it and it
+ * was cut at the planned time, `first` for the unit's first clip, which starts
+ * the render. Undefined when no manifest says: a multi-shot unit, a cut from
+ * before snapped cuts, or a manifest a later montage unit of the same scene
+ * has replaced (one manifest per scene folder). `master` is the file the clip
+ * was cut from (`generatedFromUnit` in its .video.json, the manifest's
+ * `master`); the clip is found by its key with an insert's suffix
+ * (`shot-013b.mp4` is "013b").
+ */
+export function montageClipHead(
+  series: SeriesState,
+  episode: number,
+  master: string,
+  shotId: string,
+): 'snapped' | 'planned' | 'first' | undefined {
+  const library = join(getEpisodeDir(series, episode), 'media-library');
+  if (!existsSync(library)) return undefined;
+  for (const name of readdirSync(library).filter(entry => /^scene-\d+$/.test(entry)).sort()) {
+    let manifest: { master?: unknown; cuts?: unknown; boundaries?: unknown };
+    try {
+      manifest = JSON.parse(readFileSync(join(library, name, 'manifest.json'), 'utf-8')) as typeof manifest;
+    } catch {
+      continue;
+    }
+    if (manifest.master !== master || !Array.isArray(manifest.cuts)) continue;
+    const index = (manifest.cuts as Array<{ shot?: unknown }>).findIndex(cut => cut?.shot === shotKey(shotId));
+    if (index < 0) return undefined;
+    if (index === 0) return 'first';
+    const boundary = Array.isArray(manifest.boundaries) ? (manifest.boundaries as Array<{ snapped?: unknown }>)[index - 1] : undefined;
+    return typeof boundary?.snapped === 'boolean' ? (boundary.snapped ? 'snapped' : 'planned') : undefined;
+  }
+  return undefined;
+}
+
 /** The unit a clip was cut from (`generatedFromUnit` in its .video.json), when it was cut from one. */
 export function clipCutFromUnit(clip: string): string | undefined {
   const metaPath = clip.replace(/\.mp4$/i, '.video.json');
@@ -264,16 +313,29 @@ export async function prepareStageSource(
     if (!target) throw new Error(`Shot ${input.fromShot} is not in episode ${input.episode}.`);
     const clip = join(getEpisodeDir(series, input.episode), 'scene-001', `shot-${shotKey(idOf(target))}.mp4`);
     if (!existsSync(clip)) throw new Error(`Shot ${idOf(target)} has no rendered clip at ${clip}.`);
-    // A clip cut from a longer render starts where the plan said the shot
-    // starts, which can be a little before the render's own cut: its first
-    // frames may belong to the shot before. Take the frame a little later.
+    // A clip cut from a longer render can start a little before the render's
+    // own cut, so its first frames may belong to the shot before: the frame is
+    // taken a little later, unless the montage manifest says the cut landed
+    // on a detected scene cut (then the clip starts on its own first frame).
     const unit = input.at === undefined ? clipCutFromUnit(clip) : undefined;
     let at = input.at ?? 0;
     let warning: string | undefined;
     if (unit) {
       const duration = videoDurationSec(clip);
-      at = duration ? Math.min(UNIT_CUT_FRAME_OFFSET_SEC, duration / 2) : UNIT_CUT_FRAME_OFFSET_SEC;
-      warning = `Shot ${idOf(target)}'s clip was cut from ${unit} at a planned time, so its first frames can belong to the shot before; the frame is taken at ${at.toFixed(2)} s. Check the source on the pick page (or pass --at).`;
+      const head = montageClipHead(series, input.episode, unit, idOf(target));
+      if (head === 'snapped') {
+        // One frame in, in case the detected cut is a frame late.
+        const frame = oneFrameSec(clip);
+        at = duration ? Math.min(frame, duration / 2) : frame;
+      } else {
+        // A cut at the planned time (the manifest says none was detected near
+        // it, or records nothing: a multi-shot unit, a cut from before snapped
+        // cuts), or the unit's first clip: 0.5 s in.
+        at = duration ? Math.min(UNIT_CUT_FRAME_OFFSET_SEC, duration / 2) : UNIT_CUT_FRAME_OFFSET_SEC;
+        warning = head === 'first'
+          ? `Shot ${idOf(target)}'s clip is the first cut from ${unit}, whose first frames can carry a short transition flash; the frame is taken at ${at.toFixed(2)} s. Check the source on the pick page (or pass --at).`
+          : `Shot ${idOf(target)}'s clip was cut from ${unit} at a planned time${head === 'planned' ? ' (no scene cut was detected near it)' : ''}, so its first frames can belong to the shot before; the frame is taken at ${at.toFixed(2)} s. Check the source on the pick page (or pass --at).`;
+      }
     }
     const frame = join(sessionDir, 'source.png');
     extractFrameAt(clip, at, frame);

@@ -4,6 +4,26 @@
 
 ### Fixed
 
+- **An over-long SEQUENCE montage prompt no longer loses its STYLE tail.**
+  Past the 5000-character guard the prompt was hard-cut at 5000 characters,
+  which lost its end: the style token (with the face-stability and no-music
+  lines) and the negative. Now blocking shrinks first, then descriptions,
+  never below 40% of themselves; a prompt still over 5000 at that floor goes
+  out longer, up to the model's hard cap (10,000 characters by default, 2,500
+  for MiniMax H3), where descriptions shrink further. Nothing is cut off the
+  end: the header, dialogue, sound, geography hold, STYLE and negative stay
+  whole, and a prompt that cannot fit the cap is refused before it is
+  queued. Test: `tests/montage-engine.test.mjs`.
+
+- **`qa-videos` on a 1080p montage episode.** Frames and reference sheets went
+  to the vision model as full-size PNGs, and several calls came back HTTP 413
+  (one of them the cross-unit identity check, so the run could not pass).
+  Images now go at most 1024 px on the long edge, as JPEG (`visionDataUri`).
+  In montage mode every unit join is a change of location, so the
+  boundary-luma check flagged ordinary scene cuts as "critical" jumps; a join
+  whose two sides are tagged with different locations is now skipped and
+  counted (`isLocationChange`). Test:
+  `tests/video-qa-vision-input.test.mjs`.
 - **Video registry corrections checked against `/video/quote` (drift issue
   #50).** Quote is free and validates `duration` and `resolution` with the
   same enum errors as the queue, so each change below rests on it plus the
@@ -147,6 +167,64 @@
 
 ### Changed
 
+- **Montage: one generation per continuous run, a shot-list prompt, staged
+  views, cuts snapped to the real cuts (rule 50).** From a 31-render
+  continuity bakeoff (Seedance 2.5 R2V, 720p): one generation kept a recurring
+  vehicle and a character's facing across cuts in 3 of 3 takes, where separate
+  per-shot generations swapped the vehicle in 4 of 4; its planned cuts landed
+  as hard cuts 25 of 25 times, within 0.55 s; the SEQUENCE prompt with all four
+  views of each place scored worst.
+  - `groupShotsIntoScenes` keeps a `continuity.from: 'continuous'` shot in the
+    running scene across a change of location. `new-scene` always splits.
+    Scripts without `continuity` group as before. A continuous insert rides in
+    its run and keeps its own clip: montage clips, library copies, the
+    manifest, the skip check and `--retake` archiving are keyed by the shot id
+    with an insert's suffix (`shot-013b.mp4`; `shotIdSuffix` on the beat and
+    the segment).
+  - The default montage prompt is a shot list
+    (`videoDefaults.montageGrammar: 'shots'`): places named in the first line,
+    references in first-appearance order, one `Shot N | a-bs | <place>
+    (@ImageK)` line per shot joined by "Cut to", then the abrupt-cut line; the
+    previous shot's `endState` on a continuous shot, and a count line for an
+    object cast member that is a vehicle, decided by what it is
+    (`objectVehicleKind`), not by a vehicle word in passing. Past 8000
+    characters blocking shrinks first, then descriptions, never below 40%; the
+    model's hard cap (10,000 by default, 2,500 for MiniMax H3) is never
+    exceeded, and the STYLE tail is never cut.
+  - `buildMontageSlotPlan` sends only each shot's staged view, saying which
+    shots it serves and what it does not set (`montageReferenceViews:
+    'staged'`; `'all'` adds the other canonical views and second angles, not
+    custom angles, and is not the old plan). Over budget the cast goes last,
+    as in every lane. A unit where no shot names a `plateView` sends what a
+    montage always sent: every view of its place, custom angles and second
+    angles.
+  - `cutMontageIntoShots` snaps planned cuts to the detected scene cuts
+    (`snapBoundaries`, ±0.8 s), matched in order so a boundary never takes the
+    next boundary's cut, and records the boundaries and any unplanned cut in
+    `manifest.json`. A snapped cut trims nothing; at an unconfirmed planned
+    cut the frame on each side shows its neighbour (video only). Cuts fall on
+    frames and no audio is cut away. A cut pushed past the end of a short
+    render is pulled back inside it, and a clip written without video fails
+    the run.
+  - A montage unit whose clips are all on disk is skipped even when no master
+    carries its name. Masters are named after the scene and first and last
+    shot, so a change in grouping renamed units whose shots did not change and
+    the next run billed them again. The log names the `--retake` command;
+    moving a master aside no longer forces a re-render. `qa-videos` checks
+    such a unit from its clips (`unitFootage`); its continuity and speech
+    checks read the shot clips in any case.
+  - `generate-videos --retake <shots>` archives (`-vN`) and re-renders the
+    whole unit(s) holding those shots, and nothing else. An empty list or a
+    shot the script does not have is refused, and the duration preflight runs
+    before anything is archived (`archiveRetakeUnits`). The renderer gets the
+    whole plan plus `onlyUnits` (plan positions), so a suffixed insert keeps
+    its own shot and a chained unit still starts from the clip before it
+    (`resolveUnitShots`, `unitIndicesForShots`, `archiveUnitOutputs`).
+  - `montageGrammar: 'sequence'` restores the SEQUENCE prompt with its
+    grouping (one location per generation, inserts as singles) and references.
+  - Tests: `tests/montage-engine.test.mjs`, `tests/montage-retake.test.mjs`,
+    `tests/video-qa.test.mjs`.
+
 - **Duration and resolution are validated before the paid call instead of
   silently corrected.** `queueVideo` used to snap an unsupported duration to
   the nearest valid one, and `buildModelParams` swapped an unsupported
@@ -172,10 +250,13 @@
   is now a command.
   - `venice-video stage-ref -p <project> -e <n> --shot <id>` takes one source:
     `--from-plate <view>` (a view of the shot's location), `--from-shot <id>
-    [--at <s>]` (a frame of a rendered clip: its first frame, or 0.5 s in for a
-    clip cut from a montage or multi-shot render, whose first frames can belong
-    to the shot before), or `--from <image|video>`. `--crop`, up to two `--ref`
-    images and a `--prompt` complete it.
+    [--at <s>]` (a frame of a rendered clip: its first frame; one frame in
+    for a montage cut that landed on a detected scene cut, as its media-library
+    manifest records; 0.5 s in for any other clip cut from a longer render,
+    whose first frames can belong to the shot before), or `--from
+    <image|video>`. `--crop`, up to two `--ref` images and a `--prompt`
+    complete it. `--from-shot 13b` reads the insert's own clip
+    (`shot-013b.mp4`).
   - It edits on gpt-image-2-edit and nano-banana-2-edit at once (`--models`).
     The two differ in useful ways: on one frame both removed the object, one
     rewrote lettering beside it and the other kept it. Each result keeps the
@@ -203,7 +284,8 @@
     With none the shot is refused; so is an exact lip-sync shot whose i2v lane
     takes no dialogue audio.
   - A staged shot renders on its own: the pick sets `mustStaySingle`, and the
-    planner keeps a staged shot out of every group. Its clip's `.video.json`
+    planner keeps a staged shot out of every group (`buildMontagePrompt`
+    refuses a montage unit that holds one). Its clip's `.video.json`
     records the pick's hash; a clip not made from the current pick is rendered
     again, and archived only when the new one lands.
   - `generate-videos` first collects a render already queued for a staged shot
@@ -215,16 +297,22 @@
     reference. A unit that starts from a refused shot's last frame waits too,
     instead of starting from an older clip. It lists each shot and why, with
     full commands, exits non-zero and does not mark the episode produced;
-    `produce-episode` stops there. `stage-ref` warns about such lanes when the
-    pick is made, and prints the generation units a pick (or a clear) changes:
-    a pick inside a montage run splits it, and the units around it get new
-    names.
+    `produce-episode` stops there. A `--retake` asks the first three
+    (`stagedShotRefusal`) before it archives anything; the last is found once
+    the shot's references resolve. `stage-ref` warns about
+    such lanes when the pick is made, and prints the generation units a pick
+    (or a clear) changes: a pick inside a montage run splits it, and the units
+    around it get new names. They keep their clips: `generate-videos` skips a
+    unit whose clips are all on disk, so only the staged shot renders.
   - A stale staged clip gets no further (rule 45): `staleStagedShots` feeds
-    `status` (back to `generate-videos -p <project> -e <n>`), `qa-videos`
-    (the unit is not checked, so the report does not pass) and
-    `assemble-episode` (refused; `--force` assembles with a warning). The
-    montage cuts in `media-library/` stay as the archive; nothing reads them as
-    current.
+    `generate-videos` (read once more at the end, so a staged shot a
+    `--retake` leaves alone still fails the run), `status` (back to
+    `generate-videos -p <project> -e <n>`), `qa-videos` (the unit is not
+    checked and the cuts beside the clip are unchecked, so the report does not
+    pass; with `--cut-list`, an edit that uses footage from before a pick does
+    not pass) and `assemble-episode` (refused; `--force` assembles with a
+    warning). The montage cuts in `media-library/` stay as the archive;
+    nothing reads them as current.
   - A staged shot's pending jobs, the clip and the keyframe pass of the
     lip-sync keyframe pipeline, carry the pick's hash (`PendingJob.tag`); a
     keyframe render queued from other inputs is collected and rendered again,
@@ -235,6 +323,7 @@
     its face panel, which MiniMax fails after billing.
   - Tests: `tests/stage-ref.test.mjs`, `tests/stage-ref-render.test.mjs`,
     `tests/stage-ref-gates.test.mjs`, `tests/loop-engine.test.mjs`.
+
 - **The plan check reads what a plate image shows, when a caller has read it.**
   `PlanLocation.inventory` (per view: vehicles, the places an action can use,
   loose objects, each near / mid / far) joins the location's words as evidence;
@@ -251,6 +340,19 @@
   - A shot whose staging ref replaced its view, or that renders from a staged
     first frame, is not checked against the old plate.
   - Test: `tests/plan-check-inventory.test.mjs`.
+
+- **Object cast members get object reference clauses (`Character.prop`,
+  `isObjectCastMember`).** An object cast member (a red umbrella, a ledger, a
+  recurring tram with a locked design) used to get the person clause in the reference
+  slot plan ("use this reference for THE PHONE's face, hair, and wardrobe")
+  and "wearing n/a" in the montage prompt. It now gets a clause that asks the
+  video model to match its shape, materials, colours and marks, and a montage
+  identity line that names it as an object. A cast member is an object when
+  its `baseTraits` start "inanimate object" (what the workshop and the Cast tab
+  write) or the new `prop` flag is set; reference sheets, location plates, the
+  plan check and the slot planner all read the same predicate. Test:
+  `tests/prop-cast.test.mjs`.
+
 - **Shots are planned against their location plates, and checked before any
   spend (rule 64).** The video model draws what a reference plate shows, not
   what the shot text asks: a boarding staged on a station platform whose plates
@@ -284,6 +386,60 @@
     could not read is unchecked, never a pass (rule 46). Upstream registers
     none, so no new paid call runs by default.
   - Tests: `tests/plan-check.test.mjs`, `tests/plan-check-gates.test.mjs`.
+
+- **`qa-videos` checks the cuts: neighbour continuity, on a generation plan or
+  any edit (rule 52).** The identity checks compare only people, so a vehicle
+  that changes between two generations, a person who faces the other way after
+  the cut, or an object a close-up shows and the next shot does not, all
+  passed.
+  - Each checked cut gets one vision call (`checkPairContinuity`): the middle
+    and last frame of shot A, the first and middle frame of shot B, cut as
+    `assemble-episode` cuts them (`trimStart`, `trimEnd`, `flip`, and the
+    judge is told when frames are mirrored), the shot text, and the reference
+    images of the object cast members in the two shots. The calls and the
+    judging model are printed before any call is made. The last frame is read
+    from the video stream's end, so a clip whose audio runs longer still gives
+    a frame. A clip that cannot be read (not on disk, a bad time or reference
+    in a cut list, an unreadable image) leaves the cuts beside it unchecked
+    instead of ending the run.
+  - The model answers a checklist: vehicle, people in both shots, props,
+    facing, action, light. The verdict follows from it (`verdictFromAnswers`):
+    a different vehicle, person or prop, or a reversed facing, is critical and
+    blocks assembly; a broken action is moderate, a light change low. A reply
+    that does not answer all six questions with an allowed value leaves the
+    cut unchecked, which also blocks (rule 46).
+  - `--continuity joins|all|off` picks the cuts; joins between generations is
+    the default. How a cut joins comes from the script, and only when the clip
+    before is the script's previous shot: `continuous` is judged in full,
+    `new-scene` is skipped, `later` is a time cut. With no `continuity.from`
+    (older scripts) or a join the script does not describe, only a cut within
+    one known location is judged, and like a time cut it is never critical, so
+    projects that passed before are not blocked on scene changes or time jumps.
+  - `--cut-list <file>` checks an edit instead: `{"clips":[{file,in,out,shot,location,newScene,text,refs,speech}]}`
+    or an EDL with `cuts: [{master,srcIn,srcOut,shot,location}]`. A clip that
+    names a script shot takes its join from the script; one that does not is
+    judged as continuous unless it sets `newScene` or the two set different
+    locations. The report goes next to the file; an unchecked cut fails the
+    run, and `--skip-vision` / `--continuity off` make no call. `qa-videos` now
+    exits non-zero whenever its report does not pass.
+  - Validated on known breaks from a continuity bakeoff: `claude-opus-5` with
+    the checklist and a vehicle reference flagged a boat swap and a facing
+    flip as critical and a stuck departure as moderate, and passed the clean
+    cuts. `kimi-k3` missed them. The default judge stays the project's vision
+    model.
+  - `qa-videos` warns (free, never blocks) when a clip with an on-camera
+    speaker is cut where its audio is not silent (`checkSpeechTail`), and says
+    how far the speech runs past the cut when the source continues. Nothing is
+    checked on a clip with no audio stream or whose sound stops before its
+    cut, or where the next clip plays on from the same sound (a montage's beat
+    cuts); a pause shorter than 60 ms at the very end of the sound counts.
+  - The plan check adds `prop-continuity` (a warning): a close-up's object
+    (a key, a lock, a note, a lens) that no neighbouring shot of its scene and
+    no plate of the place shows. Senses that are not the object are left out:
+    a key light or key witness, an 85mm or longer lens, a lock of hair, the
+    letters of a sign, a lamp-lit room, and verbs ("she notes", "he locks",
+    "books passage", "maps the route").
+  - Tests: `tests/continuity-qa.test.mjs`, `tests/speech-tail.test.mjs`.
 
 - **`generate-videos` renders up to three units at once.** Units used to
   render one after another, and nearly all of an episode's time went to
