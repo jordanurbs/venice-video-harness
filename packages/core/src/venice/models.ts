@@ -1856,6 +1856,11 @@ export interface MusicModelSpec {
   minPromptLength?: number;
   /** Default generation length in seconds. */
   defaultDurationSec?: number;
+  /**
+   * False when the queue rejects `duration_seconds` (Seed Audio, since 2026-10:
+   * "This model does not support duration_seconds"); length then follows the prompt.
+   */
+  supportsDuration?: boolean;
   /** Per-second price in USD (for budgeting without a `/audio/quote` round-trip). */
   pricingPerSecondUsd?: number;
   /** One-line human summary. */
@@ -1899,6 +1904,7 @@ export const MUSIC_MODELS: MusicModelSpec[] = [
     promptCharacterLimit: 2048,
     minPromptLength: 1,
     defaultDurationSec: 120,
+    supportsDuration: false,
     pricingPerSecondUsd: 0.0028750000000000004,
     description: 'Generate expressive speech and audio from a text prompt with BytePlus Seed Audio 1.0.',
   },

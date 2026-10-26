@@ -290,7 +290,9 @@ export async function generateSeedAudio(
     speed = undefined; // model ignores speed; drop it to keep the request clean
   }
 
-  const durationSeconds = options.durationSeconds ?? spec?.defaultDurationSec ?? 120;
+  const durationSeconds = spec?.supportsDuration === false
+    ? undefined
+    : options.durationSeconds ?? spec?.defaultDurationSec ?? 120;
 
   return generateQueuedAudio(client, {
     prompt,

@@ -34,6 +34,16 @@
   whose two sides are tagged with different locations is now skipped and
   counted (`isLocationChange`). Test:
   `tests/video-qa-vision-input.test.mjs`.
+
+- **Seed Audio stopped accepting `duration_seconds`.** The queue now answers
+  "This model does not support duration_seconds", so every
+  `generate-voice-reference` and `generate-audio` call failed with a bare
+  "Invalid request parameters". The spec now sets `supportsDuration: false`
+  and the field is left out. Clip length follows the prompt.
+- **`generate-voice-reference --file` sent non-mp3 clips mislabelled.** An
+  `.m4a` or `.wav` was copied byte for byte into `voice-reference.mp3` and
+  sent as `audio/mpeg`. Non-mp3 imports are now transcoded.
+
 - **Video registry corrections checked against `/video/quote` (drift issue
   #50).** Quote is free and validates `duration` and `resolution` with the
   same enum errors as the queue, so each change below rests on it plus the
