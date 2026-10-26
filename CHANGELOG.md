@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- **Seedance 2.5 R2V Enhanced (`seedance-2-5-enhanced-reference-to-video`).**
+  Like 2.0 Enhanced, it is missing from `GET /models` but works on quote and
+  queue. The 2026-10-25 quote probe showed the same 4-30s ladder as 2.5 R2V,
+  480p/720p/1080p, and the same 720p price ($8.67 for 30s). It joins every
+  capability set 2.5 R2V is in (reference images, `@Image` tags, `audio_url`,
+  reference audio, 30-image budget). Pick it per project with `videoDefaults`.
+  It is not a default.
+
 ### Fixed
 
 - **An over-long SEQUENCE montage prompt no longer loses its STYLE tail.**

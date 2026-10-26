@@ -1462,6 +1462,7 @@ export const MODELS_SUPPORTING_ELEMENTS = new Set([
 
 export const MODELS_SUPPORTING_REFERENCE_IMAGES = new Set([
   'seedance-2-5-reference-to-video',
+  'seedance-2-5-enhanced-reference-to-video',
   'kling-o3-standard-reference-to-video',
   'kling-o3-pro-reference-to-video',
   'kling-o3-4k-reference-to-video',
@@ -1540,6 +1541,7 @@ export const MODELS_USING_IMAGE_TAGS = new Set([
   // Seedance 2.5 R2V is pure-reference like 2.0 R2V and honors @ImageN tags
   // (same prompt grammar per the 2.5 release notes; quote probed 2026-08-07).
   'seedance-2-5-reference-to-video',
+  'seedance-2-5-enhanced-reference-to-video',
   'seedance-2-0-reference-to-video',
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
@@ -1598,6 +1600,7 @@ export const MODELS_SUPPORTING_AUDIO_INPUT = new Set([
   // models.ts (registry-coverage test) and is the default exact-lip-sync
   // lane for the seedance/auto family (resolveLipSyncModel).
   'seedance-2-5-reference-to-video',
+  'seedance-2-5-enhanced-reference-to-video',
   // MiniMax H3 R2V — GET /models reports audio_input:true on the R2V variant
   // only; the t2v/i2v lanes report false and are deliberately left out.
   'minimax-h3-reference-to-video',
@@ -1639,6 +1642,7 @@ export const MODELS_SUPPORTING_PER_REFERENCE_AUDIO = new Set([
  */
 export const MODELS_SUPPORTING_REFERENCE_AUDIO = new Set([
   'seedance-2-5-reference-to-video',
+  'seedance-2-5-enhanced-reference-to-video',
   'seedance-2-0-reference-to-video',
   'seedance-2-0-enhanced-reference-to-video',
   'seedance-2-0-fast-reference-to-video',
@@ -1685,6 +1689,7 @@ export const MAX_REFERENCE_IMAGES_BY_MODEL: Record<string, number> = {
   // up to 30 image / 10 video / 10 audio, 50 total). The quote endpoint does
   // not police the count, so this budget is the harness-side enforcement.
   'seedance-2-5-reference-to-video': 30,
+  'seedance-2-5-enhanced-reference-to-video': 30,
   'seedance-2-0-reference-to-video': 9,
   'seedance-2-0-enhanced-reference-to-video': 9,
   'seedance-2-0-fast-reference-to-video': 9,

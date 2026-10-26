@@ -45,7 +45,7 @@ const KNOWN_UNLISTED = new Set([
   'runway-gen4-aleph',
   'seedance-2-0-enhanced-reference-to-video', 'seedance-2-0-fast-image-to-video', 'seedance-2-0-fast-reference-to-video',
   'seedance-2-0-fast-text-to-video', 'seedance-2-0-image-to-video', 'seedance-2-0-reference-to-video', 'seedance-2-0-text-to-video',
-  'seedance-2-5-image-to-video', 'seedance-2-5-reference-to-video', 'seedance-2-5-text-to-video',
+  'seedance-2-5-image-to-video', 'seedance-2-5-reference-to-video', 'seedance-2-5-enhanced-reference-to-video', 'seedance-2-5-text-to-video',
   'wan-2-7-spicy-image-to-video', 'wan-2.1-pro-image-to-video', 'wan-2.2-a14b-text-to-video', 'wan-2.6-reference-to-video',
   'wan-3-0-enhanced-reference-to-video', 'wan-3-0-enhanced-text-to-video',
 ]);
