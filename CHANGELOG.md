@@ -11,6 +11,11 @@
   capability set 2.5 R2V is in (reference images, `@Image` tags, `audio_url`,
   reference audio, 30-image budget). Pick it per project with `videoDefaults`.
   It is not a default.
+- **`videoDefaults.improviseDialogue: false`.** Simple-prompt models (MiniMax
+  H3 Max) improvise from the scripted line by default (rule 59). With this
+  set, the line is quoted verbatim, for scripts where the exact words are the
+  point. A 2026-10-26 probe showed H3 Max R2V delivers a quoted line word for
+  word.
 
 ### Fixed
 

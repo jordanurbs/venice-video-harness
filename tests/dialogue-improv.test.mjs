@@ -63,3 +63,12 @@ test('exact-lip-sync keeps the exact line even on a simple-prompt model', () => 
   assert.ok(!p.includes('conveys:'), 'lip-sync means the audio drives the exact words');
   assert.ok(!p.includes('Improvise the spoken dialogue'));
 });
+
+test('improviseDialogue: false keeps the exact line on a simple-prompt model', () => {
+  const series = seriesFor(MAX);
+  series.videoDefaults.improviseDialogue = false;
+  const p = buildVideoPrompt(shot, series).prompt;
+  assert.ok(p.includes(': "We have to leave now."'), 'exact line quoted');
+  assert.ok(!p.includes('conveys:'), 'no improv framing');
+  assert.ok(!p.includes('Improvise the spoken dialogue'), 'no improv note');
+});

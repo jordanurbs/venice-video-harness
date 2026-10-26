@@ -512,6 +512,7 @@ const IMPROV_DIALOGUE_NOTE =
 
 /** True when this model+strategy should let the model improvise dialogue. */
 function shouldImproviseDialogue(modelId: string, series: SeriesState): boolean {
+  if (series.videoDefaults.improviseDialogue === false) return false;
   return modelWantsSimplePrompt(modelId) && series.videoDefaults.audioStrategy !== 'lip-sync';
 }
 

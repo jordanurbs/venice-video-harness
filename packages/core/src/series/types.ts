@@ -176,6 +176,12 @@ export interface VideoModelDefaults {
    */
   montageModel?: string;
   /**
+   * Simple-prompt models (MiniMax H3 Max) improvise dialogue from the scripted
+   * line by default (AGENTS.md rule 59). Set false when the exact words matter,
+   * e.g. scripted jokes: the line is then quoted verbatim on every model.
+   */
+  improviseDialogue?: boolean;
+  /**
    * Ceiling for a single montage generation in seconds. Defaults to 30
    * (Seedance 2.5's single-pass max). Scenes whose beats exceed this split
    * into multiple montage units.
