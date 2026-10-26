@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- **`generate-location-references --prompt` was ignored on south, east and
+  west.** The option docs say the prompt becomes the view clause for a
+  derived plate, but canonical plates always used their built-in view, so a
+  plate whose edit drifted back to the north framing could not be re-aimed.
+  The override now wins on every derived plate. Found re-aiming a swamp-room
+  east plate that had come back as a near copy of north with the furniture
+  moved. Test: `tests/location-plates.test.mjs`.
+
 - **An over-long SEQUENCE montage prompt no longer loses its STYLE tail.**
   Past the 5000-character guard the prompt was hard-cut at 5000 characters,
   which lost its end: the style token (with the face-stability and no-music
