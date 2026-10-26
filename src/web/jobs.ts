@@ -42,7 +42,7 @@ export const COMMAND_WHITELIST: Record<string, CommandSpec> = {
   'fix-panel': { options: ['shot', 'characters', 'prompt', 'edit-model'], flags: [], episode: true },
   'fix-flagged': { options: ['severity', 'edit-model'], flags: ['requa'], episode: true },
   'generate-videos': { options: [], flags: ['skip-qa', 'no-montage', 'auto-edit', 'no-auto-edit'], episode: true },
-  'qa-videos': { options: ['model'], flags: [], episode: true },
+  'qa-videos': { options: ['model', 'continuity'], flags: [], episode: true },
   'generate-music': { options: ['prompt', 'duration', 'model'], flags: [], episode: true },
   'assemble-episode': {
     options: ['ambient-volume', 'native-volume'],

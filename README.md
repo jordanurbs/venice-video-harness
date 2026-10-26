@@ -422,7 +422,7 @@ Three gates block progress by design:
 |---|---|---|
 | Script approval | `workshop --approve` or `approve-script` | `storyboard-episode` |
 | Storyboard QA | `qa-approve`, after `qa-storyboard` reports no critical issues — the approval reads the report, and criticals/unchecked shots require `--force` | `generate-videos` |
-| Video QA | `qa-videos` writing a passing `video-qa-report.json` (cross-unit identity, head glitches, boundary jumps) — a failing report blocks; a missing one warns | `assemble-episode` |
+| Video QA | `qa-videos` writing a passing `video-qa-report.json` (cross-unit identity, continuity at the cuts, head glitches, boundary jumps) — a failing report blocks; a missing one warns | `assemble-episode` |
 
 **Do not route around a gate.** `--skip-approval` and `--skip-qa` exist for
 operators who have already reviewed the work by other means. An agent that hits

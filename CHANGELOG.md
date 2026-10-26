@@ -15,6 +15,15 @@
   whole, and a prompt that cannot fit the cap is refused before it is
   queued. Test: `tests/montage-engine.test.mjs`.
 
+- **`qa-videos` on a 1080p montage episode.** Frames and reference sheets went
+  to the vision model as full-size PNGs, and several calls came back HTTP 413
+  (one of them the cross-unit identity check, so the run could not pass).
+  Images now go at most 1024 px on the long edge, as JPEG (`visionDataUri`).
+  In montage mode every unit join is a change of location, so the
+  boundary-luma check flagged ordinary scene cuts as "critical" jumps; a join
+  whose two sides are tagged with different locations is now skipped and
+  counted (`isLocationChange`). Test:
+  `tests/video-qa-vision-input.test.mjs`.
 - **Video registry corrections checked against `/video/quote` (drift issue
   #50).** Quote is free and validates `duration` and `resolution` with the
   same enum errors as the queue, so each change below rests on it plus the
@@ -274,6 +283,60 @@
     could not read is unchecked, never a pass (rule 46). Upstream registers
     none, so no new paid call runs by default.
   - Tests: `tests/plan-check.test.mjs`, `tests/plan-check-gates.test.mjs`.
+
+- **`qa-videos` checks the cuts: neighbour continuity, on a generation plan or
+  any edit (rule 52).** The identity checks compare only people, so a vehicle
+  that changes between two generations, a person who faces the other way after
+  the cut, or an object a close-up shows and the next shot does not, all
+  passed.
+  - Each checked cut gets one vision call (`checkPairContinuity`): the middle
+    and last frame of shot A, the first and middle frame of shot B, cut as
+    `assemble-episode` cuts them (`trimStart`, `trimEnd`, `flip`, and the
+    judge is told when frames are mirrored), the shot text, and the reference
+    images of the object cast members in the two shots. The calls and the
+    judging model are printed before any call is made. The last frame is read
+    from the video stream's end, so a clip whose audio runs longer still gives
+    a frame. A clip that cannot be read (not on disk, a bad time or reference
+    in a cut list, an unreadable image) leaves the cuts beside it unchecked
+    instead of ending the run.
+  - The model answers a checklist: vehicle, people in both shots, props,
+    facing, action, light. The verdict follows from it (`verdictFromAnswers`):
+    a different vehicle, person or prop, or a reversed facing, is critical and
+    blocks assembly; a broken action is moderate, a light change low. A reply
+    that does not answer all six questions with an allowed value leaves the
+    cut unchecked, which also blocks (rule 46).
+  - `--continuity joins|all|off` picks the cuts; joins between generations is
+    the default. How a cut joins comes from the script, and only when the clip
+    before is the script's previous shot: `continuous` is judged in full,
+    `new-scene` is skipped, `later` is a time cut. With no `continuity.from`
+    (older scripts) or a join the script does not describe, only a cut within
+    one known location is judged, and like a time cut it is never critical, so
+    projects that passed before are not blocked on scene changes or time jumps.
+  - `--cut-list <file>` checks an edit instead: `{"clips":[{file,in,out,shot,location,newScene,text,refs,speech}]}`
+    or an EDL with `cuts: [{master,srcIn,srcOut,shot,location}]`. A clip that
+    names a script shot takes its join from the script; one that does not is
+    judged as continuous unless it sets `newScene` or the two set different
+    locations. The report goes next to the file; an unchecked cut fails the
+    run, and `--skip-vision` / `--continuity off` make no call. `qa-videos` now
+    exits non-zero whenever its report does not pass.
+  - Validated on known breaks from a continuity bakeoff: `claude-opus-5` with
+    the checklist and a vehicle reference flagged a boat swap and a facing
+    flip as critical and a stuck departure as moderate, and passed the clean
+    cuts. `kimi-k3` missed them. The default judge stays the project's vision
+    model.
+  - `qa-videos` warns (free, never blocks) when a clip with an on-camera
+    speaker is cut where its audio is not silent (`checkSpeechTail`), and says
+    how far the speech runs past the cut when the source continues. Nothing is
+    checked on a clip with no audio stream or whose sound stops before its
+    cut, or where the next clip plays on from the same sound (a montage's beat
+    cuts); a pause shorter than 60 ms at the very end of the sound counts.
+  - The plan check adds `prop-continuity` (a warning): a close-up's object
+    (a key, a lock, a note, a lens) that no neighbouring shot of its scene and
+    no plate of the place shows. Senses that are not the object are left out:
+    a key light or key witness, an 85mm or longer lens, a lock of hair, the
+    letters of a sign, a lamp-lit room, and verbs ("she notes", "he locks",
+    "books passage", "maps the route").
+  - Tests: `tests/continuity-qa.test.mjs`, `tests/speech-tail.test.mjs`.
 
 - **`generate-videos` renders up to three units at once.** Units used to
   render one after another, and nearly all of an episode's time went to

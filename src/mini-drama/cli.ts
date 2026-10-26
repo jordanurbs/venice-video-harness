@@ -5,6 +5,7 @@ import { Command } from 'commander';
 import { resolve, join, basename, dirname } from 'node:path';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { stdin } from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -3334,23 +3335,122 @@ program
 // Post-render QA on the RENDERED units — the layer panel QA cannot cover.
 // Catches: cross-unit identity drift (each generation unit re-interprets
 // the references independently), per-unit identity breaks vs the sheets,
-// head-glitch flashes from montage transition junk, and boundary lighting
-// jumps. Born from the canopy-run three-Wrens failure, 2026-08-10.
+// continuity breaks at the cuts (a vehicle, person or prop that changes, a
+// facing that flips), head-glitch flashes from montage transition junk,
+// boundary lighting jumps, and on-camera lines cut off by the picture cut.
+// Born from the canopy-run three-Wrens failure, 2026-08-10.
 program
   .command('qa-videos')
-  .description('Vision + programmatic QA on rendered generation units (cross-unit identity, head glitches, boundary jumps)')
+  .description('Vision + programmatic QA on rendered generation units (cross-unit identity, continuity at the cuts, head glitches, boundary jumps, lines cut off)')
   .requiredOption('-p, --project <dir>', 'Series output directory')
   .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
   .option('--model <model>', "Override the project's vision model for this run")
   .option('--skip-vision', 'Run only the free programmatic checks (no vision calls)', false)
-  .action(async (opts: { project: string; episode: number; model?: string; skipVision: boolean }) => {
+  .option('--continuity <scope>', 'Neighbour continuity at the cuts, one vision call per cut (vehicle, people, props, facing, action, light): joins = the cuts between two generations (the default), all = every cut (the default with --cut-list), off = skip')
+  .option('--cut-list <file>', 'Check an edit instead of the generation plan: a cut list {"clips":[{file,in,out,shot,location,newScene,text,refs,speech}]} or an EDL {"cuts":[{master,srcIn,srcOut,shot,location}]}. A clip that names a script shot takes its join from the script; one that does not is judged as continuous with the clip before unless it sets newScene: true or the two set different locations. Runs the continuity and speech checks; the report goes next to the file.')
+  .action(async (opts: { project: string; episode: number; model?: string; skipVision: boolean; continuity?: string; cutList?: string }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
     const script = await loadEpisodeScript(series, opts.episode);
     if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
+    const scope = (opts.continuity ?? (opts.cutList ? 'all' : 'joins')) as 'joins' | 'all' | 'off';
+    if (!['joins', 'all', 'off'].includes(scope)) { console.error('--continuity takes joins, all or off.'); process.exit(1); }
 
     const episodeDir = getEpisodeDir(series, opts.episode);
     const sceneDir = join(episodeDir, 'scene-001');
+    const qa = await import('./video-qa.js');
+    type CutClip = import('./video-qa.js').CutClip;
+    const qaModel = opts.model ?? intelligenceFor(series).visionModel;
+    const recheck = [
+      `qa-videos -p ${series.outputDir} -e ${opts.episode}`,
+      ...(opts.cutList ? [`--cut-list ${resolve(opts.cutList)}`] : []),
+      ...(opts.model ? [`--model ${opts.model}`] : []),
+      ...(opts.continuity ? [`--continuity ${opts.continuity}`] : []),
+      ...(opts.skipVision ? ['--skip-vision'] : []),
+    ].join(' ');
+    const icon = (r: { errored?: boolean; verdict: string }) => (r.errored ? '?' : r.verdict === 'PASS' ? '✓' : r.verdict === 'FLAG-CRITICAL' ? '✗' : '⚠');
+    const shotOf = (clip: CutClip) => qa.shotForClip(script.shots, clip);
+    // The judge compares a vehicle or prop with its reference: the object cast members of the clip's shot.
+    const withRefs = (clip: CutClip): CutClip => (clip.refs ? clip : { ...clip, refs: qa.objectRefsFor(series, shotOf(clip)?.characters ?? []) });
+
+    // Neighbour continuity: one vision call per cut, counted before any is made.
+    // No client (so no key) unless a call will be made: a cut with a clip that
+    // cannot be read is unchecked without one.
+    const checkCuts = async (clips: CutClip[], getClient: () => Promise<Pick<VeniceClient, 'chatJson'>>, indent: string) => {
+      const pairs = qa.pairsToCheck(clips, scope === 'all' ? 'all' : 'joins');
+      const calls = pairs.filter(([a, b]) => !qa.clipProblem(withRefs(a)) && !qa.clipProblem(withRefs(b))).length;
+      console.log(`${indent}Neighbour continuity (${scope === 'all' ? 'every cut' : 'cuts between generations'}): ${pairs.length} cut(s) to check, ${calls} vision call(s) on ${qaModel}`);
+      // The judge decides what is caught: say who judged, every time.
+      console.log(`${indent}  The judge is ${qaModel}; a weaker one misses breaks. Pass a stronger vision model with --model, within the project's privacy tier.`);
+      const client = calls > 0
+        ? await getClient()
+        : { chatJson: () => Promise.reject(new Error('no vision call: a clip of this cut cannot be read')) };
+      const framesDir = join(tmpdir(), `continuity-qa-${process.pid}-${Date.now()}`);
+      const results: import('./video-qa.js').PairContinuityResult[] = [];
+      for (const [a, b] of pairs) {
+        const result = await qa.checkPairContinuity(client, qaModel, withRefs(a), withRefs(b), {
+          framesDir,
+          aText: a.text ?? shotOf(a)?.description,
+          bText: b.text ?? shotOf(b)?.description,
+        });
+        results.push(result);
+        const join = result.join === 'later' ? ' (time cut)' : result.join === 'unknown' ? ' (join not stated: never critical)' : '';
+        console.log(`${indent}  ${icon(result)} ${a.id} → ${b.id}${join}: ${result.errored ? 'UNCHECKED' : result.verdict}${result.issues.length ? ` — ${result.issues[0]}` : ''}`);
+      }
+      return results;
+    };
+
+    // A line cut off by the picture cut: the cut of a clip with an on-camera
+    // speaker belongs in silence (free). Not at a cut where the next clip plays
+    // on from the same sound (a montage's beat cuts, an edit's contiguous cuts).
+    const checkSpeechTails = (clips: CutClip[], indent: string) => {
+      const spoken = clips.filter((clip, i) => (clip.speech || qa.speaksOnCamera(shotOf(clip))) && !qa.playsOn(clip, clips[i + 1]));
+      const findings = spoken
+        .map(clip => qa.checkSpeechTail(clip))
+        .filter((finding): finding is import('./video-qa.js').SpeechTailFinding => Boolean(finding));
+      for (const finding of findings) console.log(`${indent}⚠ ${finding.message}`);
+      if (spoken.length > 0 && findings.length === 0) console.log(`${indent}✓ every on-camera line ends before its cut (${spoken.length} clip(s))`);
+      return findings;
+    };
+
+    // ---- An edit (a cut list or an EDL): the continuity and speech checks ----
+    if (opts.cutList) {
+      const listPath = resolve(opts.cutList);
+      const clips = qa.markJoins(qa.cutListFromJson(JSON.parse(readFileSync(listPath, 'utf-8')), [dirname(listPath), series.outputDir]), script.shots);
+      console.log(`QA Videos: ${clips.length} clip(s) in ${listPath}\n`);
+      for (const clip of clips) {
+        const problem = qa.clipProblem(clip);
+        if (problem) console.warn(`  ⚠ ${clip.id}: ${problem}; the cuts beside it cannot be checked`);
+      }
+      const speechTails = checkSpeechTails(clips, '  ');
+      const skipped = opts.skipVision ? '--skip-vision' : scope === 'off' ? '--continuity off' : undefined;
+      let results: import('./video-qa.js').PairContinuityResult[] = [];
+      if (skipped) console.log(`  Neighbour continuity: skipped (${skipped})`);
+      else results = await checkCuts(clips, async () => new VeniceClient(await getVeniceApiKey()), '  ');
+      const criticals = results.filter(r => !r.errored && r.verdict === 'FLAG-CRITICAL').length;
+      const unchecked = results.filter(r => r.errored).length;
+      const passed = criticals === 0 && unchecked === 0;
+      const reportPath = `${listPath.replace(/\.json$/i, '')}.continuity-report.json`;
+      await writeFile(reportPath, `${JSON.stringify({
+        cutList: listPath,
+        model: skipped ? 'programmatic-only' : qaModel,
+        analyzedAt: new Date().toISOString(),
+        ...(skipped ? { continuitySkipped: skipped } : {}),
+        continuity: results,
+        speechTails,
+        summary: { clips: clips.length, checkedCuts: results.length, criticals, errored: unchecked, speechTails: speechTails.length, passed },
+      }, null, 2)}\n`, 'utf-8');
+      console.log(`\n${'─'.repeat(50)}`);
+      console.log(`Cut list QA: ${criticals} critical, ${unchecked} unchecked, ${speechTails.length} speech warning(s)${skipped ? `, continuity skipped (${skipped})` : ''} — ${passed ? 'PASS' : 'NOT PASSED'}`);
+      console.log(`Report saved: ${reportPath}`);
+      if (!passed) {
+        if (unchecked > 0) console.log(`\n${unchecked} cut(s) could not be checked (see the report): unchecked, not passed.`);
+        console.log(`Re-check after fixing: ${recheck}`);
+        process.exitCode = 1;
+      }
+      return;
+    }
+
     const { loadGenerationPlan } = await import('./generation-planner.js');
     const plan = await loadGenerationPlan(episodeDir);
     if (!plan || plan.units.length === 0) {
@@ -3359,8 +3459,8 @@ program
     }
     const {
       detectHeadGlitch, frameLuma, ffprobeDurationSec, sampleUnitFrames,
-      checkUnitIdentity, checkCrossUnitIdentity, saveVideoQaReport, unitFootage,
-    } = await import('./video-qa.js');
+      checkUnitIdentity, checkCrossUnitIdentity, saveVideoQaReport, isLocationChange, unitFootage,
+    } = qa;
 
     // A unit kept with all its clips on disk but no master under its current
     // name (generate-videos does not bill it again) is checked from its clips.
@@ -3385,7 +3485,9 @@ program
     if (headGlitches.length === 0) console.log('  ✓ no head-glitch flashes detected');
 
     const boundaries: import('./video-qa.js').BoundaryFinding[] = [];
+    let locationCuts = 0;
     for (let i = 1; i < units.length; i++) {
+      if (isLocationChange(units[i - 1], units[i], script.shots)) { locationCuts++; continue; }
       const prevPath = footage.get(units[i - 1])!.tail;
       const nextPath = footage.get(units[i])!.head;
       const prevLuma = frameLuma(prevPath, Math.max(ffprobeDurationSec(prevPath) - 0.2, 0));
@@ -3401,14 +3503,23 @@ program
       }
     }
     if (boundaries.length === 0) console.log('  ✓ no boundary lighting jumps');
+    if (locationCuts > 0) console.log(`  · ${locationCuts} join(s) change location (a scene cut, so the light may change): not compared`);
+
+    // The shot clips as assemble-episode cuts them (trims, flip), each tagged with its generation.
+    // A shot with no clip on disk stays in the list: the cuts beside it are unchecked.
+    const planClips = qa.cutListFromPlan(plan, sceneDir, script.shots);
+    for (const clip of planClips) {
+      if (!existsSync(clip.file)) console.log(`  ⚠ ${clip.id}: ${clip.file} is not on disk; the cuts beside it cannot be checked`);
+    }
+    const speechTails = checkSpeechTails(planClips, '  ');
 
     // ---- Layer 2: vision ----
     let unitIdentity: import('./video-qa.js').UnitIdentityResult[] = [];
     let crossUnit: import('./video-qa.js').CrossUnitResult = { verdict: 'PASS', issues: [], driftingUnits: [] };
+    let continuity: import('./video-qa.js').PairContinuityResult[] = [];
     if (!opts.skipVision) {
       const apiKey = await getVeniceApiKey();
       const client = new VeniceClient(apiKey);
-      const qaModel = opts.model ?? intelligenceFor(series).visionModel;
       console.log(`\nVision checks (model: ${qaModel}):`);
 
       const samples = sampleUnitFrames(units, sceneDir, script);
@@ -3421,8 +3532,7 @@ program
           .flatMap(n => script.shots.find(s => s.shotNumber === n)?.characters ?? []))];
         const result = await checkUnitIdentity(client, qaModel, series, unit.unitId, unitFrames, charNames);
         unitIdentity.push(result);
-        const icon = result.errored ? '?' : result.verdict === 'PASS' ? '✓' : result.verdict === 'FLAG-CRITICAL' ? '✗' : '⚠';
-        console.log(`  ${icon} ${unit.unitId}: ${result.errored ? 'UNCHECKED' : result.verdict}${result.issues.length > 0 ? ' — ' + result.issues[0] : ''}`);
+        console.log(`  ${icon(result)} ${unit.unitId}: ${result.errored ? 'UNCHECKED' : result.verdict}${result.issues.length > 0 ? ' — ' + result.issues[0] : ''}`);
       }
 
       // Cross-unit identity: one hero frame per unit, one call.
@@ -3439,32 +3549,40 @@ program
               .some(c => c.toUpperCase() === protagonist.toUpperCase())))
           .filter((s): s is NonNullable<typeof s> => Boolean(s));
         crossUnit = await checkCrossUnitIdentity(client, qaModel, heroFrames, protagonist);
-        const icon = crossUnit.errored ? '?' : crossUnit.verdict === 'PASS' ? '✓' : crossUnit.verdict === 'FLAG-CRITICAL' ? '✗' : '⚠';
-        console.log(`  ${icon} cross-unit (${protagonist}, ${heroFrames.length} units): ${crossUnit.errored ? 'UNCHECKED' : crossUnit.verdict}`);
+        console.log(`  ${icon(crossUnit)} cross-unit (${protagonist}, ${heroFrames.length} units): ${crossUnit.errored ? 'UNCHECKED' : crossUnit.verdict}`);
         for (const issue of crossUnit.issues) console.log(`      ${issue}`);
         if (crossUnit.driftingUnits.length > 0) {
           console.log(`      drifting units: ${crossUnit.driftingUnits.join(', ')}`);
         }
       }
+
+      // Neighbour continuity across the cuts (by default, only the cuts between two generations).
+      if (scope === 'off') console.log('  Neighbour continuity: skipped (--continuity off)');
+      else continuity = await checkCuts(planClips, async () => client, '  ');
     }
 
-    const erroredCount = unitIdentity.filter(r => r.errored).length + (crossUnit.errored ? 1 : 0);
+    const erroredCount = unitIdentity.filter(r => r.errored).length + (crossUnit.errored ? 1 : 0)
+      + continuity.filter(r => r.errored).length;
+    const continuityCriticals = continuity.filter(r => !r.errored && r.verdict === 'FLAG-CRITICAL');
     const criticals = headGlitches.length
       + boundaries.filter(b => b.severity === 'fail').length
       + unitIdentity.filter(r => !r.errored && r.verdict === 'FLAG-CRITICAL').length
-      + (!crossUnit.errored && crossUnit.verdict === 'FLAG-CRITICAL' ? 1 : 0);
+      + (!crossUnit.errored && crossUnit.verdict === 'FLAG-CRITICAL' ? 1 : 0)
+      + continuityCriticals.length;
 
     const report: import('./video-qa.js').VideoQaReport = {
       episode: opts.episode,
-      model: opts.skipVision ? 'programmatic-only' : (opts.model ?? intelligenceFor(series).visionModel),
+      model: opts.skipVision ? 'programmatic-only' : qaModel,
       analyzedAt: new Date().toISOString(),
       headGlitches, boundaries, unitIdentity, crossUnit,
+      ...(continuity.length > 0 ? { continuity } : {}),
+      ...(speechTails.length > 0 ? { speechTails } : {}),
       summary: { units: units.length, criticals, errored: erroredCount, passed: criticals === 0 && erroredCount === 0 },
     };
     const reportPath = await saveVideoQaReport(episodeDir, report);
 
     console.log(`\n${'─'.repeat(50)}`);
-    console.log(`Video QA: ${criticals} critical, ${erroredCount} unchecked — ${report.summary.passed ? 'PASS' : 'NOT PASSED'}`);
+    console.log(`Video QA: ${criticals} critical, ${erroredCount} unchecked${speechTails.length > 0 ? `, ${speechTails.length} speech warning(s)` : ''} — ${report.summary.passed ? 'PASS' : 'NOT PASSED'}`);
     console.log(`Report saved: ${reportPath}`);
     if (criticals > 0) {
       console.log('\nFix the flagged units before assembling:');
@@ -3475,9 +3593,19 @@ program
       if (headGlitches.length > 0) {
         console.log(`  Head glitches: ${headGlitches.map(g => g.unitId).join(', ')} — re-render, or trim the flash frames.`);
       }
-      process.exitCode = 1;
-    } else if (erroredCount === 0) {
+      if (continuityCriticals.length > 0) {
+        console.log(`  Continuity breaks: ${continuityCriticals.map(r => `${r.from} → ${r.to} (${r.kinds.join(', ')})`).join('; ')}`);
+        console.log('  Recommended: cast a vehicle or prop that changes as an object with its own reference, state the facing in both shots\' blocking, then re-render the generation after the cut.');
+      }
+    }
+    if (erroredCount > 0) {
+      console.log(`\n${erroredCount} check(s) could not run (see the report): unchecked, not passed.`);
+    }
+    if (report.summary.passed) {
       console.log(`\nAll rendered units verified. Run: assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+    } else {
+      console.log(`Re-check after fixing: ${recheck}`);
+      process.exitCode = 1;
     }
   });
 
@@ -4262,10 +4390,11 @@ program
         console.warn('  Assembling anyway (a missing report only warns; a failing one blocks).');
       } else {
         try {
-          const videoQa = JSON.parse(readFileSync(videoQaPath, 'utf-8')) as { summary?: { passed?: boolean; criticals?: number } };
+          const videoQa = JSON.parse(readFileSync(videoQaPath, 'utf-8')) as { summary?: { passed?: boolean; criticals?: number; errored?: number } };
           if (videoQa.summary && videoQa.summary.passed === false) {
-            console.error(`Blocked: video QA found ${videoQa.summary.criticals ?? '?'} critical issue(s) in the rendered units.`);
-            console.error('  Assembling drifted or glitched units bakes the defects into the master.');
+            const unchecked = videoQa.summary.errored ? ` and ${videoQa.summary.errored} check(s) that could not run` : '';
+            console.error(`Blocked: video QA found ${videoQa.summary.criticals ?? '?'} critical issue(s)${unchecked} in the rendered units.`);
+            console.error('  Assembling drifted, glitched or mismatched units bakes the defects into the master.');
             console.error(`  Review: ${videoQaPath}`);
             console.error(`  Fix the flagged units (or harvest-anchor + re-render), re-run qa-videos, then assemble.`);
             console.error('  If you have reviewed the footage yourself and accept it, re-run with --skip-video-qa.');

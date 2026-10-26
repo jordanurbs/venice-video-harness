@@ -30,6 +30,13 @@ in the other.
 - `approve-script` and `qa-approve` are explicit human sign-offs, not steps an agent clears on its own.
 - `--skip-approval` and `--skip-qa` do not make the script approved or QA cleared; they only bypass the check. They are **not** the fix. Ask the human to approve.
 
+## QA the rendered video, and the cuts
+- Panel QA runs before rendering and cannot catch cross-unit drift. After `generate-videos`, run `qa-videos`: head-glitch flashes and boundary jumps (free), per-unit identity against the sheets, and cross-unit identity across hero frames (one call).
+- A failing `video-qa-report.json` blocks `assemble-episode`. `--skip-video-qa` only bypasses the check for an operator who watched the footage.
+- It also checks the cuts themselves (neighbour continuity): one vision call per cut, counted before any is made, with a checklist (vehicle, people in both shots, props, facing, action, light) and the reference images of the vehicles and props. A different vehicle, person or prop, or a reversed facing, is critical; a reply that does not answer the checklist leaves the cut unchecked, which blocks too. By default it checks the cuts between generations (`--continuity joins|all|off`). Only a cut the script marks `continuous` (and whose clip before is the script's previous shot) is judged in full; a time cut, or a join the script does not state within one known location, is never critical, and a new scene or a change of location without a stated join is not judged. A clip not on disk leaves the cuts beside it unchecked. For a film edited elsewhere, pass `--cut-list <cut list or EDL>`; mark its scene changes with `newScene` or `location`. It also warns when an on-camera line is cut before it falls silent.
+- The continuity judge matters: on known breaks claude-opus-5 caught a boat swap and a facing flip that kimi-k3 missed. Every run names the judge; pick a stronger vision model with `--model`, within the project's privacy tier.
+- When units drift: `harvest-anchor` a clean frame from a unit that passed (`anchor.png` outranks the sheets), re-render only the drifting units, and re-run `qa-videos`.
+
 ## Consistency-first generation
 - Prefer 15s shots. Two 15s shots beat five 6s shots on identity stability, motion completion, continuity, and cost.
 - Front-load style at the START of every prompt; keep Seedance prompts under ~60 words with the 5-part structure (Subject, Action, Camera, Style, Constraints).
