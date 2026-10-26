@@ -13,7 +13,10 @@
 // staging nouns in each shot (places, vehicles, the parts of a boat) and looks
 // for them in the location's text, view by view when the location says what
 // each plate shows ("View 1 (north): ..."). A caller can add a vision pass
-// over the real plates on top of it (workshop.ts `readPlates`).
+// over the real plates on top of it (workshop.ts `readPlates`). A caller that
+// has read what each plate image shows (`PlanLocation.inventory`) adds it to
+// the words, and a vehicle the staged plate shows close to the camera that is
+// not the shot's own is a finding.
 //
 // Pure: plain data in, findings out.
 // ---------------------------------------------------------------------------
@@ -29,6 +32,28 @@ export interface PlanLocation {
   fixed?: boolean;
   /** The location this one adjoins (a new place next to a fixed set). */
   near?: string;
+  /**
+   * What each plate image shows, read from the image by a caller (a vision
+   * pass). It is evidence beside the words: the words may name one passing
+   * launch where the plate draws two moored boats.
+   */
+  inventory?: Partial<Record<PlateView, PlanViewInventory>>;
+}
+
+/** What one plate image shows: the parts of a plate inventory the check reads. */
+export interface PlanViewInventory {
+  vehicles: PlanInventoryItem[];
+  /** The parts of the place an action can use (water steps, a landing stage, a doorway). */
+  places?: PlanInventoryItem[];
+  objects?: PlanInventoryItem[];
+}
+
+export interface PlanInventoryItem {
+  what: string;
+  count: number;
+  where?: string;
+  distance: 'near' | 'mid' | 'far';
+  state?: string;
 }
 
 export interface PlanShot {
@@ -43,6 +68,8 @@ export interface PlanShot {
   plateView?: PlateView;
   characters?: string[];
   continuity?: ShotContinuity;
+  /** An edited plate or first frame picked for the shot (stage-ref): the plate's words no longer describe what it is staged on. */
+  stagingRef?: { use: 'plate' | 'start-frame'; replacesView?: PlateView };
 }
 
 export interface PlanCast {
@@ -57,6 +84,8 @@ export type PlanFindingKind =
   | 'not-in-plates'
   | 'description-only'
   | 'distant-in-plates'
+  /** The staged view's plate shows a different vehicle close to the camera (from its inventory): the model draws that one. */
+  | 'competing-vehicle'
   | 'vessel-changes'
   | 'recurring-vehicle'
   /** A close-up's object that no neighbouring shot of the scene, and no plate of the place, shows. */
@@ -349,6 +378,70 @@ export function viewTexts(location: PlanLocation): Partial<Record<PlateView, str
   return out;
 }
 
+const DISTANCE_WORDS: Record<PlanInventoryItem['distance'], string> = { near: 'near the camera', mid: 'in the midground', far: 'far off' };
+
+/** The items of a caller's inventory list that name something; anything else is skipped, never a crash. */
+function inventoryItems(list: unknown): PlanInventoryItem[] {
+  return Array.isArray(list)
+    ? list.filter((item): item is PlanInventoryItem => Boolean(item) && typeof item.what === 'string' && item.what.trim() !== '')
+    : [];
+}
+
+/**
+ * One inventory item as a clause the presence check reads: no commas inside,
+ * and the distance next to the noun, so "far off" marks it distant.
+ */
+function inventoryClause(item: PlanInventoryItem): string {
+  const text = (value: unknown) => (typeof value === 'string' ? value : '');
+  const count = Number(item.count) > 1 ? `${Number(item.count)} ` : '';
+  const words = [`${count}${item.what}`, DISTANCE_WORDS[item.distance], text(item.state), text(item.where)]
+    .filter(Boolean).join(' ');
+  return words.replace(/[,.;:]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function inventoryWords(inventory: PlanViewInventory): string {
+  return [...inventoryItems(inventory.vehicles), ...inventoryItems(inventory.places), ...inventoryItems(inventory.objects)]
+    .map(inventoryClause).join('; ');
+}
+
+/**
+ * What each plate shows: the view's words, plus what its image shows when the
+ * caller has read the plate (`PlanLocation.inventory`). The image wins where
+ * they differ: the words may name one passing launch where the plate draws
+ * two moored boats.
+ */
+export function viewEvidence(location: PlanLocation): Partial<Record<PlateView, string>> {
+  const texts = viewTexts(location);
+  for (const view of VIEWS) {
+    const inventory = location.inventory?.[view];
+    if (!inventory) continue;
+    const shown = inventoryWords(inventory);
+    if (!shown) continue;
+    texts[view] = texts[view] ? `${texts[view]}. The plate shows: ${shown}` : `The plate shows: ${shown}`;
+  }
+  return texts;
+}
+
+/** A boat the vocabulary has no kind for ("a long dark boat", "a small craft"). */
+const GENERIC_BOAT = /\b(?:boat|vessel|craft|ship|motorboat|skiff|dinghy)s?\b/i;
+
+/** Every vehicle kind a text names ("ferry", "launch", "train"): a shot's words strictly, an inventory's like a place's. */
+function vehicleKinds(text: string, how: 'shot' | 'place' = 'shot'): Set<string> {
+  return new Set([...VEHICLES, ...LAND_VEHICLES].filter(t => (how === 'place' ? placePattern(t) : t.pattern).test(text)).map(t => t.key));
+}
+
+/** The view the shot's plate leads with: its plateView, else the north hero plate. */
+function stagedViewOf(shot: PlanShot): PlateView {
+  return shot.plateView ?? 'north';
+}
+
+/** The shot no longer stands on its plate as written: a person picked an edited plate for that view, or a start frame. */
+function stagedPastPlate(shot: PlanShot): boolean {
+  const ref = shot.stagingRef;
+  if (!ref) return false;
+  return ref.use === 'start-frame' || !ref.replacesView || ref.replacesView === stagedViewOf(shot);
+}
+
 /** Water vessels a text names (by kind). */
 function vesselsIn(text: string, how: 'shot' | 'place' = 'shot'): Set<string> {
   return new Set(VEHICLES.filter(t => (how === 'place' ? placePattern(t) : t.pattern).test(text)).map(t => t.key));
@@ -384,19 +477,112 @@ export interface PlanCheckInput {
   requirePlateView?: boolean;
 }
 
+/**
+ * Kinds of travel that look alike on a plate. A plate's boat named with
+ * another kind of the same class (a "motor launch" where the shot says "the
+ * ferry") may be that very boat: an inventory names what it sees, and many a
+ * ferry is a motor launch. Only a vision pass can tell such boats apart, so
+ * that is a warning; a vehicle of another class (gondolas where the shot
+ * needs the ferry, a bus at a train platform) blocks.
+ */
+const VEHICLE_CLASS: Record<string, string> = {
+  ferry: 'motor', launch: 'motor', vaporetto: 'motor',
+  gondola: 'rowed', sandolo: 'rowed',
+  ship: 'ship', barge: 'cargo', sailboat: 'sail',
+  train: 'rail', tram: 'rail', bus: 'road',
+};
+
+/**
+ * The staged view's plate shows a vehicle close to the camera that is not the
+ * one the shot names (read from the plate image, `PlanLocation.inventory`):
+ * the video model draws the plate's vehicle. A ferry staged at water stairs
+ * where the plate has two other boats moored comes out as one of them.
+ */
+function competingVehicles(shot: PlanShot, loc: PlanLocation, text: string): PlanFinding[] {
+  const view = stagedViewOf(shot);
+  const inventory = loc.inventory?.[view];
+  if (!loc.fixed || !inventory) return [];
+  const terms = [...VEHICLES, ...LAND_VEHICLES];
+  const termOf = (kind: string): Term => terms.find(t => t.key === kind)!;
+  const wanted = new Set([...vehicleKinds(text)].filter(kind => presence(text, termOf(kind).pattern) === 'close'));
+  if (!wanted.size) return [];
+  // Only a vehicle the action touches or the shot is about has to be the
+  // plate's; one merely named (passing, looked at) can only warn.
+  const needed = [...wanted].some(kind => contactedIn(text, termOf(kind)) || featuredIn(text, termOf(kind)));
+  // A boat competes with a boat and a train with a train; a luggage cart on
+  // the quay does not compete with the ferry. A boat of no named kind ("a dark
+  // boat with a wooden rail") is still a boat.
+  const water = new Set(VEHICLES.map(t => t.key));
+  const boarded = new Set(['train', 'tram', 'bus']);
+  const kindDomain = (kind: string): string => (water.has(kind) ? 'water' : boarded.has(kind) ? 'land' : kind);
+  const domain = (kinds: Set<string>, what: string): string | null => {
+    if (!kinds.size) return GENERIC_BOAT.test(what) ? 'water' : null;
+    const domains = [...kinds].map(kindDomain);
+    return domains.find(d => d === 'water') ?? domains.find(d => d === 'land') ?? domains[0];
+  };
+  const wantedDomains = new Set([...wanted].map(kindDomain));
+  const wantedClasses = new Set([...wanted].map(kind => VEHICLE_CLASS[kind] ?? kind));
+  const shown = inventoryItems(inventory.vehicles)
+    .filter(item => item.distance !== 'far')
+    .map(item => ({ item, kinds: vehicleKinds(item.what, 'place') }))
+    .filter(({ item, kinds }) => wantedDomains.has(domain(kinds, item.what) ?? 'none'));
+  const matching = shown.filter(({ kinds }) => [...kinds].some(kind => wanted.has(kind)));
+  const others = shown.filter(({ kinds }) => ![...kinds].some(kind => wanted.has(kind)));
+  if (!others.length) return [];
+  // Another class of vehicle outright (named, and of no class the shot names).
+  const unlike = others.filter(({ kinds }) => kinds.size > 0 && ![...kinds].some(kind => wantedClasses.has(VEHICLE_CLASS[kind] ?? kind)));
+  const named = [...wanted].join('/');
+  const describe = (items: typeof others) => items
+    .map(({ item }) => `${Number(item.count) > 1 ? `${Number(item.count)} × ` : 'a '}${item.what}${typeof item.where === 'string' && item.where ? ` (${item.where})` : ''}`)
+    .join(' and ');
+  const plural = others.length > 1 || Number(others[0].item.count) > 1;
+  const thing = wantedDomains.has('water') ? 'boat' : 'vehicle';
+  const fix = `Edit a copy of the ${view} plate for this shot with stage-ref (--from-plate ${view}, the ${named}'s reference as --ref), stage it on another view, or on a new location whose plates show the ${named}.`;
+  const finding = (severity: PlanFinding['severity'], message: string): PlanFinding[] => [{
+    shot: shotId(shot), kind: 'competing-vehicle', location: loc.slug, noun: named, severity, message,
+  }];
+  if (!matching.length && unlike.length) {
+    return finding(needed ? 'block' : 'warn', `Shot ${shotId(shot)} ${needed ? 'needs' : 'names'} the ${named} at ${loc.slug} (${view}), but that plate shows ${describe(others)}: the video model draws the plate's ${plural ? `${thing}s` : thing}, not the one the prompt names. ${fix}`);
+  }
+  if (!matching.length) {
+    return finding('warn', `Shot ${shotId(shot)} ${needed ? 'needs' : 'names'} the ${named} at ${loc.slug} (${view}); that plate shows ${describe(others)}. Unless that is the ${named} itself, the video model draws the plate's ${thing} in its place. Check the plate (a vision plate check, or by eye); if it is another ${thing}: ${fix}`);
+  }
+  const near = others.filter(({ item }) => item.distance === 'near');
+  if (near.length) {
+    return finding('warn', `Shot ${shotId(shot)} uses the ${named} at ${loc.slug} (${view}); that plate also shows ${describe(near)} near the camera, which the model may act on instead. ${fix}`);
+  }
+  return [];
+}
+
 function staging(shot: PlanShot, loc: PlanLocation, props: PlanCast[]): PlanFinding[] {
   const findings: PlanFinding[] = [];
   const text = shotText(shot);
-  const views = viewTexts(loc);
-  const hasViews = VIEWS.some(view => views[view]);
+  const wordViews = viewTexts(loc);
+  const shownViews: Partial<Record<PlateView, string>> = {};
+  for (const view of VIEWS) if (loc.inventory?.[view]) shownViews[view] = inventoryWords(loc.inventory[view]!);
+  const shownWords = VIEWS.map(view => shownViews[view]).filter(Boolean).join('; ');
   const where = `${loc.slug}${shot.plateView ? ` (${shot.plateView})` : ''}`;
   const fix = loc.fixed
     ? 'Stage it on a new location whose plates show it (give it "near" when it adjoins this one), or on another view that shows it.'
     : 'Write it into the location description and the view that carries the shot, so the plates show it.';
+  // What a view shows of a thing: its words, raised to "close" when its image
+  // shows it close. The inventory only adds evidence: a far mention in it (a
+  // boat "far off" through a colonnade) never makes a thing look far off. And
+  // a bow or a deck in the inventory belongs to whatever boat it lists, not
+  // the shot's vessel, so parts of a boat are checked against the words only.
+  const stateIn = (view: PlateView, t: Term): 'absent' | 'distant' | 'close' => {
+    const words = wordViews[view] ? presence(wordViews[view]!, placePattern(t)) : 'absent';
+    if (words === 'close' || t.part || !shownViews[view]) return words;
+    return presence(shownViews[view]!, placePattern(t)) === 'close' ? 'close' : words;
+  };
+  const competing = competingVehicles(shot, loc, text);
+  findings.push(...competing);
+  // A blocking competing-vehicle finding already says what the plate draws instead.
+  const covered = new Set(competing.filter(finding => finding.severity === 'block').flatMap(finding => (finding.noun ?? '').split('/')));
 
   for (const t of STAGING_TERMS) {
     const inShot = presence(text, t.pattern);
-    if (inShot === 'absent') continue;
+    if (inShot === 'absent' || covered.has(t.key)) continue;
     // Only what the action touches, a boat part it stands on, or a vehicle
     // the shot is about has to be on the plate; a thing merely named (looked
     // at, passing, in a simile) is a warning. A thing the action touches is
@@ -404,7 +590,7 @@ function staging(shot: PlanShot, loc: PlanLocation, props: PlanCast[]): PlanFind
     const touched = contactedIn(text, t);
     const shotFarOff = inShot === 'distant' && !touched;
     const severe = touched || (Boolean(t.part) && standsOn(text, t)) || featuredIn(text, t);
-    const locationText = `${loc.name}. ${loc.description}. ${typeof loc.spatialAnchors === 'string' ? loc.spatialAnchors : ''}`;
+    const locationText = `${loc.name}. ${loc.description}. ${typeof loc.spatialAnchors === 'string' ? loc.spatialAnchors : ''}${shownWords && !t.part ? `. ${shownWords}` : ''}`;
     // An object cast member in the shot carries itself (its own reference), and
     // stays out of a new location's text (OBJECT CAST STAYS OUT OF LOCATIONS).
     // A fixed location's plates still have to stage it.
@@ -419,12 +605,13 @@ function staging(shot: PlanShot, loc: PlanLocation, props: PlanCast[]): PlanFind
       });
       continue;
     }
-    if (!loc.fixed || !hasViews || shotFarOff) continue;
-    const candidates = shot.plateView && views[shot.plateView] ? [shot.plateView] : VIEWS.filter(view => views[view]);
-    const states = candidates.map(view => ({ view, state: presence(views[view]!, placePattern(t)) }));
+    const known = VIEWS.filter(view => wordViews[view] || (!t.part && shownViews[view]));
+    if (!loc.fixed || !known.length || shotFarOff) continue;
+    const candidates = shot.plateView && known.includes(shot.plateView) ? [shot.plateView] : known;
+    const states = candidates.map(view => ({ view, state: stateIn(view, t) }));
     if (states.some(s => s.state === 'close')) continue;
     const elsewhere = shot.plateView
-      ? VIEWS.filter(view => view !== shot.plateView && views[view] && presence(views[view]!, placePattern(t)) === 'close')
+      ? known.filter(view => view !== shot.plateView && stateIn(view, t) === 'close')
       : [];
     const better = elsewhere.length ? ` The ${elsewhere.join(' / ')} view shows it close: set plateView to ${elsewhere[0]}, or stage it on a new location.` : ` ${fix}`;
     if (states.some(s => s.state === 'distant')) {
@@ -466,11 +653,12 @@ export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
       findings.push({ shot: shotId(shot), kind: 'unknown-location', severity: 'block', location: shot.location, message: `Shot ${shotId(shot)} names location "${shot.location}", which is not in the plan.` });
       continue;
     }
-    const views = viewTexts(loc);
+    const views = viewEvidence(loc);
     if (input.requirePlateView && loc.fixed && !shot.plateView && VIEWS.some(view => views[view])) {
       findings.push({ shot: shotId(shot), kind: 'no-plate-view', severity: 'warn', location: loc.slug, message: `Shot ${shotId(shot)} does not say which view of ${loc.slug} it is staged on (plateView); the north plate leads by default.` });
     }
-    findings.push(...staging(shot, loc, props));
+    // A staged plate or first frame (stage-ref) replaced what the plate's words describe.
+    if (!stagedPastPlate(shot)) findings.push(...staging(shot, loc, props));
   }
 
   // The vessel of the journey: the one a shot boards or stands aboard, or the
@@ -493,9 +681,10 @@ export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
     let vessels = new Set([...boarded, ...VEHICLES.filter(t => featuredIn(text, t)).map(t => t.key)]);
     let aboard = boarded.length > 0;
     let inferred = false;
-    if (vessels.size === 0 && loc && (VESSEL_PARTS.some(t => hasTerm(text, t)) || /\b(?:aboard|on board)\b/i.test(text))) {
-      const views = viewTexts(loc);
-      const shown = shot.plateView && views[shot.plateView] ? `${views[shot.plateView]}. ${loc.description}` : `${loc.description}. ${typeof loc.spatialAnchors === 'string' ? loc.spatialAnchors : ''}`;
+    if (vessels.size === 0 && loc && !stagedPastPlate(shot) && (VESSEL_PARTS.some(t => hasTerm(text, t)) || /\b(?:aboard|on board)\b/i.test(text))) {
+      const views = viewEvidence(loc);
+      const allShown = VIEWS.map(view => (loc.inventory?.[view] ? inventoryWords(loc.inventory[view]!) : '')).filter(Boolean).join('; ');
+      const shown = shot.plateView && views[shot.plateView] ? `${views[shot.plateView]}. ${loc.description}` : `${loc.description}. ${typeof loc.spatialAnchors === 'string' ? loc.spatialAnchors : ''}${allShown ? `. ${allShown}` : ''}`;
       vessels = vesselsIn(shown, 'place');
       inferred = vessels.size > 0;
       aboard = inferred;

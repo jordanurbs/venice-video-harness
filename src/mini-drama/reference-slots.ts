@@ -10,7 +10,8 @@
 // Slot order (within the per-model budget, default 9 on Seedance R2V):
 //   1. One primary angle per character (front.png)      — identity
 //   2. Storyboard blocking plate(s) for the shot's beat — PROTECTED
-//   3. Location angles (wide, then medium, then detail) — environment
+//   3. Location angles (wide, then medium, then detail) — environment;
+//      a plate picked with stage-ref leads them and replaces its source view
 //   4. Second character angles (three-quarter.png)      — extra identity
 //
 // Overflow policy (user decision 2026-07-30): drop second character angles
@@ -24,6 +25,7 @@
 
 import { basename, join } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
+import { pickedPlate } from './staging.js';
 import type { SeriesState, ShotScript } from 'venice-video-harness/core/series/types.js';
 import { getMaxReferenceImages, isObjectCastMember } from 'venice-video-harness/core/series/types.js';
 import {
@@ -166,9 +168,16 @@ function planReferenceSlots(
     });
   }
 
+  // A plate the shot picked with stage-ref: see tier 3.
+  const picked = pickedPlate(series, shot);
+
   // --- Tier 2: storyboard blocking plate (PROTECTED) ---
+  // Not for a shot with a picked plate: the blocking plate was composed on
+  // the plate before the edit, so it would bring back what the edit removed.
   const storyboard: CandidateSlot[] = [];
-  if (shot.storyboardRef) {
+  if (shot.storyboardRef && picked) {
+    dropped.push(`storyboard ref "${shot.storyboardRef}" (the shot's staging ref replaces it)`);
+  } else if (shot.storyboardRef) {
     const sbPath = getStoryboardRefPath(series, shot.storyboardRef);
     if (sbPath && existsSync(sbPath)) {
       storyboard.push({
@@ -188,7 +197,13 @@ function planReferenceSlots(
   }
 
   // --- Tier 3: location angles ---
+  // A picked plate leads its location's plates (locationCandidates); a shot
+  // whose location is not in the project sends it on its own.
   const location: CandidateSlot[] = locationSlugs.flatMap(slug => locationCandidates(series, shot, slug));
+  if (picked && !location.some(slot => slot.path === picked.path)) {
+    const loc = shot.location ? getLocation(series, shot.location) : undefined;
+    location.unshift(pickedPlateCandidate(picked, loc));
+  }
 
   // --- Tier 4: second character angles ---
   const charAngles: CandidateSlot[] = [];
@@ -256,12 +271,33 @@ function secondAnglePath(series: SeriesState, name: string, primaryPath: string 
   return ['three-quarter.png', 'profile.png', 'full-body.png'].map(f => join(dir, f)).find(p => existsSync(p) && p !== primaryPath);
 }
 
-/** Every plate of a location on disk, in reference order, with its role clause. */
+/** The slot for a plate the shot picked with stage-ref: it is the view the shot is staged on, as it must look in this shot. */
+function pickedPlateCandidate(picked: NonNullable<ReturnType<typeof pickedPlate>>, loc: { slug: string; name: string } | undefined): CandidateSlot {
+  const where = loc
+    ? `${loc.name}${picked.ref.replacesView ? `, the ${picked.ref.replacesView} view` : ''}, edited for this shot`
+    : 'edited for this shot';
+  return {
+    kind: 'location',
+    path: picked.path,
+    label: loc?.slug ?? 'staging',
+    roleClause: `is the view this shot is staged on, as it must look in this shot (${where}) — match its background, architecture, lighting and every vehicle and object in it exactly; where it differs from the location's description, this image is right; it is not a character`,
+  };
+}
+
+/**
+ * Every plate of a location on disk, in reference order, with its role
+ * clause. A plate the shot picked with stage-ref leads the plates of the
+ * shot's own location, and the view it was edited from is not sent: the
+ * original would bring back what the edit removed (a boat the plate shows
+ * where the shot needs another one).
+ */
 function locationCandidates(series: SeriesState, shot: ShotScript, slug: string): CandidateSlot[] {
   const loc = getLocation(series, slug);
   if (!loc) return [];
   const dir = getLocationDir(series, loc.slug);
   const order = locationPlateOrder(shot);
+  const picked = shot.location && getLocation(series, shot.location)?.slug === loc.slug ? pickedPlate(series, shot) : null;
+  const replaced = picked?.ref.replacesView ? `${picked.ref.replacesView}.png` : null;
   const angleRole: Record<string, string> = {
     'north.png': 'a wide establishing plate of the location, facing the north wall',
     'south.png': 'the south wall of the same location',
@@ -291,11 +327,11 @@ function locationCandidates(series: SeriesState, shot: ShotScript, slug: string)
     // No location dir — canonical loop below reports nothing either.
   }
 
-  const location: CandidateSlot[] = [];
-  let angleCount = 0;
+  const location: CandidateSlot[] = picked ? [pickedPlateCandidate(picked, loc)] : [];
+  let angleCount = location.length;
   for (const f of [...order, ...customAngles]) {
     const p = join(dir, f);
-    if (!existsSync(p)) continue;
+    if (!existsSync(p) || f === replaced) continue;
     angleCount += 1;
     const customName = CANONICAL_PLATES.has(f) ? null : f.replace(/\.png$/i, '').replace(/-/g, ' ');
     const stagedView = angleCount === 1 && shot.plateView && f === `${shot.plateView}.png`;

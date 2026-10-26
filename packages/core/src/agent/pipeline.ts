@@ -119,7 +119,7 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
     name: 'Assemble the final cut',
     scope: 'episode',
     produces: 'episode-NNN-final.mp4',
-    gate: 'A failing video-qa-report.json blocks assembly. --skip-video-qa does not fix the units.',
+    gate: 'A failing video-qa-report.json blocks assembly, and so does a staged shot (stage-ref) with no clip from its pick. --skip-video-qa does not fix the units, and neither does --force.',
     command: 'assemble-episode -p <project> -e <n>',
   },
 ];

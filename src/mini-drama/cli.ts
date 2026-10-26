@@ -33,6 +33,7 @@ import type {
   EpisodeScript,
   ShotScript,
   Location,
+  PlateView,
   VideoFamilyPreference,
 } from 'venice-video-harness/core/series/types.js';
 import {
@@ -93,7 +94,22 @@ import {
 import type { DialogueLine } from '../venice/audio.js';
 import { getMusicModel } from 'venice-video-harness/core/venice/models.js';
 
-import { buildImagePrompt, buildCharacterReferencePromptParts } from './prompt-builder.js';
+import { buildImagePrompt, buildCharacterReferencePromptParts, resolveVideoModel } from './prompt-builder.js';
+import {
+  DEFAULT_STAGE_REF_MODELS,
+  clearStagingRef,
+  describeStagingRef,
+  describeUnit,
+  findShot,
+  listStageSessions,
+  mediaLibraryCopies,
+  pickStagingRef,
+  runStageRef,
+  stagingLaneNotes,
+  unitChanges,
+  type StagingUse,
+} from './stage-ref.js';
+import { generateVideosCommand, markStaleStagedClips, stageRefCommand, staleStagedClipShot, staleStagedShots } from './staging.js';
 import {
   approvalForShot,
   describeMismatch,
@@ -103,7 +119,7 @@ import {
   type ShotApproval,
 } from './panel-approval.js';
 import { shotKey } from './shot-paths.js';
-import { DEFAULT_RENDER_CONCURRENCY, archiveRetakeUnits, generateEpisodeVideos } from './video-generator.js';
+import { DEFAULT_RENDER_CONCURRENCY, archiveRetakeUnits, generateEpisodeVideos, stagedShotRefusal } from './video-generator.js';
 import { generateVoiceReference, harvestVoiceReferenceFromClip } from './voice-reference.js';
 import { generateLocationReferences } from './location-generator.js';
 import {
@@ -2977,6 +2993,196 @@ program
     await updateTreatment(series, opts.episode);
   });
 
+// ── stage-ref ────────────────────────────────────────────────────────
+// Edit the reference first, then generate from it (rule 65): a copy of a
+// plate view or of a frame, edited on two models side by side, picked by a
+// person, recorded as the shot's staging ref. See src/mini-drama/stage-ref.ts.
+function reportUnitChanges(changes: ReturnType<typeof unitChanges>, stagedShot: number): void {
+  if (changes.removed.length === 0 && changes.added.length === 0) return;
+  console.log('  This changes how the episode is packaged into generation units:');
+  for (const unit of changes.removed) console.log(`    was: ${describeUnit(unit)}`);
+  for (const unit of changes.added) console.log(`    now: ${describeUnit(unit)}`);
+  const neighbours = [...changes.removed, ...changes.added].some(unit => unit.shotNumbers.some(n => n !== stagedShot));
+  if (neighbours) {
+    console.log('  The shots around it keep their clips: generate-videos skips a unit whose clips are all on disk, whatever its name. A unit with a clip missing renders whole (billed) and replaces the clips of its other shots (archived as -vN.mp4, not deleted); --retake renders one on purpose.');
+  }
+}
+
+async function reportStagingPick(series: SeriesState, shot: ShotScript, episode: number, changes: ReturnType<typeof unitChanges>): Promise<void> {
+  const ref = shot.stagingRef!;
+  const id = `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
+  console.log(`Shot ${id}'s staging ref: ${describeStagingRef(ref)}.`);
+  const resolution = resolveVideoModel(shot, series);
+  if (ref.use === 'start-frame' && !resolution.refused) {
+    console.log(`  The shot is re-generated from it on ${resolution.modelId} (i2v), at its own length (${shot.duration}); its negativePrompt still applies.`);
+    const speaker = shot.dialogue?.character?.toUpperCase();
+    if (speaker && !['NARRATOR', 'V.O.', 'VO'].includes(speaker)) {
+      console.log(`  ⚠ ${shot.dialogue!.character} speaks on camera here. An i2v re-take sends no reference images or voice reference, so the voice can drift; a plate staging ref (R2V) keeps them.`);
+    }
+  } else if (ref.use === 'plate') {
+    console.log(`  It leads the shot's references${ref.replacesView ? ` in place of the ${ref.replacesView} view, which is no longer sent` : ''}.`);
+  }
+  for (const note of await stagingLaneNotes(series, shot, episode)) console.log(`  ⚠ ${note}`);
+  console.log('  The shot renders on its own (mustStaySingle). A clip not rendered from the pick is rendered again by the next generate-videos; the old clip is archived when the new one lands.');
+  for (const copy of mediaLibraryCopies(series, episode, id)) {
+    console.log(`  Its montage cut ${copy} is from before the pick: the media library keeps it as an archive, and the re-render lands in scene-001/ only.`);
+  }
+  reportUnitChanges(changes, shot.shotNumber);
+  console.log('\nNext:');
+  console.log(`  venice-video generate-videos -p "${series.outputDir}" -e ${episode}`);
+}
+
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+program
+  .command('stage-ref')
+  .description('Edit a copy of a plate view or a frame on two edit models, let a person pick one, and make it the shot\'s staging ref: a plate in its references, or the first frame it is re-generated from (i2v)')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
+  .option('--shot <id>', 'The shot the staging ref is for (e.g. 8, 23b)')
+  .option('--from <file>', 'The image to edit, or a video (its frame at --at)')
+  .option('--from-plate <view>', 'A view of the shot\'s location: north, east, south or west')
+  .option('--from-shot <id>', 'A rendered shot\'s clip (scene-001/shot-NNN.mp4); its frame at --at')
+  .option('--at <seconds>', 'Frame time in a video source (default: the first frame, which keeps the shot\'s grade; 0.5 s into a clip cut from a montage or multi-shot render)', parseFloat)
+  .option('--crop <w:h:x:y>', 'Crop the source before the edit (whole pixels)')
+  .option('--ref <file>', 'Another image the edit may use (image 2, then image 3); repeat up to twice', collectOption, [] as string[])
+  .option('--prompt <text>', 'The edit: what to change, and what stays exactly as it is')
+  .option('--prompt-file <file>', 'Read the edit prompt from a file')
+  .option('--use <use>', 'plate (stands in for its view in the references) or start-frame (re-generate the shot i2v from it); default: plate for a plate source, start-frame for a frame. With --pick: overrides the session\'s')
+  .option('--replaces <view>', 'With --use plate: the location view the pick replaces, when the source is not that view\'s own file')
+  .option('--models <list>', 'Edit models, comma separated', DEFAULT_STAGE_REF_MODELS.join(','))
+  .option('--face', 'The image shows a person\'s face (provenance hasFace: true)')
+  .option('--no-face', 'The image shows no face (provenance hasFace: false)')
+  .option('--pick <n|model|file>', 'Make a candidate of the latest session the shot\'s staging ref (its number, its model, or an image file)')
+  .option('--session <id>', 'With --pick: a session other than the latest')
+  .option('--clear', 'Remove the shot\'s staging ref (restores its mustStaySingle)')
+  .option('--list', 'List the episode\'s staging refs and stage-ref sessions')
+  .option('--no-open', 'Do not open the pick page')
+  .action(async (opts: {
+    project: string; episode: number; shot?: string; from?: string; fromPlate?: string; fromShot?: string; at?: number;
+    crop?: string; ref: string[]; prompt?: string; promptFile?: string; use?: string; replaces?: string; models: string;
+    face?: boolean; pick?: string; session?: string; clear?: boolean; list?: boolean; open: boolean;
+  }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+    const script = await loadEpisodeScript(series, opts.episode);
+    if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
+
+    if (opts.list) {
+      let any = false;
+      for (const item of script.shots) {
+        const id = `${item.shotNumber}${item.shotIdSuffix ?? ''}`;
+        const sessions = listStageSessions(series, opts.episode, id);
+        if (!item.stagingRef && !sessions.length) continue;
+        any = true;
+        console.log(`Shot ${id}: ${item.stagingRef ? describeStagingRef(item.stagingRef) : 'no staging ref picked'}`);
+        for (const { session } of sessions) {
+          const made = session.candidates.filter(c => c.path).map(c => `${c.index} ${c.model}${session.picked === c.index ? ' (picked)' : ''}`);
+          console.log(`  session ${session.id}: ${session.use} from ${session.sourceNote}; ${made.join(', ') || 'no images'}`);
+        }
+      }
+      if (!any) console.log(`Episode ${opts.episode} has no staging refs.`);
+      return;
+    }
+
+    if (!opts.shot) throw new Error('Name the shot: --shot <id>.');
+    const shot = findShot(script, opts.shot);
+    if (!shot) throw new Error(`Shot ${opts.shot} is not in episode ${opts.episode}.`);
+    const id = `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
+    if (opts.use && opts.use !== 'plate' && opts.use !== 'start-frame') throw new Error('--use is plate or start-frame.');
+
+    // A pick or a clear changes how the episode is packaged (a staged shot
+    // renders on its own), so the units before and after are compared.
+    const pickAndReport = async (pick: string, session?: string): Promise<void> => {
+      const before = buildGenerationPlan(script, series);
+      await pickStagingRef(series, script, id, pick, {
+        session,
+        use: opts.use as StagingUse | undefined,
+        replacesView: opts.replaces as PlateView | undefined,
+      });
+      const after = buildGenerationPlan(script, series);
+      await saveEpisodeScript(series, script);
+      await reportStagingPick(series, shot, opts.episode, unitChanges(before, after));
+      await updateTreatment(series, opts.episode);
+    };
+
+    if (opts.clear) {
+      const before = buildGenerationPlan(script, series);
+      const removed = clearStagingRef(shot);
+      if (!removed) { console.log(`Shot ${id} has no staging ref.`); return; }
+      const after = buildGenerationPlan(script, series);
+      await saveEpisodeScript(series, script);
+      console.log(`Cleared shot ${id}'s staging ref (${describeStagingRef(removed)}).`);
+      console.log('  Its candidates stay in the staging folder. A clip already rendered from it stays too; archive it to render the shot again.');
+      reportUnitChanges(unitChanges(before, after), shot.shotNumber);
+      await updateTreatment(series, opts.episode);
+      return;
+    }
+
+    if (opts.pick) {
+      await pickAndReport(opts.pick, opts.session);
+      return;
+    }
+
+    const prompt = opts.promptFile ? (await readFile(resolve(opts.promptFile), 'utf-8')).trim() : (opts.prompt ?? '').trim();
+    const models = opts.models.split(',').map(model => model.trim()).filter(Boolean);
+    const client = new VeniceClient(await getVeniceApiKey());
+    console.log(`Staging shot ${id}: one image edit on each of ${models.join(', ')}...`);
+    const { session, pickPage } = await runStageRef(client, series, script, {
+      episode: opts.episode,
+      shot: id,
+      from: opts.from,
+      fromPlate: opts.fromPlate as PlateView | undefined,
+      fromShot: opts.fromShot,
+      at: opts.at,
+      crop: opts.crop,
+      refs: opts.ref,
+      prompt,
+      use: opts.use as StagingUse | undefined,
+      replacesView: opts.replaces as PlateView | undefined,
+      models,
+      hasFace: opts.face,
+    });
+
+    console.log(`  Source: ${session.sourceNote} (${session.source})`);
+    if (session.sourceWarning) console.log(`  ⚠ ${session.sourceWarning}`);
+    console.log(`  Use: ${session.use === 'plate' ? `plate${session.replacesView ? `, in place of the ${session.replacesView} view` : ''}` : 'start frame (the shot is re-generated i2v from it)'}`);
+    for (const candidate of session.candidates) {
+      console.log(candidate.path
+        ? `  ${candidate.index}. ${candidate.model}: ${candidate.path} (${candidate.width}x${candidate.height})`
+        : `  ${candidate.index}. ${candidate.model}: failed (${candidate.error})`);
+    }
+    console.log(`  Pick page: ${pickPage}`);
+    if (opts.open) openInDefaultBrowser(pickPage);
+
+    const usable = session.candidates.filter(candidate => candidate.path);
+    if (!usable.length) {
+      console.error('No model returned an image, so there is nothing to pick. Change the prompt and run it again.');
+      process.exitCode = 1;
+      return;
+    }
+    if (stdin.isTTY && process.stdout.isTTY) {
+      const choice = await promptChoice(
+        'Which one is right for the shot? Look at them on the pick page first.',
+        [
+          ...usable.map(candidate => ({ label: `${candidate.index}. ${candidate.model}`, value: String(candidate.index) })),
+          { label: 'None yet', value: 'none', description: 'decide later with --pick' },
+        ],
+        usable.length,
+      );
+      if (choice !== 'none') {
+        await pickAndReport(choice, session.id);
+        return;
+      }
+    }
+    console.log('\nA person picks one (look at the pick page), then:');
+    for (const candidate of usable) {
+      console.log(`  venice-video stage-ref -p "${series.outputDir}" -e ${opts.episode} --shot ${id} --pick ${candidate.index}   # ${candidate.model}`);
+    }
+  });
+
 // ── approve-script ───────────────────────────────────────────────────
 program
   .command('approve-script')
@@ -3416,7 +3622,11 @@ program
     // ---- An edit (a cut list or an EDL): the continuity and speech checks ----
     if (opts.cutList) {
       const listPath = resolve(opts.cutList);
-      const clips = qa.markJoins(qa.cutListFromJson(JSON.parse(readFileSync(listPath, 'utf-8')), [dirname(listPath), series.outputDir]), script.shots);
+      // A clip of a staged shot (stage-ref) not rendered from its pick is
+      // marked: the cuts beside it are unchecked, and the edit does not pass.
+      const listed = qa.markJoins(qa.cutListFromJson(JSON.parse(readFileSync(listPath, 'utf-8')), [dirname(listPath), series.outputDir]), script.shots);
+      const staleStagedInList = [...new Set(listed.map(clip => staleStagedClipShot(clip, script.shots)).filter((id): id is string => Boolean(id)))];
+      const clips = markStaleStagedClips(listed, script.shots);
       console.log(`QA Videos: ${clips.length} clip(s) in ${listPath}\n`);
       for (const clip of clips) {
         const problem = qa.clipProblem(clip);
@@ -3429,7 +3639,7 @@ program
       else results = await checkCuts(clips, async () => new VeniceClient(await getVeniceApiKey()), '  ');
       const criticals = results.filter(r => !r.errored && r.verdict === 'FLAG-CRITICAL').length;
       const unchecked = results.filter(r => r.errored).length;
-      const passed = criticals === 0 && unchecked === 0;
+      const passed = criticals === 0 && unchecked === 0 && staleStagedInList.length === 0;
       const reportPath = `${listPath.replace(/\.json$/i, '')}.continuity-report.json`;
       await writeFile(reportPath, `${JSON.stringify({
         cutList: listPath,
@@ -3438,13 +3648,17 @@ program
         ...(skipped ? { continuitySkipped: skipped } : {}),
         continuity: results,
         speechTails,
-        summary: { clips: clips.length, checkedCuts: results.length, criticals, errored: unchecked, speechTails: speechTails.length, passed },
+        ...(staleStagedInList.length > 0 ? { staleStagedShots: staleStagedInList } : {}),
+        summary: { clips: clips.length, checkedCuts: results.length, criticals, errored: unchecked, staleStaged: staleStagedInList.length, speechTails: speechTails.length, passed },
       }, null, 2)}\n`, 'utf-8');
       console.log(`\n${'─'.repeat(50)}`);
       console.log(`Cut list QA: ${criticals} critical, ${unchecked} unchecked, ${speechTails.length} speech warning(s)${skipped ? `, continuity skipped (${skipped})` : ''} — ${passed ? 'PASS' : 'NOT PASSED'}`);
       console.log(`Report saved: ${reportPath}`);
       if (!passed) {
         if (unchecked > 0) console.log(`\n${unchecked} cut(s) could not be checked (see the report): unchecked, not passed.`);
+        if (staleStagedInList.length > 0) {
+          console.log(`\nStaged shot(s) ${staleStagedInList.join(', ')} (stage-ref) are in the edit from footage not rendered from their pick: not passed. Render them from the pick (${generateVideosCommand(series, opts.episode)}) and cut the clips in scene-001/.`);
+        }
         console.log(`Re-check after fixing: ${recheck}`);
         process.exitCode = 1;
       }
@@ -3465,12 +3679,32 @@ program
     // A unit kept with all its clips on disk but no master under its current
     // name (generate-videos does not bill it again) is checked from its clips.
     const footage = new Map(plan.units.map(unit => [unit, unitFootage(unit, sceneDir)] as const));
-    const units = plan.units.filter(unit => footage.get(unit));
+    // A staged shot (stage-ref) with no clip from its pick is not checked: the
+    // clip on disk still has what the pick removes. Its unit counts as
+    // unchecked, never as a pass (rules 45, 46), and so do the cuts beside it.
+    const staleStaged = staleStagedShots(series, script, sceneDir);
+    const notChecked: NonNullable<import('./video-qa.js').VideoQaReport['notChecked']> = [];
+    const renderAgain = `render them from the pick first (${generateVideosCommand(series, opts.episode)})`;
+    const describeStale = (items: typeof staleStaged) => items.map(item => `${item.shot} (${item.reason})`).join('; ');
+    const shotsByUnit = resolveUnitShots(plan, script.shots);
+    const units = plan.units.filter((unit, index) => {
+      const stale = staleStaged.filter(item => shotsByUnit[index].some(shot => `${shot.shotNumber}${shot.shotIdSuffix ?? ''}` === item.shot));
+      if (stale.length === 0) return Boolean(footage.get(unit));
+      notChecked.push({ unitId: unit.unitId, shots: stale.map(item => item.shot), reason: `staged shot(s) ${describeStale(stale)}: ${renderAgain}` });
+      return false;
+    });
+    // A staged shot no unit of the saved plan holds (the plan is older than the script).
+    const loose = staleStaged.filter(item => !notChecked.some(entry => entry.shots.includes(item.shot)));
+    if (loose.length > 0) {
+      notChecked.push({ unitId: '(not in the generation plan)', shots: loose.map(item => item.shot), reason: `staged shot(s) ${describeStale(loose)}: ${renderAgain}` });
+    }
     console.log(`QA Videos: Episode ${opts.episode} — ${units.length} rendered unit(s)\n`);
     const fromClips = units.filter(unit => !footage.get(unit)!.master);
     if (fromClips.length > 0) {
       console.log(`Checked from their clips (no master under the unit's current name): ${fromClips.map(u => u.unitId).join(', ')}\n`);
     }
+    for (const item of notChecked) console.log(`  ? ${item.unitId}: not checked — ${item.reason}`);
+    if (notChecked.length > 0) console.log('');
 
     // ---- Layer 1: programmatic (free) ----
     console.log('Programmatic checks:');
@@ -3507,7 +3741,8 @@ program
 
     // The shot clips as assemble-episode cuts them (trims, flip), each tagged with its generation.
     // A shot with no clip on disk stays in the list: the cuts beside it are unchecked.
-    const planClips = qa.cutListFromPlan(plan, sceneDir, script.shots);
+    // A staged shot's clip not rendered from its pick is marked: the cuts beside it are unchecked.
+    const planClips = markStaleStagedClips(qa.cutListFromPlan(plan, sceneDir, script.shots), script.shots);
     for (const clip of planClips) {
       if (!existsSync(clip.file)) console.log(`  ⚠ ${clip.id}: ${clip.file} is not on disk; the cuts beside it cannot be checked`);
     }
@@ -3562,7 +3797,7 @@ program
     }
 
     const erroredCount = unitIdentity.filter(r => r.errored).length + (crossUnit.errored ? 1 : 0)
-      + continuity.filter(r => r.errored).length;
+      + continuity.filter(r => r.errored).length + notChecked.length;
     const continuityCriticals = continuity.filter(r => !r.errored && r.verdict === 'FLAG-CRITICAL');
     const criticals = headGlitches.length
       + boundaries.filter(b => b.severity === 'fail').length
@@ -3577,7 +3812,8 @@ program
       headGlitches, boundaries, unitIdentity, crossUnit,
       ...(continuity.length > 0 ? { continuity } : {}),
       ...(speechTails.length > 0 ? { speechTails } : {}),
-      summary: { units: units.length, criticals, errored: erroredCount, passed: criticals === 0 && erroredCount === 0 },
+      ...(notChecked.length > 0 ? { notChecked } : {}),
+      summary: { units: units.length + notChecked.length, criticals, errored: erroredCount, passed: criticals === 0 && erroredCount === 0 },
     };
     const reportPath = await saveVideoQaReport(episodeDir, report);
 
@@ -3606,6 +3842,9 @@ program
     } else {
       console.log(`Re-check after fixing: ${recheck}`);
       process.exitCode = 1;
+    }
+    if (notChecked.length > 0) {
+      console.log(`\n${notChecked.length} unit(s) not checked: a staged shot in them has no clip from its staging ref. Render it, then re-run qa-videos: ${generateVideosCommand(series, opts.episode)}`);
     }
   });
 
@@ -3836,6 +4075,20 @@ program
     if (retakeUnits) {
       const unitShots = resolveUnitShots(generationPlan, script.shots);
       const label = (shot: ShotScript) => `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
+      // A staged shot (stage-ref) the re-take could not render from its pick
+      // keeps its clip: nothing is archived or rendered (rule 65).
+      const refused: string[] = [];
+      for (const index of retakeUnits) {
+        for (const shot of unitShots[index]) {
+          const reason = await stagedShotRefusal(series, shot, undefined, opts.episode);
+          if (reason) refused.push(`  shot ${label(shot)}: ${reason}.`);
+        }
+      }
+      if (refused.length > 0) {
+        console.error(`--retake ${opts.retake}: ${refused.length} staged shot(s) cannot render from their staging ref. Nothing was archived or rendered.`);
+        for (const line of refused) console.error(line);
+        process.exit(1);
+      }
       console.log(`Re-taking ${retakeUnits.length} unit(s), whole: ${retakeUnits.map(index => {
         const unit = generationPlan.units[index];
         return `${unit.unitId} (shots ${unitShots[index].map(label).join(', ')}, ${unit.duration})`;
@@ -3844,15 +4097,11 @@ program
       console.log('');
     }
 
-    const { videoPaths, plan } = await generateEpisodeVideos(
+    const { videoPaths, plan, unrenderedStaged } = await generateEpisodeVideos(
       client, series, script.shots, sceneDir, generationPlan, effectiveAudioMix,
       { concurrency, onlyUnits: retakeUnits ? new Set(retakeUnits) : undefined },
     );
     await saveGenerationPlan(episodeDir, plan);
-
-    const ep = series.episodes.find(e => e.number === opts.episode);
-    if (ep) ep.status = 'produced';
-    await saveSeries(series);
 
     if (retakeUnits) {
       const clips = retakeUnits.reduce((sum, index) => sum + (plan.units[index].segments?.length ?? 0), 0);
@@ -3861,6 +4110,36 @@ program
       console.log(`\nGenerated ${videoPaths.length} video clips.`);
     }
     console.log(`Generation plan saved to: ${join(episodeDir, 'generation-plan.json')}`);
+
+    // A staged shot (stage-ref) whose clip is not from its pick is a failed
+    // run, not a produced episode: the cut would carry the defect the pick
+    // was made to remove. The renderer reports what it refused or left
+    // waiting; the scene folder is read once more at the end, so no path
+    // (a re-take leaves the units outside it as they are) can pass one.
+    const notFromPick = [...unrenderedStaged];
+    for (const item of staleStagedShots(series, script, sceneDir)) {
+      if (notFromPick.some(entry => entry.shot === item.shot)) continue;
+      notFromPick.push({
+        shot: item.shot,
+        reason: retakeUnits
+          ? `${item.reason}, and this re-take leaves it as it is; render it too: ${generateVideosCommand(series, opts.episode)} --retake ${item.shotNumber}`
+          : item.reason,
+      });
+    }
+    if (notFromPick.length > 0) {
+      await saveSeries(series);
+      console.error(`\n✗ ${notFromPick.length} shot(s) have no clip from their staging ref, or wait on one (stage-ref, rule 65):`);
+      for (const item of notFromPick) console.error(`  shot ${item.shot}: ${item.reason}`);
+      console.error(`Fix each one, then run generate-videos again (shots already rendered are skipped): ${generateVideosCommand(series, opts.episode)}`);
+      console.error('The episode is not marked produced, and assemble-episode refuses it until then.');
+      process.exitCode = 1;
+      await updateTreatment(series, opts.episode);
+      return;
+    }
+
+    const ep = series.episodes.find(e => e.number === opts.episode);
+    if (ep) ep.status = 'produced';
+    await saveSeries(series);
 
     const hadMontage = plan.units.some(unit => unit.unitType === 'montage');
     const mediaLibraryDir = join(episodeDir, 'media-library');
@@ -3879,6 +4158,14 @@ program
 
     if (hadMontage) {
       console.log('\nAuto-edit is OFF — the montage cuts are in the media library, organized by scene and shot.');
+      // A staged shot's cut there is from before its pick: the library keeps
+      // it as the archive, and the clip from the pick is in scene-001/ only.
+      for (const shot of script.shots.filter(item => item.stagingRef)) {
+        const id = `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
+        if (mediaLibraryCopies(series, opts.episode, id).length > 0) {
+          console.log(`  Shot ${id}: its cut there is from before its staging ref was picked; its clip from the pick is ${join(sceneDir, `shot-${shotKey(id)}.mp4`)}.`);
+        }
+      }
       console.log('Cut them by hand (or in the Venice Video Creator), or run:');
       console.log(`  assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
     } else {
@@ -4355,10 +4642,11 @@ program
   // Per-shot `shot.nativeAudio: 'mute' | 'duck' | 'keep'` always wins.
   .option('--native-volume <vol>', 'Native audio volume in the final mix (0-1). Default: 0 with --dialogue-replace, 1.0 otherwise. Per-shot shot.nativeAudio overrides this default.')
   .option('--skip-video-qa', 'Assemble without a passing video-qa-report.json (you have reviewed the rendered units yourself)', false)
+  .option('--force', 'Assemble even when staged shots (stage-ref) have no clip from their pick', false)
   .action(async (opts: {
     project: string; episode: number; subtitles: boolean; music: boolean;
     ambient: boolean; ambientVolume: string;
-    dialogueReplace: boolean; nativeVolume?: string; skipVideoQa: boolean;
+    dialogueReplace: boolean; nativeVolume?: string; skipVideoQa: boolean; force: boolean;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -4374,6 +4662,21 @@ program
     if (videoFiles.length === 0) {
       console.error('No video clips found. Run generate-videos first.');
       process.exit(1);
+    }
+
+    // Staged shots (stage-ref, rule 65) whose clip is not from their pick
+    // would put back into the master what the pick removed.
+    const staleStaged = staleStagedShots(series, script, sceneDir);
+    if (staleStaged.length > 0) {
+      const list = staleStaged.map(item => `shot ${item.shot} (${item.reason})`).join('; ');
+      if (!opts.force) {
+        console.error(`Blocked: ${staleStaged.length} staged shot(s) have no clip from their staging ref: ${list}.`);
+        console.error(`  Render them from the pick:  ${generateVideosCommand(series, opts.episode)}`);
+        console.error(`  Or drop a pick:  ${stageRefCommand(series, opts.episode, staleStaged[0].shot, '--clear')}`);
+        console.error('  --force assembles the clips on disk anyway.');
+        process.exit(1);
+      }
+      console.warn(`⚠ --force: assembling ${staleStaged.length} staged shot(s) without a clip from their staging ref: ${list}.`);
     }
 
     // Video QA gate. Panels were QA'd before rendering, but the rendered
@@ -4910,7 +5213,12 @@ program
     }
 
     console.log('Step 3: Generating video clips (dialogue + SFX + ambient via native model audio)...');
+    const exitCodeBefore = process.exitCode;
     await program.parseAsync(['', '', 'generate-videos', '-p', opts.project, '-e', String(opts.episode)]);
+    if (process.exitCode && process.exitCode !== exitCodeBefore) {
+      console.error('\nProduction stopped: generate-videos left shots it could not render (listed above). Fix them, then resume with --resume-after-qa.');
+      return;
+    }
 
     if (opts.withTts) {
       console.log('\nStep 4: Replacing dialogue with Venice TTS (voice consistency mode)...');
