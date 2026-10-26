@@ -6,23 +6,28 @@
 //     so a suffixed insert ("13b", whose single shares the id "unit-013")
 //     keeps its own shot, and a chained unit still starts from the clip
 //     before it, re-taken or not.
+//   - It validates before it archives: an empty or unknown shot list, or a
+//     plan that fails the duration preflight, leaves every clip in place.
 //   - A montage unit whose clips are all on disk is skipped even when no
 //     master carries its (new) name: grouping changes rename units.
-//   - The cutter snaps planned boundaries to the cuts ffmpeg detects.
+//   - The cutter snaps planned boundaries to the cuts ffmpeg detects, keeps
+//     all the audio, holds a frame (video only) at an unconfirmed cut, keeps
+//     every clip inside a short render, and fails loudly on a clip without
+//     video.
 //
 // Scripted client, no network calls. Timers fire at once. Needs ffmpeg.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.VENICE_VIDEO_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'montage-retake-config-'));
 
-import { archiveUnitOutputs, generateEpisodeVideos } from '../dist/mini-drama/video-generator.js';
-import { resolveUnitShots, unitIndicesForShots } from '../dist/mini-drama/generation-planner.js';
+import { archiveRetakeUnits, generateEpisodeVideos } from '../dist/mini-drama/video-generator.js';
+import { unitIndicesForShots } from '../dist/mini-drama/generation-planner.js';
 import { cutMontageIntoShots } from '../dist/mini-drama/montage.js';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]);
@@ -129,8 +134,7 @@ async function quietly(fn) {
 async function retake(client, dir, sceneDir, shotNumbers) {
   const plan = PLAN();
   const indices = unitIndicesForShots(plan, shotNumbers);
-  const unitShots = resolveUnitShots(plan, SHOTS);
-  const archived = indices.flatMap(index => archiveUnitOutputs(sceneDir, plan.units[index], unitShots[index]));
+  const archived = archiveRetakeUnits(sceneDir, SHOTS, plan, indices);
   const { result, lines } = await quietly(() => generateEpisodeVideos(
     client, series(dir), SHOTS, sceneDir, plan, undefined, { concurrency: 3, onlyUnits: new Set(indices) },
   ));
@@ -199,45 +203,135 @@ test('a montage unit whose clips exist is skipped even when no master carries it
   assert.deepEqual(result.videoPaths.map(p => p.split('/').pop()), ['shot-001.mp4', 'shot-002.mp4']);
   assert.equal(result.plan.units[0].segments.length, 2);
   assert.ok(Math.abs(result.plan.units[0].renderedDurationSec - 2) < 0.2, `rendered length from the clips (${result.plan.units[0].renderedDurationSec})`);
-  assert.ok(lines.some(line => /No master named montage-s02-001-002\.mp4/.test(line)), lines.join('\n'));
+  assert.ok(lines.some(line => /shot cuts exist, skipping \(no montage-s02-001-002\.mp4 on disk; the cuts are kept and nothing is billed\)/.test(line)), lines.join('\n'));
   assert.ok(lines.some(line => /generate-videos -p .+ -e 2 --retake 1,2/.test(line)), lines.join('\n'));
 });
 
-test('the cutter cuts at the scene cuts ffmpeg finds, not at the planned times', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'montage-retake-cut-'));
+test('a re-take validates before it archives', () => {
+  const { sceneDir } = renderedScene();
+  // A unit the duration preflight refuses (45 s on a model that stops at 15 s) stops the run first.
+  const plan = PLAN();
+  plan.units[1] = { ...plan.units[1], unitType: 'montage', model: 'seedance-2-0-reference-to-video', duration: '45s' };
+  assert.throws(() => archiveRetakeUnits(sceneDir, SHOTS, plan, [1]), /duration preflight failed/);
+  assert.deepEqual(readdirSync(sceneDir).filter(f => /-v\d+\.mp4$/.test(f)), [], 'nothing archived');
+});
+
+test('generate-videos refuses an empty or unknown --retake before any work', () => {
+  const projectDir = mkdtempSync(join(tmpdir(), 'montage-retake-cli-'));
+  const episodeDir = join(projectDir, 'episodes', 'episode-001');
+  mkdirSync(episodeDir, { recursive: true });
+  writeFileSync(join(projectDir, 'series.json'), JSON.stringify({ ...series(projectDir), episodes: [{ number: 1, title: 'R', status: 'scripted' }] }));
+  writeFileSync(join(episodeDir, 'script.json'), JSON.stringify({ episode: 1, title: 'R', status: 'approved', shots: SHOTS }));
+  const cli = join(new URL('..', import.meta.url).pathname, 'dist', 'mini-drama', 'cli.js');
+  const run = (spec) => spawnSync(process.execPath, [cli, 'generate-videos', '-p', projectDir, '-e', '1', '--skip-qa', '--retake', spec], {
+    encoding: 'utf-8',
+    env: { ...process.env, VENICE_API_KEY: '', VENICE_VIDEO_CONFIG_DIR: join(projectDir, '.test-config') },
+  });
+  const empty = run('');
+  assert.notEqual(empty.status, 0);
+  assert.match(empty.stderr, /--retake "" names no shots/);
+  const unknown = run('13,99');
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /shot\(s\) 99 are not in episode 1/);
+});
+
+/** A master to cut, built from lavfi video inputs (concatenated) and, optionally, a sine track. */
+function cutScene(name, videos, audioSec) {
+  const dir = mkdtempSync(join(tmpdir(), `montage-retake-${name}-`));
   const episodeDir = join(dir, 'episodes', 'episode-001');
   const sceneDir = join(episodeDir, 'scene-001');
   mkdirSync(sceneDir, { recursive: true });
-  // Three flat colours with hard cuts at 2 s and 3 s; the plan put them at 2.4 s and 3.3 s.
-  const master = join(sceneDir, 'montage-s01-001-003.mp4');
-  ffmpeg(
-    '-f', 'lavfi', '-i', 'color=c=red:s=64x36:r=25:d=2',
-    '-f', 'lavfi', '-i', 'color=c=blue:s=64x36:r=25:d=1',
-    '-f', 'lavfi', '-i', 'color=c=green:s=64x36:r=25:d=2',
-    '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0,format=yuv420p[v]', '-map', '[v]', master,
-  );
+  const master = join(sceneDir, 'master.mp4');
+  const inputs = videos.flatMap(v => ['-f', 'lavfi', '-i', v]);
+  const audio = audioSec ? ['-f', 'lavfi', '-i', `sine=frequency=440:sample_rate=44100:duration=${audioSec}`] : [];
+  const graph = videos.length > 1
+    ? `${videos.map((_, i) => `[${i}:v]`).join('')}concat=n=${videos.length}:v=1:a=0,format=yuv420p[v]`
+    : '[0:v]format=yuv420p[v]';
+  ffmpeg(...inputs, ...audio, '-filter_complex', graph, '-map', '[v]', ...(audioSec ? ['-map', `${videos.length}:a`, '-c:a', 'aac'] : []), '-c:v', 'libx264', '-crf', '0', master);
+  return { episodeDir, sceneDir, master };
+}
+
+function cut(scene, windows) {
+  let at = 0;
+  const montageBeats = windows.map((w, i) => {
+    const beat = { shotNumber: i + 1, startSec: at, endSec: at + w };
+    at += w;
+    return beat;
+  });
   const unit = {
-    unitId: 'montage-s01-001-003', unitType: 'montage', shotNumbers: [1, 2, 3], outputFile: 'montage-s01-001-003.mp4',
-    model: 'seedance-2-5-reference-to-video', duration: '5s', sceneNumber: 1, decisionReasons: [],
-    montageBeats: [{ shotNumber: 1, startSec: 0, endSec: 2.4 }, { shotNumber: 2, startSec: 2.4, endSec: 3.3 }, { shotNumber: 3, startSec: 3.3, endSec: 5 }],
+    unitId: 'montage-s01', unitType: 'montage', shotNumbers: montageBeats.map(b => b.shotNumber), outputFile: 'master.mp4',
+    model: 'seedance-2-5-reference-to-video', duration: `${Math.round(at)}s`, sceneNumber: 1, decisionReasons: [], montageBeats,
   };
-  const shots = [makeShot(1), makeShot(2), makeShot(3)];
+  const shots = montageBeats.map(b => makeShot(b.shotNumber));
+  const warnings = [];
   const warn = console.warn;
-  console.warn = () => {};
-  let segments;
+  console.warn = (...args) => { warnings.push(args.join(' ')); };
   try {
-    ({ segments } = cutMontageIntoShots({
-      montagePath: master, unit, shotsByNumber: new Map(shots.map(s => [s.shotNumber, s])), sceneDir, episodeDir, archiveExisting: () => {},
-    }));
+    const result = cutMontageIntoShots({ montagePath: scene.master, unit, shotsByNumber: new Map(shots.map(s => [s.shotNumber, s])), sceneDir: scene.sceneDir, episodeDir: scene.episodeDir, archiveExisting: () => {} });
+    const manifest = JSON.parse(readFileSync(join(scene.episodeDir, 'media-library', 'scene-01', 'manifest.json'), 'utf-8'));
+    return { ...result, manifest, warnings };
   } finally {
     console.warn = warn;
   }
-  const manifest = JSON.parse(readFileSync(join(episodeDir, 'media-library', 'scene-01', 'manifest.json'), 'utf-8'));
-  assert.deepEqual(manifest.boundaries.map(b => b.snapped), [true, true]);
-  assert.ok(Math.abs(manifest.boundaries[0].at - 2) < 0.05 && Math.abs(manifest.boundaries[1].at - 3) < 0.05, JSON.stringify(manifest.boundaries));
+}
+
+const probe = (path, stream, entry) => spawnSync('ffprobe', ['-v', 'error', '-select_streams', stream, '-show_entries', `stream=${entry}`, '-of', 'csv=p=0', path], { encoding: 'utf-8' }).stdout.trim();
+const frames = (path) => Number(probe(path, 'v:0', 'nb_frames'));
+const audioSec = (path) => Number(probe(path, 'a:0', 'duration'));
+
+/** Each frame of a video as 32x18 grey pixels. */
+function greyFrames(path) {
+  const raw = spawnSync('ffmpeg', ['-v', 'error', '-i', path, '-map', '0:v', '-vf', 'scale=32:18,format=gray', '-f', 'rawvideo', '-'], { maxBuffer: 1 << 26 }).stdout;
+  return Array.from({ length: raw.length / 576 }, (_, i) => raw.subarray(i * 576, (i + 1) * 576));
+}
+const sameFrame = (a, b) => a.reduce((sum, v, i) => sum + Math.abs(v - b[i]), 0) / a.length < 0.8;
+
+test('the cutter cuts at the scene cuts ffmpeg finds, trims nothing there, and keeps all the audio', () => {
+  // A hard cut at 2 s (red to blue) the plan put at 2.4 s, and a planned cut at 4 s that nothing confirms.
+  const scene = cutScene('cut', ['color=c=red:s=64x36:r=25:d=2', 'color=c=blue:s=64x36:r=25:d=3'], 5);
+  const { segments, shotPaths, manifest } = cut(scene, [2.4, 1.6, 1]);
+  assert.deepEqual(manifest.boundaries.map(b => [b.at, b.snapped]), [[2, true], [4, false]]);
   assert.deepEqual(manifest.extraCuts, []);
-  // Each clip starts one frame after its cut and ends one frame before the next.
-  assert.ok(Math.abs(segments[0].durationSec - 1.96) < 0.05, JSON.stringify(segments));
-  assert.ok(Math.abs(segments[1].startOffsetSec - 2.04) < 0.05 && Math.abs(segments[1].durationSec - 0.92) < 0.05, JSON.stringify(segments));
-  assert.ok(existsSync(join(sceneDir, 'shot-003.mp4')));
+  // The snapped cut is the new shot's first frame: clip 1 is exactly the red part.
+  assert.deepEqual(shotPaths.map(frames), [50, 50, 25]);
+  assert.deepEqual(segments.map(s => [s.startOffsetSec, s.durationSec]), [[0, 2], [2, 2], [4, 1]]);
+  // No audio is cut away: the clips' audio adds up to the master's, and each clip's audio matches its video.
+  const total = shotPaths.reduce((sum, p) => sum + audioSec(p), 0);
+  assert.ok(Math.abs(total - audioSec(scene.master)) <= 1 / 25, `clip audio ${total.toFixed(3)} s vs master ${audioSec(scene.master)} s`);
+  shotPaths.forEach((p, i) => assert.ok(Math.abs(audioSec(p) - frames(p) / 25) <= 1 / 25, `clip ${i + 1}: audio ${audioSec(p)} s, video ${frames(p) / 25} s`));
+});
+
+test('at a cut nothing confirms, the frame on each side shows its neighbour, and the clips stay in sync', () => {
+  // A smooth ramp: every frame differs from the next, and no scene cut is detected.
+  const scene = cutScene('hold', ["color=c=black:s=64x36:r=24:d=4,geq=lum='16+2*N':cb=128:cr=128"], 4);
+  const { shotPaths, manifest } = cut(scene, [2, 2]);
+  assert.deepEqual(manifest.boundaries.map(b => b.snapped), [false]);
+  const master = greyFrames(scene.master);
+  const [a, b] = shotPaths.map(greyFrames);
+  assert.deepEqual([a.length, b.length], [48, 48], 'no frame lost');
+  assert.ok(a.slice(0, 47).every((frame, i) => sameFrame(frame, master[i])), 'clip 1 up to its last frame is the master');
+  assert.ok(sameFrame(a[47], master[46]) && !sameFrame(a[47], master[47]), 'clip 1 holds its second-last frame');
+  assert.ok(sameFrame(b[0], master[49]) && !sameFrame(b[0], master[48]), 'clip 2 opens on its second frame');
+  assert.ok(b.slice(1).every((frame, i) => sameFrame(frame, master[49 + i])), 'clip 2 after its first frame is the master');
+});
+
+test('cuts pushed past the end of a short render come back inside it; every clip has video', () => {
+  // A 1 s render planned as four shots: the minimum gap would push the last two cuts past its end.
+  const scene = cutScene('short', ['color=c=red:s=64x36:r=25:d=1'], 1);
+  const { shotPaths, manifest, warnings } = cut(scene, [0.8, 0.1, 0.05, 0.05]);
+  assert.ok(manifest.boundaries.every(b => b.at < 1), JSON.stringify(manifest.boundaries));
+  assert.ok(shotPaths.every(p => frames(p) >= 1), shotPaths.map(frames).join(','));
+  assert.equal(shotPaths.reduce((sum, p) => sum + frames(p), 0), 25);
+  assert.ok(warnings.some(w => /does not fit the 1\.\d+ s render/.test(w)), warnings.join('\n'));
+});
+
+test('a master with no video stream fails loudly instead of writing empty clips', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'montage-retake-novideo-'));
+  const episodeDir = join(dir, 'episodes', 'episode-001');
+  const sceneDir = join(episodeDir, 'scene-001');
+  mkdirSync(sceneDir, { recursive: true });
+  const master = join(sceneDir, 'master.mp4');
+  ffmpeg('-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-c:a', 'aac', master);
+  assert.throws(() => cut({ episodeDir, sceneDir, master }, [1, 1]), /has no video stream; cannot cut it/);
+  assert.ok(!existsSync(join(sceneDir, 'shot-001.mp4')));
 });

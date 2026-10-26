@@ -7,9 +7,13 @@
 - **An over-long SEQUENCE montage prompt no longer loses its STYLE tail.**
   Past the 5000-character guard the prompt was hard-cut at 5000 characters,
   which lost its end: the style token (with the face-stability and no-music
-  lines) and the negative. Every beat's description and blocking now shrink
-  by one ratio, at word boundaries; the header, dialogue, sound, geography
-  hold, STYLE and negative stay whole. Test: `tests/montage-engine.test.mjs`.
+  lines) and the negative. Now blocking shrinks first, then descriptions,
+  never below 40% of themselves; a prompt still over 5000 at that floor goes
+  out longer, up to the model's hard cap (10,000 characters by default, 2,500
+  for MiniMax H3), where descriptions shrink further. Nothing is cut off the
+  end: the header, dialogue, sound, geography hold, STYLE and negative stay
+  whole, and a prompt that cannot fit the cap is refused before it is
+  queued. Test: `tests/montage-engine.test.mjs`.
 
 - **Video registry corrections checked against `/video/quote` (drift issue
   #50).** Quote is free and validates `duration` and `resolution` with the
@@ -168,32 +172,45 @@
   - The default montage prompt is a shot list
     (`videoDefaults.montageGrammar: 'shots'`): places named in the first line,
     references in first-appearance order, one `Shot N | a-bs | <place>
-    (@ImageK)` line per shot joined by "Cut to", then the abrupt-cut line; a
-    count line for a vehicle prop and the previous shot's `endState` on a
-    continuous shot. Past 8000 characters the shot prose shrinks, never below
-    40%, and the STYLE tail stays whole.
+    (@ImageK)` line per shot joined by "Cut to", then the abrupt-cut line; the
+    previous shot's `endState` on a continuous shot, and a count line for an
+    object cast member that is a vehicle, decided by what it is
+    (`objectVehicleKind`), not by a vehicle word in passing. Past 8000
+    characters blocking shrinks first, then descriptions, never below 40%; the
+    model's hard cap (10,000 by default, 2,500 for MiniMax H3) is never
+    exceeded, and the STYLE tail is never cut.
   - `buildMontageSlotPlan` sends only each shot's staged view, saying which
     shots it serves and what it does not set (`montageReferenceViews:
-    'staged'`; `'all'` adds every view). A unit where no shot names a
-    `plateView` sends what a montage always sent: every view of its place,
-    custom angles and second angles.
+    'staged'`; `'all'` adds the other canonical views and second angles, not
+    custom angles, and is not the old plan). Over budget the cast goes last,
+    as in every lane. A unit where no shot names a `plateView` sends what a
+    montage always sent: every view of its place, custom angles and second
+    angles.
   - `cutMontageIntoShots` snaps planned cuts to the detected scene cuts
     (`snapBoundaries`, ±0.8 s), matched in order so a boundary never takes the
-    next boundary's cut, trims one frame at each inner edge, and records the
-    boundaries and any unplanned cut in `manifest.json`.
+    next boundary's cut, and records the boundaries and any unplanned cut in
+    `manifest.json`. A snapped cut trims nothing; at an unconfirmed planned
+    cut the frame on each side shows its neighbour (video only). Cuts fall on
+    frames and no audio is cut away. A cut pushed past the end of a short
+    render is pulled back inside it, and a clip written without video fails
+    the run.
   - A montage unit whose clips are all on disk is skipped even when no master
     carries its name. Masters are named after the scene and first and last
     shot, so a change in grouping renamed units whose shots did not change and
-    the next run billed them again. The log names the `--retake` command, and
-    `qa-videos`, which reads masters, lists such units as not checked.
+    the next run billed them again. The log names the `--retake` command;
+    moving a master aside no longer forces a re-render. `qa-videos` checks
+    such a unit from its clips (`unitFootage`).
   - `generate-videos --retake <shots>` archives (`-vN`) and re-renders the
-    whole unit(s) holding those shots, and nothing else. The renderer gets the
+    whole unit(s) holding those shots, and nothing else. An empty list or a
+    shot the script does not have is refused, and the duration preflight runs
+    before anything is archived (`archiveRetakeUnits`). The renderer gets the
     whole plan plus `onlyUnits` (plan positions), so a suffixed insert keeps
     its own shot and a chained unit still starts from the clip before it
     (`resolveUnitShots`, `unitIndicesForShots`, `archiveUnitOutputs`).
   - `montageGrammar: 'sequence'` restores the SEQUENCE prompt with its
     grouping (one location per generation, inserts as singles) and references.
-  - Tests: `tests/montage-engine.test.mjs`, `tests/montage-retake.test.mjs`.
+  - Tests: `tests/montage-engine.test.mjs`, `tests/montage-retake.test.mjs`,
+    `tests/video-qa.test.mjs`.
 
 - **Duration and resolution are validated before the paid call instead of
   silently corrected.** `queueVideo` used to snap an unsupported duration to
@@ -213,8 +230,8 @@
 ### Added
 
 - **Object cast members get object reference clauses (`Character.prop`,
-  `isObjectCastMember`).** An object cast member (a watch, a coin, a recurring
-  boat with a locked design) used to get the person clause in the reference
+  `isObjectCastMember`).** An object cast member (a red umbrella, a ledger, a
+  recurring tram with a locked design) used to get the person clause in the reference
   slot plan ("use this reference for THE PHONE's face, hair, and wardrobe")
   and "wearing n/a" in the montage prompt. It now gets a clause that asks the
   video model to match its shape, materials, colours and marks, and a montage

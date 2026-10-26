@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, existsSync, writeFileSync, mkdirSync, copyFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -17,6 +17,8 @@ import {
   frameLuma,
   ffprobeDurationSec,
   extractFrame,
+  sampleUnitFrames,
+  unitFootage,
 } from '../dist/mini-drama/video-qa.js';
 
 const ffmpegAvailable = spawnSync('ffmpeg', ['-version'], { encoding: 'utf-8' }).status === 0;
@@ -80,6 +82,60 @@ test('extractFrame writes a png', { skip: !ffmpegAvailable }, () => {
   const out = join(dir, 'frame.png');
   assert.equal(extractFrame(clip, 0.5, out), true);
   assert.ok(existsSync(out));
+});
+
+// A montage unit kept with its clips on disk but no master under its current
+// name (a change in grouping renames units) is checked from its clips, never
+// passed unchecked.
+function clipOnlyUnit(sceneDir) {
+  copyFileSync(makeGlitchClip(), join(sceneDir, 'shot-001.mp4'));
+  copyFileSync(makeCleanClip(), join(sceneDir, 'shot-002.mp4'));
+  return {
+    unitId: 'montage-s02-001-002', unitType: 'montage', shotNumbers: [1, 2], outputFile: 'montage-s02-001-002.mp4',
+    model: 'seedance-2-5-reference-to-video', duration: '4s', decisionReasons: [], fallbackToSingles: false, sceneNumber: 2,
+    segments: [
+      { shotNumber: 1, startOffsetSec: 0, durationSec: 2, outputFile: 'shot-001.mp4' },
+      { shotNumber: 2, startOffsetSec: 2, durationSec: 2, outputFile: 'shot-002.mp4' },
+    ],
+  };
+}
+
+test('a unit with no master is read from its clips', { skip: !ffmpegAvailable }, () => {
+  const sceneDir = mkdtempSync(join(tmpdir(), 'video-qa-clips-'));
+  const unit = clipOnlyUnit(sceneDir);
+  const footage = unitFootage(unit, sceneDir);
+  assert.deepEqual(footage.clips, [join(sceneDir, 'shot-001.mp4'), join(sceneDir, 'shot-002.mp4')]);
+  assert.equal(footage.head, join(sceneDir, 'shot-001.mp4'));
+  assert.equal(footage.tail, join(sceneDir, 'shot-002.mp4'));
+  assert.equal(unitFootage({ ...unit, segments: [...unit.segments, { shotNumber: 3, startOffsetSec: 4, durationSec: 2, outputFile: 'shot-003.mp4' }] }, sceneDir), null, 'a missing clip: not rendered');
+
+  const script = { shots: [1, 2].map(n => ({ shotNumber: n, characters: ['NORA'] })) };
+  const samples = sampleUnitFrames([unit], sceneDir, script, { framesDir: join(sceneDir, 'frames') });
+  assert.deepEqual(samples.map(s => s.shotNumber), [1, 2]);
+  assert.ok(samples.every(s => existsSync(s.framePath) && Math.abs(s.atSec - 1) < 0.2), JSON.stringify(samples));
+});
+
+test('qa-videos checks a unit with no master from its clips instead of passing it', { skip: !ffmpegAvailable }, () => {
+  const projectDir = mkdtempSync(join(tmpdir(), 'video-qa-clip-unit-'));
+  const episodeDir = join(projectDir, 'episodes', 'episode-001');
+  const sceneDir = join(episodeDir, 'scene-001');
+  mkdirSync(sceneDir, { recursive: true });
+  writeFileSync(join(projectDir, 'series.json'), JSON.stringify({
+    name: 'clip-unit', slug: 'clip-unit', outputDir: projectDir, characters: [], locations: [],
+    episodes: [{ number: 1, title: 'Clips', status: 'produced' }], createdAt: new Date().toISOString(),
+  }));
+  writeFileSync(join(episodeDir, 'script.json'), JSON.stringify({ episode: 1, title: 'Clips', shots: [1, 2].map(n => ({ shotNumber: n, type: 'action', duration: '2s', description: `beat ${n}`, characters: [] })) }));
+  writeFileSync(join(episodeDir, 'generation-plan.json'), JSON.stringify({ episode: 1, generatedAt: new Date().toISOString(), units: [clipOnlyUnit(sceneDir)] }));
+
+  const r = runCli(['qa-videos', '-p', projectDir, '-e', '1', '--skip-vision']);
+  assert.match(r.stdout, /1 rendered unit\(s\)/);
+  assert.match(r.stdout, /Checked from their clips[^\n]*montage-s02-001-002/);
+  // The head glitch in its first clip is found, so the run does not pass.
+  assert.match(r.stdout, /montage-s02-001-002: head-glitch flash/);
+  assert.notEqual(r.status, 0);
+  const report = JSON.parse(readFileSync(join(episodeDir, 'video-qa-report.json'), 'utf-8'));
+  assert.equal(report.summary.units, 1);
+  assert.equal(report.summary.passed, false);
 });
 
 // ---------------------------------------------------------------------------

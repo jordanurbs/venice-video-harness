@@ -43,7 +43,7 @@ export type VideoQaVerdict = 'PASS' | 'FLAG-CRITICAL' | 'FLAG-MODERATE' | 'FLAG-
 export interface UnitFrameSample {
   unitId: string;
   shotNumber: number;
-  /** Seconds into the UNIT master where the frame was grabbed. */
+  /** Seconds into the UNIT master where the frame was grabbed (into the shot's clip, for a unit with no master). */
   atSec: number;
   framePath: string;
 }
@@ -185,11 +185,37 @@ interface PlanUnitLike {
   unitId: string;
   outputFile: string;
   shotNumbers: number[];
-  segments?: Array<{ shotNumber: number; startOffsetSec: number; durationSec: number }>;
+  segments?: Array<{ shotNumber: number; startOffsetSec: number; durationSec: number; outputFile?: string }>;
+}
+
+/** Where a rendered unit's footage is on disk. */
+export interface UnitFootage {
+  /** The unit's master, when a file carries the unit's name. */
+  master?: string;
+  /** Otherwise the clips cut from it, one per segment, in order. */
+  clips?: string[];
+  /** The file the unit starts in and the one it ends in. */
+  head: string;
+  tail: string;
 }
 
 /**
- * Sample one mid-beat frame per character-bearing shot of each unit.
+ * A unit's footage: its master, or, when no master carries the unit's name
+ * (generate-videos keeps a montage unit whose clips are all on disk; a change
+ * in grouping renames units), the clips cut from it, so the unit is checked
+ * from its clips. Null when neither is on disk: the unit was not rendered.
+ */
+export function unitFootage(unit: PlanUnitLike, sceneDir: string): UnitFootage | null {
+  const master = join(sceneDir, unit.outputFile);
+  if (existsSync(master)) return { master, head: master, tail: master };
+  const clips = (unit.segments ?? []).map(seg => (seg.outputFile ? join(sceneDir, seg.outputFile) : ''));
+  if (clips.length === 0 || !clips.every(clip => clip && existsSync(clip))) return null;
+  return { clips, head: clips[0], tail: clips[clips.length - 1] };
+}
+
+/**
+ * Sample one mid-beat frame per character-bearing shot of each unit, from
+ * its master or, for a unit with no master, from each shot's clip.
  * Frames land in a temp dir; callers get the manifest.
  */
 export function sampleUnitFrames(
@@ -202,18 +228,21 @@ export function sampleUnitFrames(
   mkdirSync(framesDir, { recursive: true });
   const samples: UnitFrameSample[] = [];
   for (const unit of units) {
-    const masterPath = join(sceneDir, unit.outputFile);
-    if (!existsSync(masterPath)) continue;
-    const duration = ffprobeDurationSec(masterPath);
+    const footage = unitFootage(unit, sceneDir);
+    if (!footage) continue;
+    const duration = footage.master ? ffprobeDurationSec(footage.master) : 0;
     const segments = unit.segments && unit.segments.length > 0
       ? unit.segments
       : [{ shotNumber: unit.shotNumbers[0], startOffsetSec: 0, durationSec: duration }];
-    for (const seg of segments) {
+    for (const [index, seg] of segments.entries()) {
       const shot = script.shots.find(s => s.shotNumber === seg.shotNumber);
       if (!shot || shot.characters.length === 0) continue;
-      const atSec = Math.min(seg.startOffsetSec + seg.durationSec / 2, Math.max(duration - 0.1, 0));
+      const source = footage.master ?? footage.clips![index];
+      const atSec = footage.master
+        ? Math.min(seg.startOffsetSec + seg.durationSec / 2, Math.max(duration - 0.1, 0))
+        : ffprobeDurationSec(source) / 2;
       const framePath = join(framesDir, `${unit.unitId}-shot-${String(seg.shotNumber).padStart(3, '0')}.png`);
-      if (extractFrame(masterPath, atSec, framePath)) {
+      if (extractFrame(source, atSec, framePath)) {
         samples.push({ unitId: unit.unitId, shotNumber: seg.shotNumber, atSec, framePath });
       }
     }

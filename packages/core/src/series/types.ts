@@ -204,13 +204,14 @@ export interface VideoModelDefaults {
    *   - `staged` (default): only the view each shot is staged on (its
    *     `plateView`, else the first plate on disk), one primary reference per
    *     cast member.
-   *   - `all`: every view of every location in the unit, plus second angles
-   *     of the cast.
+   *   - `all`: also the other canonical views of each place in the unit and
+   *     the cast's second angles, in first-appearance order. It adds no
+   *     custom angles and is not the old plan.
    * A unit where no shot names a `plateView` (every script written before
    * the field existed) sends what a montage always sent, whatever this says:
    * every view of its location, custom angles and second angles. In the
-   * bakeoff, sending all the views of two places put a boarding on the plate
-   * of the other place.
+   * bakeoff, sending all the views of two places put one place's action on
+   * the plate of the other.
    */
   montageReferenceViews?: 'staged' | 'all';
   /**
@@ -543,8 +544,8 @@ export interface Character {
   /** Model that produced the voice reference (e.g. `seed-audio-1-0`), or `user-supplied`. */
   voiceReferenceModel?: string;
   /**
-   * The cast member is an object (a prop with a locked design: a watch, a
-   * coin, a cage, a recurring boat), not a person. Its reference slot asks the
+   * The cast member is an object (a prop with a locked design: a red
+   * umbrella, a ledger, a recurring tram), not a person. Its reference slot asks the
    * video model to match shape, materials, colours and marks instead of face,
    * hair and wardrobe. Object cast members the workshop or the Cast tab make
    * are recognised from `baseTraits` alone ("inanimate object, prop; ..."), so

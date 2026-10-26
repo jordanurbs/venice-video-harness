@@ -1468,6 +1468,18 @@ export function archiveUnitOutputs(
 }
 
 /**
+ * Archive the outputs of the units a re-take renders (`generate-videos
+ * --retake`; `indices` are plan positions from `unitIndicesForShots`). The
+ * duration preflight runs first, so a run that would stop before rendering
+ * leaves every clip where it was. Returns the archived paths.
+ */
+export function archiveRetakeUnits(sceneDir: string, shots: ShotScript[], plan: GenerationPlan, indices: number[]): string[] {
+  assertShotDurationsValid(shots, plan);
+  const unitShots = resolveUnitShots(plan, shots);
+  return indices.flatMap(index => archiveUnitOutputs(sceneDir, plan.units[index], unitShots[index]));
+}
+
+/**
  * Take a montage or multi-shot unit's existing cut clips as its output:
  * segments laid end to end from the clips' durations, and the rendered length
  * from the master when it is on disk (else the sum of the clips).
@@ -2018,7 +2030,7 @@ async function renderMultiShotUnit(
  * so a change in grouping (a script that gains `continuity` merges places and
  * renumbers later scenes) renames units whose shots did not change. Rendering
  * them again would bill them again; `generate-videos --retake` does that on
- * purpose.
+ * purpose. (Moving a master aside by hand no longer forces a re-render.)
  */
 async function renderMontageUnit(
   client: VeniceClient,
@@ -2036,7 +2048,7 @@ async function renderMontageUnit(
       console.log(`  ${unit.unitId}: montage master and shot cuts exist, skipping`);
     } else {
       const episode = /episode-(\d+)$/.exec(basename(episodeDir))?.[1];
-      console.log(`  ${unit.unitId}: shot cuts exist, skipping. No master named ${unit.outputFile}: the units were grouped differently when these were cut.`);
+      console.log(`  ${unit.unitId}: shot cuts exist, skipping (no ${unit.outputFile} on disk; the cuts are kept and nothing is billed).`);
       console.log(`    To render shots ${unit.shotNumbers.join(', ')} again as one generation: generate-videos -p ${series.outputDir} -e ${episode ? Number(episode) : '<episode>'} --retake ${unit.shotNumbers.join(',')}`);
     }
     return adoptCutClips(unit, shots, shotOutputPaths, unitOutputPath);

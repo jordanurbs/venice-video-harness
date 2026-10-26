@@ -102,7 +102,7 @@ import {
   type ShotApproval,
 } from './panel-approval.js';
 import { shotKey } from './shot-paths.js';
-import { DEFAULT_RENDER_CONCURRENCY, archiveUnitOutputs, generateEpisodeVideos } from './video-generator.js';
+import { DEFAULT_RENDER_CONCURRENCY, archiveRetakeUnits, generateEpisodeVideos } from './video-generator.js';
 import { generateVoiceReference, harvestVoiceReferenceFromClip } from './voice-reference.js';
 import { generateLocationReferences } from './location-generator.js';
 import {
@@ -3359,25 +3359,24 @@ program
     }
     const {
       detectHeadGlitch, frameLuma, ffprobeDurationSec, sampleUnitFrames,
-      checkUnitIdentity, checkCrossUnitIdentity, saveVideoQaReport,
+      checkUnitIdentity, checkCrossUnitIdentity, saveVideoQaReport, unitFootage,
     } = await import('./video-qa.js');
 
-    const units = plan.units.filter(u => existsSync(join(sceneDir, u.outputFile)));
+    // A unit kept with all its clips on disk but no master under its current
+    // name (generate-videos does not bill it again) is checked from its clips.
+    const footage = new Map(plan.units.map(unit => [unit, unitFootage(unit, sceneDir)] as const));
+    const units = plan.units.filter(unit => footage.get(unit));
     console.log(`QA Videos: Episode ${opts.episode} — ${units.length} rendered unit(s)\n`);
-    // A unit renamed by a change in grouping keeps its clips but has no master
-    // under its new name (generate-videos skips it rather than bill it again).
-    // These checks read masters, so say which units they cannot see.
-    const noMaster = plan.units.filter(u => !existsSync(join(sceneDir, u.outputFile)) && (u.segments ?? []).length > 0);
-    if (noMaster.length > 0) {
-      console.warn(`⚠ Not checked: ${noMaster.map(u => u.unitId).join(', ')} (clips on disk, no master under the unit's current name).`);
-      console.warn(`  To check them, render them again as one generation: generate-videos -p ${series.outputDir} -e ${opts.episode} --retake ${noMaster.flatMap(u => u.shotNumbers).join(',')}\n`);
+    const fromClips = units.filter(unit => !footage.get(unit)!.master);
+    if (fromClips.length > 0) {
+      console.log(`Checked from their clips (no master under the unit's current name): ${fromClips.map(u => u.unitId).join(', ')}\n`);
     }
 
     // ---- Layer 1: programmatic (free) ----
     console.log('Programmatic checks:');
     const headGlitches: import('./video-qa.js').HeadGlitchFinding[] = [];
     for (const unit of units) {
-      const finding = detectHeadGlitch(join(sceneDir, unit.outputFile), unit.unitId);
+      const finding = detectHeadGlitch(footage.get(unit)!.head, unit.unitId);
       if (finding) {
         headGlitches.push(finding);
         console.log(`  ✗ ${unit.unitId}: head-glitch flash at frame ${finding.frameIndex} (luma Δ${finding.lumaDelta})`);
@@ -3387,8 +3386,8 @@ program
 
     const boundaries: import('./video-qa.js').BoundaryFinding[] = [];
     for (let i = 1; i < units.length; i++) {
-      const prevPath = join(sceneDir, units[i - 1].outputFile);
-      const nextPath = join(sceneDir, units[i].outputFile);
+      const prevPath = footage.get(units[i - 1])!.tail;
+      const nextPath = footage.get(units[i])!.head;
       const prevLuma = frameLuma(prevPath, Math.max(ffprobeDurationSec(prevPath) - 0.2, 0));
       const nextLuma = frameLuma(nextPath, 0.2);
       if (prevLuma === undefined || nextLuma === undefined) continue;
@@ -3570,6 +3569,21 @@ program
     const script = await loadEpisodeScript(series, opts.episode);
     if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
 
+    // --retake must name shots of this script; an empty or unknown list is
+    // refused here, never read as "no re-take" (a full run).
+    let retakeShots: number[] | undefined;
+    if (opts.retake !== undefined) {
+      retakeShots = parseShotSpec(opts.retake);
+      const known = new Set(script.shots.map(shot => shot.shotNumber));
+      const unknown = retakeShots.filter(n => !known.has(n));
+      if (retakeShots.length === 0 || unknown.length > 0) {
+        console.error(retakeShots.length === 0
+          ? `--retake "${opts.retake}" names no shots. Give shot numbers, e.g. --retake 4 or --retake 2-6.`
+          : `--retake ${opts.retake}: shot(s) ${unknown.join(', ')} are not in episode ${opts.episode}. Nothing was rendered or archived.`);
+        process.exit(1);
+      }
+    }
+
     const episodeDir = getEpisodeDir(series, opts.episode);
     const qaPath = join(episodeDir, 'qa-approved.json');
     if (!opts.skipQa && !existsSync(qaPath)) {
@@ -3628,8 +3642,8 @@ program
     // plan order, and a chained unit needs the clip before it); every other
     // unit is left as it is, and is not rendered even if its clips are missing.
     let retakeUnits: number[] | undefined;
-    if (opts.retake) {
-      retakeUnits = unitIndicesForShots(generationPlan, parseShotSpec(opts.retake));
+    if (retakeShots) {
+      retakeUnits = unitIndicesForShots(generationPlan, retakeShots);
       if (retakeUnits.length === 0) {
         console.error(`--retake ${opts.retake}: no generation unit holds those shots. Units: ${generationPlan.units.map(u => `${u.unitId} [${u.shotNumbers.join(',')}]`).join('; ')}`);
         process.exit(1);
@@ -3698,7 +3712,7 @@ program
         const unit = generationPlan.units[index];
         return `${unit.unitId} (shots ${unitShots[index].map(label).join(', ')}, ${unit.duration})`;
       }).join('; ')}`);
-      for (const index of retakeUnits) archiveUnitOutputs(sceneDir, generationPlan.units[index], unitShots[index]);
+      archiveRetakeUnits(sceneDir, script.shots, generationPlan, retakeUnits);
       console.log('');
     }
 

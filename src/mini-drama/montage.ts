@@ -45,8 +45,8 @@
 //   Every cut is an abrupt single-frame hard cut: the two images never blend.
 //
 // and a scene may cross places when its shots are joined by
-// `continuity.from: 'continuous'`, so one action (boarding at the landing,
-// then the crossing on deck) stays one generation and the vehicle, the props
+// `continuity.from: 'continuous'`, so one action (onto a tram at the stop,
+// then the ride inside it) stays one generation and the vehicle, the props
 // and the facing carry across the cuts. In a 31-render continuity bakeoff
 // (Seedance 2.5 R2V, 720p), one generation kept a recurring vehicle the same
 // in 3 of 3 takes; separate per-shot generations swapped it in 4 of 4.
@@ -54,7 +54,7 @@
 // with its grouping (one location per generation) and references.
 // ---------------------------------------------------------------------------
 
-import { mkdirSync, copyFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, copyFileSync, existsSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type {
@@ -104,8 +104,8 @@ export interface SceneGroupingOptions {
  * may carry.
  *
  * - A shot whose `continuity.from` is `continuous` stays in the scene even
- *   when its location changes. That keeps one action across places (boarding
- *   at the landing stage, then at the bow, then the crossing) in one
+ *   when its location changes. That keeps one action across places (onto a
+ *   tram at the stop, then the ride inside it) in one
  *   generation, so the vehicle, the props and the facing carry across the
  *   cuts. In a 31-render continuity bakeoff, one generation kept the vehicle
  *   the same in 3 of 3 takes; separate generations swapped it in 4 of 4.
@@ -198,8 +198,8 @@ function padShot(n: number): string {
  * exact-lip-sync dialogue shots keep their dedicated pipeline. Everything
  * else — establishing, action, dialogue-on-native, reaction, close-up —
  * rides the montage. With the shot-list grammar, an insert that continues
- * the action (`continuity.from: 'continuous'`: hands at the rail, the watch
- * in them) rides in its run too, so the prop and the light carry across the
+ * the action (`continuity.from: 'continuous'`: the hands, the umbrella in
+ * them) rides in its run too, so the prop and the light carry across the
  * cut.
  */
 function shotBlocksMontage(shot: ShotScript, videoDefaults: VideoModelDefaults | undefined, readContinuity: boolean): boolean {
@@ -342,22 +342,92 @@ function ffprobeDuration(path: string): number {
   return Number.isFinite(v) ? v : 0;
 }
 
-function ffmpegCut(sourcePath: string, startSec: number, durationSec: number, outputPath: string): void {
+interface VideoProbe {
+  fps: number;
+  /** Frames in the first video stream. */
+  frames: number;
+  hasAudio: boolean;
+}
+
+function parseRate(rate: unknown): number {
+  const [num, den] = String(rate ?? '').split('/').map(Number);
+  const fps = den ? num / den : num;
+  return Number.isFinite(fps) && fps > 0 ? fps : 0;
+}
+
+/** A video's frame rate and frame count, and whether it has audio. Null when it has no video stream. */
+function probeVideo(path: string): VideoProbe | null {
+  const r = spawnSync('ffprobe', [
+    '-v', 'error', '-show_entries', 'stream=codec_type,avg_frame_rate,r_frame_rate,nb_frames,duration', '-of', 'json', path,
+  ], { encoding: 'utf-8' });
+  let streams: Array<Record<string, unknown>> = [];
+  try {
+    streams = (JSON.parse(r.stdout || '{}') as { streams?: Array<Record<string, unknown>> }).streams ?? [];
+  } catch {
+    return null;
+  }
+  const video = streams.find(s => s.codec_type === 'video');
+  if (!video) return null;
+  const fps = parseRate(video.avg_frame_rate) || parseRate(video.r_frame_rate) || 24;
+  const counted = Number(video.nb_frames);
+  const durationSec = Number(video.duration) || ffprobeDuration(path);
+  const frames = Number.isInteger(counted) && counted > 0 ? counted : Math.round(durationSec * fps);
+  return { fps, frames, hasAudio: streams.some(s => s.codec_type === 'audio') };
+}
+
+interface ClipCut {
+  fps: number;
+  /** The clip's first frame and the frame after its last, in the master. */
+  startFrame: number;
+  endFrame: number;
+  /** The last clip runs to the end of the master, audio included. */
+  toEnd: boolean;
+  hasAudio: boolean;
+  /** Show a copy of the neighbouring frame in place of the first / last one (video only; the clip keeps its length). */
+  holdFirst: boolean;
+  holdLast: boolean;
+}
+
+function ffmpegCut(sourcePath: string, outputPath: string, cut: ClipCut): void {
   // Re-encode (not stream copy) so every cut is frame-accurate at the beat
   // boundary — a montage's whole point is that each clip holds exactly the
   // shot the prompt put there. Same codec settings as the multi-shot
   // splitter so downstream concat never hits a mismatch.
+  //
+  // Seek to half a frame before a frame about a second ahead of the cut, so
+  // decoding starts on a known frame, then cut video by frame number and
+  // audio at the same instants: neighbouring clips share their boundary, so
+  // a cut loses no audio and no frame.
+  const lead = Math.max(0, cut.startFrame - Math.round(cut.fps));
+  const seekSec = lead > 0 ? (lead - 0.5) / cut.fps : 0;
+  const first = cut.startFrame - lead;
+  const frames = cut.endFrame - cut.startFrame;
+  const holdFirst = cut.holdFirst && frames >= 3;
+  const holdLast = cut.holdLast && frames >= 3;
+  const video = [
+    `trim=start_frame=${first + (holdFirst ? 1 : 0)}${cut.toEnd ? '' : `:end_frame=${first + frames - (holdLast ? 1 : 0)}`}`,
+    'setpts=PTS-STARTPTS',
+    ...(holdFirst || holdLast ? [`tpad=start=${holdFirst ? 1 : 0}:start_mode=clone:stop=${holdLast ? 1 : 0}:stop_mode=clone`] : []),
+  ].join(',');
+  const audioStart = (cut.startFrame / cut.fps - seekSec).toFixed(6);
+  const audioEnd = (cut.endFrame / cut.fps - seekSec).toFixed(6);
+  const audio = `atrim=start=${audioStart}${cut.toEnd ? '' : `:end=${audioEnd}`},asetpts=PTS-STARTPTS`;
   const r = spawnSync('ffmpeg', [
     '-y',
-    '-ss', String(startSec),
+    ...(seekSec > 0 ? ['-ss', seekSec.toFixed(6)] : []),
     '-i', sourcePath,
-    '-t', String(durationSec),
+    '-filter_complex', cut.hasAudio ? `[0:v]${video}[v];[0:a]${audio}[a]` : `[0:v]${video}[v]`,
+    '-map', '[v]', ...(cut.hasAudio ? ['-map', '[a]'] : []),
     '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
-    '-c:a', 'aac', '-ar', '44100', '-ac', '2', '-b:a', '192k',
+    ...(cut.hasAudio ? ['-c:a', 'aac', '-ar', '44100', '-ac', '2', '-b:a', '192k'] : []),
     outputPath,
   ], { encoding: 'utf-8' });
   if (r.status !== 0) {
     throw new Error(`ffmpeg cut failed for ${outputPath}: ${r.stderr?.slice(-400)}`);
+  }
+  const size = existsSync(outputPath) ? statSync(outputPath).size : 0;
+  if (size === 0 || (probeVideo(outputPath)?.frames ?? 0) < 1) {
+    throw new Error(`Montage cut wrote no video: ${outputPath} (${size} bytes, frames ${cut.startFrame}-${cut.endFrame} of the master).`);
   }
 }
 
@@ -393,9 +463,10 @@ export interface SnappedBoundary {
  * 2 s and 3 s with real cuts at 1.45 s and 2.45 s snap to 1.45 and 2.45,
  * where taking the nearest cut for each boundary in turn gave the first one
  * 2.45 and ended clip 1 with shot 2's footage. A boundary with no cut keeps
- * its planned time.
+ * its planned time, pushed past the edge before it by `minGapSec` but never
+ * past `endSec` (the end of the render).
  */
-export function snapBoundaries(planned: number[], detected: number[], toleranceSec = 0.8, minGapSec = 0.3): SnappedBoundary[] {
+export function snapBoundaries(planned: number[], detected: number[], toleranceSec = 0.8, minGapSec = 0.3, endSec = Infinity): SnappedBoundary[] {
   const cuts = [...new Set(detected.filter(Number.isFinite))].sort((a, b) => a - b);
   interface Assignment { snapped: number; offset: number; picks: number[] }
   const memo = new Map<string, Assignment>();
@@ -407,7 +478,7 @@ export function snapBoundaries(planned: number[], detected: number[], toleranceS
     const known = memo.get(key);
     if (known) return known;
     const want = planned[i];
-    const unmatched = best(i + 1, last, Math.max(want, floor + minGapSec));
+    const unmatched = best(i + 1, last, Math.min(Math.max(want, floor + minGapSec), endSec));
     let result: Assignment = { ...unmatched, picks: [-1, ...unmatched.picks] };
     for (let j = last + 1; j < cuts.length && cuts[j] <= want + toleranceSec; j++) {
       const at = cuts[j];
@@ -432,7 +503,7 @@ export function snapBoundaries(planned: number[], detected: number[], toleranceS
       out.push({ planned: want, at: cuts[j], snapped: true, offset: Number((cuts[j] - want).toFixed(3)) });
       floor = cuts[j];
     } else {
-      const at = Math.max(want, floor + minGapSec);
+      const at = Math.min(Math.max(want, floor + minGapSec), endSec);
       out.push({ planned: want, at, snapped: false });
       floor = at;
     }
@@ -455,9 +526,15 @@ export interface MontageCutResult {
  * back a hair short or long of the requested window) so the last beat never
  * runs off the end and the proportions the prompt asked for are preserved.
  * Each scaled boundary then snaps to the scene cut detected near it
- * (`snapBoundaries`), and every clip loses one frame at each inner edge, so
- * a boundary frame never shows the neighbouring shot. `manifest.json`
- * records the detected cuts, the boundaries and any cut nobody planned.
+ * (`snapBoundaries`); ffmpeg reports a scene cut at the new shot's first
+ * frame, so a snapped cut is exact and nothing is trimmed there. At a
+ * planned cut no scene cut confirmed, the frame on each side shows a copy of
+ * its neighbour instead (video only), in case the real cut is a frame off.
+ * Cuts fall on frames, neighbouring clips share their boundary instant, and
+ * no audio is cut away: the clips' audio adds up to the master's. Every
+ * clip keeps at least one frame, and a clip with no video fails the run.
+ * `manifest.json` records the detected cuts, the boundaries and any cut
+ * nobody planned.
  *
  * Every shot is written twice:
  *   1. `<sceneDir>/shot-NNN.mp4` — the canonical path every downstream step
@@ -481,6 +558,10 @@ export function cutMontageIntoShots(options: {
   }
 
   const renderedSec = ffprobeDuration(montagePath);
+  const video = probeVideo(montagePath);
+  if (!video || video.frames < beats.length) {
+    throw new Error(`Montage unit ${unit.unitId}: ${montagePath} has ${video ? `${video.frames} frame(s), fewer than its ${beats.length} shots` : 'no video stream'}; cannot cut it.`);
+  }
   const plannedSec = beats[beats.length - 1].endSec;
   const scale = plannedSec > 0 && renderedSec > 0 ? renderedSec / plannedSec : 1;
   if (Math.abs(scale - 1) > 0.05) {
@@ -496,30 +577,43 @@ export function cutMontageIntoShots(options: {
   const segments: GenerationUnitSegment[] = [];
 
   // Cut at the real hard cuts: each planned boundary snaps to a detected
-  // scene change, and every clip loses one frame at each inner edge so a
-  // boundary frame never shows the neighbouring shot.
+  // scene change; the cutter then works in frames.
   const SNAP_TOLERANCE_SEC = 0.8;
-  const INSET_SEC = 0.04;
   const detected = beats.length > 1 ? detectSceneCuts(montagePath) : [];
-  const boundaries = snapBoundaries(beats.slice(1).map(beat => beat.startSec * scale), detected, SNAP_TOLERANCE_SEC);
-  const edges = [0, ...boundaries.map(b => b.at), renderedSec];
+  const boundaries = snapBoundaries(beats.slice(1).map(beat => beat.startSec * scale), detected, SNAP_TOLERANCE_SEC, 0.3, renderedSec);
   const missed = boundaries.filter(b => !b.snapped).length;
   if (missed > 0) {
     console.warn(`  ⚠ ${unit.unitId}: ${missed} of ${boundaries.length} planned cut(s) had no detected cut within ${SNAP_TOLERANCE_SEC} s; cut at the planned time. Check those joins.`);
   }
   const extraCuts = detected.filter(t => t > 0.3 && t < renderedSec - 0.3 && !boundaries.some(b => b.snapped && b.at === t));
+  // Each boundary on a frame, every clip at least one frame long: a cut pushed
+  // past the end of a short render comes back inside it.
+  const edgeFrames = [0];
+  boundaries.forEach((boundary, i) => {
+    const frame = Math.min(Math.max(Math.round(boundary.at * video.fps), edgeFrames[i] + 1), video.frames - (beats.length - 1 - i));
+    if (Math.abs(frame / video.fps - boundary.at) > 1 / video.fps) {
+      console.warn(`  ⚠ ${unit.unitId}: cut ${i + 1} at ${boundary.at.toFixed(2)} s does not fit the ${renderedSec.toFixed(2)} s render (every clip keeps a frame); moved to ${(frame / video.fps).toFixed(2)} s.`);
+    }
+    boundary.at = Number((frame / video.fps).toFixed(3));
+    edgeFrames.push(frame);
+  });
+  edgeFrames.push(video.frames);
 
   for (let i = 0; i < beats.length; i++) {
     const beat = beats[i];
-    const isLast = i === beats.length - 1;
-    const start = edges[i] + (i > 0 ? INSET_SEC : 0);
-    const end = isLast ? renderedSec : edges[i + 1] - INSET_SEC;
-    const dur = Math.max(0.1, end - start);
     const key = shotKey(beat.shotNumber);
 
     const canonicalPath = join(sceneDir, `shot-${key}.mp4`);
     archiveExisting(canonicalPath);
-    ffmpegCut(montagePath, start, dur, canonicalPath);
+    ffmpegCut(montagePath, canonicalPath, {
+      fps: video.fps,
+      startFrame: edgeFrames[i],
+      endFrame: edgeFrames[i + 1],
+      toEnd: i === beats.length - 1,
+      hasAudio: video.hasAudio,
+      holdFirst: i > 0 && !boundaries[i - 1].snapped,
+      holdLast: i < beats.length - 1 && !boundaries[i].snapped,
+    });
     shotPaths.push(canonicalPath);
 
     const libraryPath = join(libraryDir, `shot-${key}.mp4`);
@@ -528,8 +622,8 @@ export function cutMontageIntoShots(options: {
 
     segments.push({
       shotNumber: beat.shotNumber,
-      startOffsetSec: Number(start.toFixed(3)),
-      durationSec: Number(dur.toFixed(3)),
+      startOffsetSec: Number((edgeFrames[i] / video.fps).toFixed(3)),
+      durationSec: Number(((edgeFrames[i + 1] - edgeFrames[i]) / video.fps).toFixed(3)),
       outputFile: `shot-${key}.mp4`,
     });
   }

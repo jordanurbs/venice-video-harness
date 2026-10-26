@@ -114,7 +114,7 @@ export function buildReferenceSlotPlan(
   return planReferenceSlots(series, shot, modelId, options.characterNames ?? shot.characters, shot.location ? [shot.location] : []);
 }
 
-/** An object cast member's name with an article: "the HARBOUR FERRY", and "THE PHONE" as it is. */
+/** An object cast member's name with an article: "the CABLE TRAM", and "THE PHONE" as it is. */
 function objectName(name: string): string {
   return /^the\s/i.test(name) ? name : `the ${name}`;
 }
@@ -324,9 +324,9 @@ function locationCandidates(series: SeriesState, shot: ShotScript, slug: string)
 // go in the order things first appear: each cast member's primary reference
 // where they first enter, and each shot's STAGED view where that view is
 // first used. Only staged views by default: in a 31-render continuity
-// bakeoff, sending all four views of each of two places staged a boarding on
-// the plate of the other place. Each place image says which shots it serves
-// and that it does not set where things are in the others.
+// bakeoff, sending all four views of each of two places staged one place's
+// action on the plate of the other. Each place image says which shots it
+// serves and that it does not set where things are in the others.
 //
 // A unit where no shot names a plateView (every script written before the
 // field existed) gets the load a montage always sent: every view of each of
@@ -408,10 +408,13 @@ function placeRoleClause(series: SeriesState, shots: ShotScript[], candidate: Mo
  * The ordered reference slot plan for a shot-list montage unit.
  *
  * When at least one shot names its `plateView`: first-appearance order,
- * staged views only (`views: 'all'` adds every view of each place and the
- * cast's second angles). Overflow drops the extra views and second angles
- * first, then later views of a place already shown (their shots fall back to
- * that place's earlier image), then trailing images.
+ * staged views only (`views: 'all'` adds the other canonical views of each
+ * place and the cast's second angles; not custom angles). Overflow drops the
+ * extra views and second angles first, then later views of a place already
+ * shown, then the other place images and storyboard plates from the end;
+ * the cast's primary references go last (rule 42). A shot whose image was
+ * dropped points at the first image of its place still sent, and that
+ * image's clause names the shot.
  *
  * When no shot names one: the load a montage always sent (see
  * `buildUnstagedMontageSlotPlan`), whatever `views` says.
@@ -494,7 +497,8 @@ export function buildMontageSlotPlan(
   }
 
   // Budget: extra views and second angles go first, then later views of a
-  // place already shown, then whatever trails.
+  // place already shown, then the other place images and storyboard plates
+  // from the end; the cast goes last, as in every lane (rule 42).
   const kept = [...candidates];
   const drop = (index: number, why: string) => {
     dropped.push(`${kept[index].kind} "${kept[index].label}" (${why})`);
@@ -506,36 +510,43 @@ export function buildMontageSlotPlan(
   for (let i = kept.length - 1; i >= 0 && kept.length > budget; i--) {
     const candidate = kept[i];
     if (candidate.kind !== 'location') continue;
-    const earlier = kept.slice(0, i).find(other => other.kind === 'location' && other.label === candidate.label && other.shots);
-    if (!earlier) continue;
-    // Its shots fall back to the place's earlier image, which now serves them too.
-    earlier.shots = [...new Set([...(earlier.shots ?? []), ...(candidate.shots ?? [])])];
+    if (!kept.slice(0, i).some(other => other.kind === 'location' && other.label === candidate.label && other.shots)) continue;
     drop(i, `a later view of a place already shown; over the ${budget}-image budget`);
   }
-  while (kept.length > budget) drop(kept.length - 1, `over ${budget}-image budget for ${modelId}`);
+  for (const kind of ['location', 'storyboard', 'character-primary'] as const) {
+    for (let i = kept.length - 1; i >= 0 && kept.length > budget; i--) {
+      if (kept[i].kind === kind) drop(i, `over ${budget}-image budget for ${modelId}`);
+    }
+  }
+
+  // Each shot's place image: its staged view, or, when that was dropped, the
+  // first image of the same place still sent, whose clause then names it too.
+  const placeByShot = new Map<number, number>();
+  const servedBy = new Map<MontageCandidate, number[]>();
+  for (const shot of shots) {
+    const key = placeKeyByShot.get(shot.shotNumber);
+    const staged = key ? byKey.get(key) : undefined;
+    if (!staged) continue;
+    const image = kept.includes(staged) ? staged : kept.find(candidate => candidate.kind === 'location' && candidate.label === staged.label);
+    if (!image) continue;
+    servedBy.set(image, [...(servedBy.get(image) ?? []), shot.shotNumber]);
+    placeByShot.set(shot.shotNumber, kept.indexOf(image) + 1);
+  }
 
   const positionOf = new Map(shots.map((shot, index) => [shot.shotNumber, index + 1]));
-  const slots: ReferenceSlot[] = kept.map((candidate, index) => ({
-    imageIndex: index + 1,
-    kind: candidate.kind,
-    path: candidate.path,
-    label: candidate.label,
-    roleClause: candidate.kind === 'location' && candidate.shots ? placeRoleClause(series, shots, candidate, positionOf) : candidate.roleClause,
-  }));
+  const slots: ReferenceSlot[] = kept.map((candidate, index) => {
+    const served = servedBy.get(candidate);
+    return {
+      imageIndex: index + 1,
+      kind: candidate.kind,
+      path: candidate.path,
+      label: candidate.label,
+      roleClause: served ? placeRoleClause(series, shots, { ...candidate, shots: served }, positionOf) : candidate.roleClause,
+    };
+  });
 
   const characterSlotByName = new Map<string, number>();
   for (const slot of slots) if (slot.kind === 'character-primary') characterSlotByName.set(slot.label.toUpperCase(), slot.imageIndex);
-  const placeByShot = new Map<number, number>();
-  for (const shot of shots) {
-    const key = placeKeyByShot.get(shot.shotNumber);
-    if (!key) continue;
-    let index = kept.findIndex(candidate => candidate.key === key);
-    if (index < 0) {
-      const slug = byKey.get(key)?.label;
-      index = kept.findIndex(candidate => candidate.kind === 'location' && candidate.label === slug);
-    }
-    if (index >= 0) placeByShot.set(shot.shotNumber, index + 1);
-  }
   return { slots, characterSlotByName, dropped, placeByShot };
 }
 

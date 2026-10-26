@@ -31,6 +31,7 @@ import { parseShotDuration } from './generation-planner.js';
 import { faceCapableTwinId, getMaxPositivePromptChars, modelWantsSimplePrompt } from 'venice-video-harness/core/venice/models.js';
 import { getLocation } from '../series/manager.js';
 import { buildMontageSlotPlan, buildReferenceSlotPlan, type ReferenceSlot } from './reference-slots.js';
+import { objectVehicleKind } from './plan-check.js';
 
 export interface MiniDramaImagePrompt {
   prompt: string;
@@ -1065,29 +1066,8 @@ export function buildMontagePrompt(
 
   // Seedance 2.5 accepts long prompts (12k chars quoted OK), but keep beats
   // directed rather than decorated — guard at 5000.
-  let prompt = parts.join('\n').trim();
-  const MONTAGE_PROMPT_LIMIT = 5000;
-  if (prompt.length > MONTAGE_PROMPT_LIMIT) {
-    // Shrink every beat's description and blocking by the same ratio, at word
-    // boundaries. Header, dialogue, sound, the geography hold, STYLE and the
-    // negative stay whole.
-    const trimmable = beatLines.reduce((sum, line) => sum + line.desc.length + line.blocking.length, 0);
-    const ratio = Math.max(0, (trimmable - (prompt.length - MONTAGE_PROMPT_LIMIT) - 8 * beatLines.length) / Math.max(1, trimmable));
-    const shrink = (text: string) => {
-      if (!text) return text;
-      const keep = Math.floor(text.length * ratio);
-      if (keep >= text.length) return text;
-      return `${text.slice(0, keep).replace(/\s+\S*$/, '').replace(/[,;:]\s*$/, '')}…`;
-    };
-    for (const line of beatLines) parts[line.index] = renderBeat(line, shrink(line.desc), shrink(line.blocking));
-    const before = prompt.length;
-    prompt = parts.join('\n').trim();
-    console.warn(`  Montage prompt is ${before} chars (limit: ${MONTAGE_PROMPT_LIMIT}). Shrank beat prose by ${Math.round((1 - ratio) * 100)}% to ${prompt.length}; STYLE, dialogue and negative kept whole.`);
-    if (prompt.length > MONTAGE_PROMPT_LIMIT) {
-      console.warn('  Still over the limit after shrinking the beats. Hard-cutting.');
-      prompt = prompt.slice(0, MONTAGE_PROMPT_LIMIT);
-    }
-  }
+  const cap = montagePromptCap(modelId);
+  const prompt = fitMontageProse(parts, beatLines, renderBeat, { guard: Math.min(5000, cap), cap, unitId: unit.unitId });
 
   return {
     prompt,
@@ -1109,10 +1089,81 @@ export function buildMontagePrompt(
   };
 }
 
-const WATER_VEHICLE = /\b(?:ferry|ferries|boat|launch|gondola|vaporetto|barge|ship|skiff|sandolo|yacht|steamer)\b/i;
-const LAND_VEHICLE = /\b(?:train|tram|carriage|cart|car|bus|wagon)\b/i;
+/**
+ * Hard ceiling on a montage prompt's length. The registry has no prompt limit
+ * for video models: MiniMax H3 is documented at 2,500 characters and H3 Max at
+ * 10,000, and Seedance 2.5 quotes accepted 12,000, so everything else gets a
+ * conservative 10,000.
+ */
+function montagePromptCap(modelId: string): number {
+  if (modelId.startsWith('minimax-h3-max')) return 10_000;
+  if (modelId.startsWith('minimax-h3')) return 2_500;
+  return 10_000;
+}
 
-/** An object cast member's name with an article: "the HARBOUR FERRY", and "THE PHONE" as it is. */
+/** Text cut to at least `ratio` of itself, at the next word boundary, with an ellipsis; nothing at ratio 0. */
+function shrinkProse(text: string, ratio: number): string {
+  if (!text || ratio >= 1) return text;
+  const keep = Math.ceil(text.length * ratio);
+  if (keep <= 0) return '';
+  const end = text.indexOf(' ', keep);
+  return end < 0 ? text : `${text.slice(0, end).replace(/[,;:.]+$/, '')}…`;
+}
+
+/**
+ * Fit a montage prompt's per-shot prose to its budget. Past `guard`, every
+ * line's blocking shrinks first (to nothing if it must), then every
+ * description by one ratio, never below 40% of itself. Past the hard `cap`,
+ * descriptions go below that floor. The rest (header, references, dialogue,
+ * sound, STYLE, negative) stays whole: nothing is cut off the end. A prompt
+ * still over the cap with no prose left is refused before anything is queued.
+ */
+function fitMontageProse<L extends { index: number; desc: string; blocking: string }>(
+  parts: string[],
+  lines: L[],
+  render: (line: L, desc: string, blocking: string) => string,
+  limits: { guard: number; cap: number; unitId: string },
+): string {
+  const build = (descRatio: number, blockingRatio: number): string => {
+    for (const line of lines) parts[line.index] = render(line, shrinkProse(line.desc, descRatio), shrinkProse(line.blocking, blockingRatio));
+    return parts.join('\n').trim();
+  };
+  // The largest ratio in [low, 1] whose prompt fits `target`; `low` when none does.
+  const largestFitting = (target: number, low: number, at: (ratio: number) => string): number => {
+    if (at(low).length > target) return low;
+    let lo = low;
+    let hi = 1;
+    for (let step = 0; step < 14; step++) {
+      const mid = (lo + hi) / 2;
+      if (at(mid).length <= target) lo = mid;
+      else hi = mid;
+    }
+    return lo;
+  };
+
+  const full = build(1, 1);
+  if (full.length <= limits.guard) return full;
+  let blockingRatio = largestFitting(limits.guard, 0, ratio => build(1, ratio));
+  let descRatio = 1;
+  let prompt = build(descRatio, blockingRatio);
+  if (prompt.length > limits.guard) {
+    blockingRatio = 0;
+    descRatio = largestFitting(limits.guard, 0.4, ratio => build(ratio, 0));
+    prompt = build(descRatio, 0);
+  }
+  if (prompt.length > limits.cap) {
+    descRatio = largestFitting(limits.cap, 0, ratio => build(ratio, 0));
+    prompt = build(descRatio, 0);
+  }
+  if (prompt.length > limits.cap) {
+    throw new Error(`Montage unit ${limits.unitId}: the prompt is ${prompt.length} characters with no shot prose left, over this model's ${limits.cap}. Give the unit fewer shots, references or lines.`);
+  }
+  const pct = (ratio: number) => `${Math.round(ratio * 100)}%`;
+  console.warn(`  Montage prompt is ${full.length} chars (guard ${limits.guard}, cap ${limits.cap}): blocking kept at ${pct(blockingRatio)}, descriptions at ${pct(descRatio)}, now ${prompt.length}; references, dialogue and STYLE whole.`);
+  return prompt;
+}
+
+/** An object cast member's name with an article: "the CABLE TRAM", and "THE PHONE" as it is. */
 function objectName(name: string): string {
   return /^the\s/i.test(name) ? name : `the ${name}`;
 }
@@ -1187,15 +1238,15 @@ function buildShotListMontagePrompt(
   const references: string[] = [];
   for (const slot of plan.slots) {
     if (slot.kind !== 'character-primary') {
-      // Not tag-substituted: a place name can contain a cast name ("Harbour Ferry Landing").
+      // Not tag-substituted: a place name can contain a cast name ("Cable Tram Stop").
       references.push(`@Image${slot.imageIndex} ${slot.roleClause}.`);
       continue;
     }
     const char = series.characters.find(c => c.name.toUpperCase() === slot.label.toUpperCase());
     if (!char) continue;
     if (isObjectCastMember(char)) {
-      const text = `${char.name} ${char.description ?? ''}`;
-      const vehicle = WATER_VEHICLE.test(text) ? 'boats' : LAND_VEHICLE.test(text) ? 'vehicles' : null;
+      const kind = objectVehicleKind(char.name, char.description || char.fullDescription);
+      const vehicle = kind === 'water' ? 'boats' : kind === 'land' ? 'vehicles' : null;
       references.push(`@Image${slot.imageIndex} is ${objectName(char.name)}, an object, not a person — match its exact shape, materials, colours and marks in every shot it appears in.`
         + (vehicle ? ` Exactly one ${char.name.replace(/^the\s+/i, '')} in this scene, and no other ${vehicle}: the same one in every shot it appears in.` : ''));
       continue;
@@ -1283,25 +1334,11 @@ function buildShotListMontagePrompt(
   parts.push(`Negative: ${['warped face, melting fingers, on-screen text, dissolves', ...shotNegatives].join(', ')}.`);
 
   // Seedance 2.5 takes long prompts (12k characters quote fine); a run across
-  // places carries a line per place image, so the guard is 8000. Past it, the
-  // shot prose shrinks by one ratio but never below 40% of itself, and the
-  // STYLE tail is never cut off.
-  let prompt = parts.join('\n').trim();
-  const LIMIT = 8000;
-  if (prompt.length > LIMIT) {
-    const trimmable = shotLines.reduce((sum, line) => sum + line.desc.length + line.blocking.length, 0);
-    const ratio = Math.max(0.4, (trimmable - (prompt.length - LIMIT) - 8 * shotLines.length) / Math.max(1, trimmable));
-    const shrink = (text: string) => {
-      if (!text) return text;
-      const keep = Math.floor(text.length * ratio);
-      return keep >= text.length ? text : `${text.slice(0, keep).replace(/\s+\S*$/, '').replace(/[,;:]\s*$/, '')}…`;
-    };
-    for (const line of shotLines) parts[line.index] = renderShot(line, shrink(line.desc), shrink(line.blocking));
-    const before = prompt.length;
-    prompt = parts.join('\n').trim();
-    console.warn(`  Montage prompt is ${before} chars (guard: ${LIMIT}). Shrank shot prose by ${Math.round((1 - ratio) * 100)}% to ${prompt.length}; references, dialogue and STYLE kept whole.`);
-    if (prompt.length > LIMIT) console.warn(`  Still ${prompt.length} chars: sent whole (Seedance 2.5 takes up to about 12k). Consider fewer shots in this unit.`);
-  }
+  // places carries a line per place image, so the guard is 8000, under the
+  // model's hard cap (montagePromptCap). Past it, the shot prose shrinks
+  // (fitMontageProse), and the STYLE tail is never cut off.
+  const cap = montagePromptCap(modelId);
+  const prompt = fitMontageProse(parts, shotLines, renderShot, { guard: Math.min(8000, cap), cap, unitId: unit.unitId });
 
   return {
     prompt,
