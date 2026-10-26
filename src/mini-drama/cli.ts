@@ -3359,7 +3359,7 @@ program
     }
     const {
       detectHeadGlitch, frameLuma, ffprobeDurationSec, sampleUnitFrames,
-      checkUnitIdentity, checkCrossUnitIdentity, saveVideoQaReport,
+      checkUnitIdentity, checkCrossUnitIdentity, saveVideoQaReport, isLocationChange,
     } = await import('./video-qa.js');
 
     const units = plan.units.filter(u => existsSync(join(sceneDir, u.outputFile)));
@@ -3378,7 +3378,9 @@ program
     if (headGlitches.length === 0) console.log('  ✓ no head-glitch flashes detected');
 
     const boundaries: import('./video-qa.js').BoundaryFinding[] = [];
+    let locationCuts = 0;
     for (let i = 1; i < units.length; i++) {
+      if (isLocationChange(units[i - 1], units[i], script.shots)) { locationCuts++; continue; }
       const prevPath = join(sceneDir, units[i - 1].outputFile);
       const nextPath = join(sceneDir, units[i].outputFile);
       const prevLuma = frameLuma(prevPath, Math.max(ffprobeDurationSec(prevPath) - 0.2, 0));
@@ -3394,6 +3396,7 @@ program
       }
     }
     if (boundaries.length === 0) console.log('  ✓ no boundary lighting jumps');
+    if (locationCuts > 0) console.log(`  · ${locationCuts} join(s) change location (a scene cut, so light may change): not compared`);
 
     // ---- Layer 2: vision ----
     let unitIdentity: import('./video-qa.js').UnitIdentityResult[] = [];

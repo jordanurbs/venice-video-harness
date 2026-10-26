@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- **`qa-videos` on a 1080p montage episode.** Frames and reference sheets went
+  to the vision model as full-size PNGs, and four of thirteen calls came back
+  HTTP 413 (one of them the cross-unit identity check, so the run could not
+  pass). Images now go at most 1024 px on the long edge, as JPEG
+  (`visionDataUri`). In montage mode every unit join is a change of location,
+  so the boundary-luma check flagged eight "critical" jumps that were ordinary
+  scene cuts; a join whose two sides are tagged with different locations is
+  now skipped and counted (`isLocationChange`). Test:
+  `tests/video-qa-vision-input.test.mjs`.
 - **Video registry corrections checked against `/video/quote` (drift issue
   #50).** Quote is free and validates `duration` and `resolution` with the
   same enum errors as the queue, so each change below rests on it plus the

@@ -179,7 +179,38 @@ export function frameLuma(videoPath: string, atSec: number): number | undefined 
 // Vision layer
 // ---------------------------------------------------------------------------
 
-const toDataUri = (p: string) => `data:image/png;base64,${readFileSync(p).toString('base64')}`;
+/** Longest edge of an image sent to the vision model. Full 1080p PNGs (and 4K sheets) overflow the request: HTTP 413. */
+export const VISION_MAX_EDGE = 1024;
+
+/** An image as a data URI for the vision model: scaled to VISION_MAX_EDGE and JPEG-encoded, or the raw file if ffmpeg fails. */
+export function visionDataUri(p: string): string {
+  const r = spawnSync('ffmpeg', [
+    '-v', 'error', '-i', p,
+    '-vf', `scale='min(${VISION_MAX_EDGE},iw)':'min(${VISION_MAX_EDGE},ih)':force_original_aspect_ratio=decrease`,
+    '-frames:v', '1', '-q:v', '3', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1',
+  ], { maxBuffer: 64 * 1024 * 1024 });
+  if (r.status === 0 && r.stdout && r.stdout.length > 0) {
+    return `data:image/jpeg;base64,${Buffer.from(r.stdout).toString('base64')}`;
+  }
+  return `data:image/png;base64,${readFileSync(p).toString('base64')}`;
+}
+
+const toDataUri = visionDataUri;
+
+/**
+ * True when two consecutive units meet at a change of location. In montage mode every unit is one location, so a
+ * join is a scene cut and a change of light there is expected, not a continuity fault.
+ */
+export function isLocationChange(
+  prev: { shotNumbers: number[] },
+  next: { shotNumbers: number[] },
+  shots: Array<{ shotNumber: number; location?: string }>,
+): boolean {
+  const loc = new Map(shots.map(s => [s.shotNumber, s.location]));
+  const a = loc.get(prev.shotNumbers[prev.shotNumbers.length - 1]);
+  const b = loc.get(next.shotNumbers[0]);
+  return Boolean(a && b && a !== b);
+}
 
 interface PlanUnitLike {
   unitId: string;
