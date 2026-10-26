@@ -160,12 +160,14 @@ export interface VideoModelDefaults {
   /**
    * Montage-first generation (Seedance 2.5 branch default: `true`). When on,
    * the planner groups each scene's consecutive beats into ONE long
-   * single-pass generation (up to 30s on Seedance 2.5) prompted with a
-   * timestamped SEQUENCE beat list (the "Make a full trailer with
-   * Seedance 2.5" grammar), then the montage cutter slices the render at
-   * every beat boundary into per-shot clips organized in the episode's
-   * `media-library/scene-NN/` directory. Set `false` to fall back to the
-   * 2.0-era per-shot / 15s multi-shot planning.
+   * single-pass generation (up to 30s on Seedance 2.5) prompted with a shot
+   * list (see `montageGrammar`). A scene is a run of shots at one location,
+   * or, with the shot-list grammar, a run joined by
+   * `continuity.from: 'continuous'` across locations. The montage cutter then
+   * slices the render at every beat boundary (snapped to the detected cut)
+   * into per-shot clips organized in the episode's `media-library/scene-NN/`
+   * directory. Set `false` to fall back to the 2.0-era per-shot / 15s
+   * multi-shot planning.
    */
   montageMode?: boolean;
   /**
@@ -179,6 +181,39 @@ export interface VideoModelDefaults {
    * into multiple montage units.
    */
   montageMaxDurationSec?: number;
+  /**
+   * Montage prompt grammar (see `resolveMontageGrammar`).
+   *   - `shots` (default): "Shot N | a-bs | <place>:" lines joined by
+   *     "Cut to", references in the order they first appear, an abrupt-cut
+   *     line. A run joined by `continuity.from: 'continuous'` stays one
+   *     generation across a change of location, and a continuous insert rides
+   *     in its run.
+   *   - `sequence`: the timestamped SEQUENCE grammar ("fast-cut montage, cut
+   *     it yourself") with its grouping and references: one location per
+   *     generation, inserts as singles, the scene's first shot's reference
+   *     stack. Scripts with `continuity` group exactly as they did before it
+   *     existed.
+   * In a 31-render continuity bakeoff (Seedance 2.5 R2V, 720p), every planned
+   * cut of every `shots` render landed as a hard cut (25 of 25, within
+   * 0.55 s), while the `sequence` prompt added cuts nobody asked for.
+   */
+  montageGrammar?: 'shots' | 'sequence';
+  /**
+   * Location references a shot-list montage unit sends when its shots name
+   * the view they are staged on (`plateView`).
+   *   - `staged` (default): only the view each shot is staged on (its
+   *     `plateView`, else the first plate on disk), one primary reference per
+   *     cast member.
+   *   - `all`: also the other canonical views of each place in the unit and
+   *     the cast's second angles, in first-appearance order. It adds no
+   *     custom angles and is not the old plan.
+   * A unit where no shot names a `plateView` (every script written before
+   * the field existed) sends what a montage always sent, whatever this says:
+   * every view of its location, custom angles and second angles. In the
+   * bakeoff, sending all the views of two places put one place's action on
+   * the plate of the other.
+   */
+  montageReferenceViews?: 'staged' | 'all';
   /**
    * What happens to a montage render after the cutter has sliced it:
    *   - `true`  — auto-edit: the harness also assembles the cut shots into
@@ -508,8 +543,27 @@ export interface Character {
   voiceReferencePath?: string;
   /** Model that produced the voice reference (e.g. `seed-audio-1-0`), or `user-supplied`. */
   voiceReferenceModel?: string;
+  /**
+   * The cast member is an object (a prop with a locked design: a red
+   * umbrella, a ledger, a recurring tram), not a person. Its reference slot asks the
+   * video model to match shape, materials, colours and marks instead of face,
+   * hair and wardrobe. Object cast members the workshop or the Cast tab make
+   * are recognised from `baseTraits` alone ("inanimate object, prop; ..."), so
+   * set this for one whose traits say otherwise. See `isObjectCastMember`.
+   */
+  prop?: boolean;
   locked: boolean;
   seed: number;
+}
+
+/**
+ * An object cast member: a recurring prop cast like a person (RECURRING PROPS
+ * ARE CAST), flagged `prop`, or with traits that start "inanimate object". It
+ * gets product-plate reference sheets, object role clauses, and stays out of
+ * location plates.
+ */
+export function isObjectCastMember(character: Pick<Character, 'prop' | 'baseTraits'>): boolean {
+  return character.prop === true || /^\s*inanimate object/i.test(character.baseTraits ?? '');
 }
 
 // ---------------------------------------------------------------------------
@@ -935,6 +989,8 @@ export type EndFrameStrategy = 'natural' | 'next-panel-target';
 
 export interface GenerationUnitSegment {
   shotNumber: number;
+  /** A suffixed insert's suffix ("b" for 13b), which shares its base shot's number. */
+  shotIdSuffix?: string;
   startOffsetSec: number;
   durationSec: number;
   outputFile: string;
@@ -943,12 +999,15 @@ export interface GenerationUnitSegment {
 /**
  * A montage unit's planned beat: one shot's window inside the single
  * 30-second Seedance 2.5 generation. `startSec`/`endSec` are the timestamps
- * written into the prompt's SEQUENCE block (`[0:03-0:05] ...`) and are ALSO
- * the cut points the montage cutter uses afterwards — the prompt and the
- * edit can never disagree because they come from the same list.
+ * written into the prompt (`Shot 2 | 5-9s | ...` in the shot list,
+ * `[0:05-0:09] ...` in the SEQUENCE grammar) and are ALSO the planned cut
+ * points the montage cutter starts from afterwards (it snaps each one to the
+ * detected cut nearby) — the prompt and the edit come from the same list.
  */
 export interface MontageBeat {
   shotNumber: number;
+  /** A suffixed insert's suffix ("b" for 13b): its clip is `shot-013b.mp4`, not its base shot's. */
+  shotIdSuffix?: string;
   startSec: number;
   endSec: number;
 }
@@ -1049,9 +1108,11 @@ export function resolveMultiShotModel(videoDefaults?: Pick<VideoModelDefaults, '
 //
 // Seedance 2.5 R2V renders up to 30s in a single pass with up to 30 image
 // references, so a whole scene of beats renders as ONE generation prompted
-// with a timestamped SEQUENCE list ("[0:03-0:05] macro on the ignition ...")
-// — the "Make a full trailer with Seedance 2.5" grammar. The montage cutter
-// then slices the render at the same timestamps into per-shot clips.
+// with a shot list ("Shot 2 | 5-9s | <place>: ...", the default) or the
+// timestamped SEQUENCE list ("[0:03-0:05] macro on the ignition ..."), the
+// "Make a full trailer with Seedance 2.5" grammar. The montage cutter then
+// slices the render at the planned timestamps, snapped to the detected cuts,
+// into per-shot clips.
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_MONTAGE_MODEL = 'seedance-2-5-reference-to-video';
@@ -1067,6 +1128,23 @@ export function resolveMontageMode(
   videoDefaults?: Pick<VideoModelDefaults, 'montageMode'>,
 ): boolean {
   return videoDefaults?.montageMode !== false;
+}
+
+/**
+ * Montage prompt grammar: the shot list (default) or the SEQUENCE fallback,
+ * which also brings back the SEQUENCE-era grouping and references.
+ */
+export function resolveMontageGrammar(
+  videoDefaults?: Pick<VideoModelDefaults, 'montageGrammar'>,
+): 'shots' | 'sequence' {
+  return videoDefaults?.montageGrammar === 'sequence' ? 'sequence' : 'shots';
+}
+
+/** Location views a shot-list montage unit sends: staged views (default) or all of them. */
+export function resolveMontageReferenceViews(
+  videoDefaults?: Pick<VideoModelDefaults, 'montageReferenceViews'>,
+): 'staged' | 'all' {
+  return videoDefaults?.montageReferenceViews === 'all' ? 'all' : 'staged';
 }
 
 /**

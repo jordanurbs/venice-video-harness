@@ -34,6 +34,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile, rename } from 'node:fs/promises';
 import type { VeniceClient } from '../venice/client.js';
 import type { Location, SeriesState } from 'venice-video-harness/core/series/types.js';
+import { isObjectCastMember } from 'venice-video-harness/core/series/types.js';
 import { getLocationDir } from '../series/manager.js';
 import { generateImage } from '../venice/generate.js';
 import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
@@ -249,7 +250,7 @@ export async function generateLocationReferences(
   // look-alike when the real reference is composited per shot. Locations are
   // empty stages; hero props enter per shot via their own references.
   const objectCastNouns = (series.characters ?? [])
-    .filter(c => /^\s*inanimate object/i.test(c.baseTraits ?? ''))
+    .filter(isObjectCastMember)
     .map(c => c.name.replace(/^THE\s+/i, '').toLowerCase().trim())
     .filter(Boolean);
   const cleanPlateClause = objectCastNouns.length > 0

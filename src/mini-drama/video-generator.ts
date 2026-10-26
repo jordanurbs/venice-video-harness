@@ -46,7 +46,7 @@ import {
   VOICE_REF_MIN_SEC,
   VOICE_REF_MAX_SEC,
 } from './voice-reference.js';
-import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
+import { mustRenderAsExactLipSync, parseShotDuration, resolveUnitShots } from './generation-planner.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
 import { getVideoModel, modelSupportsDuration, resolveBitrateMode, validateCameraTrajectory, type BitrateMode } from 'venice-video-harness/core/venice/models.js';
 import type { CameraKeyframe } from 'venice-video-harness/core/venice/types.js';
@@ -1436,6 +1436,89 @@ function getShotVideoPath(sceneDir: string, shotId: number | string): string {
   return join(sceneDir, `shot-${shotKey(shotId)}.mp4`);
 }
 
+/**
+ * The clip files a unit's render writes, in shot order. A single and a
+ * montage write each shot's own clip, keyed with an insert's suffix
+ * ("shot-013b.mp4"; a single's `outputFile` does not carry the suffix), so an
+ * insert riding in its base shot's montage gets its own file. Multi-shot units
+ * cut their clips by shot number.
+ */
+function unitClipPaths(sceneDir: string, unit: Pick<GenerationUnit, 'unitType'>, shots: ShotScript[]): string[] {
+  const suffixed = unit.unitType === 'single' || unit.unitType === 'montage';
+  return shots.map(shot => getShotVideoPath(sceneDir, suffixed ? resolveDialogueShotId(shot) : shot.shotNumber));
+}
+
+/**
+ * Archive a unit's rendered outputs (a montage or multi-shot unit's master and
+ * every clip cut from it, or a single's clip) so the next render of the unit
+ * starts fresh. Files are renamed to `-vN`, never deleted. `shots` are the
+ * unit's shots as `resolveUnitShots` matched them. Returns the archived paths.
+ */
+export function archiveUnitOutputs(
+  sceneDir: string,
+  unit: Pick<GenerationUnit, 'unitType' | 'outputFile'>,
+  shots: ShotScript[],
+): string[] {
+  const master = unit.unitType === 'single' ? [] : [join(sceneDir, unit.outputFile)];
+  const archived: string[] = [];
+  for (const path of new Set([...master, ...unitClipPaths(sceneDir, unit, shots)])) {
+    if (!existsSync(path)) continue;
+    archiveExisting(path);
+    archived.push(path);
+  }
+  return archived;
+}
+
+/**
+ * Archive the outputs of the units a re-take renders (`generate-videos
+ * --retake`; `indices` are plan positions from `unitIndicesForShots`). The
+ * duration preflight runs first, so a run that would stop before rendering
+ * leaves every clip where it was. Returns the archived paths.
+ */
+export function archiveRetakeUnits(sceneDir: string, shots: ShotScript[], plan: GenerationPlan, indices: number[]): string[] {
+  assertShotDurationsValid(shots, plan);
+  const unitShots = resolveUnitShots(plan, shots);
+  return indices.flatMap(index => archiveUnitOutputs(sceneDir, plan.units[index], unitShots[index]));
+}
+
+/**
+ * Take a montage or multi-shot unit's existing cut clips as its output:
+ * segments laid end to end from the clips' durations, and the rendered length
+ * from the master when it is on disk (else the sum of the clips).
+ */
+function adoptCutClips(unit: GenerationUnit, shots: ShotScript[], clipPaths: string[], masterPath: string): string[] {
+  let offset = 0;
+  unit.segments = clipPaths.map((path, index) => {
+    const durationSec = getVideoDuration(path);
+    const segment: GenerationUnitSegment = {
+      shotNumber: shots[index].shotNumber,
+      ...(shots[index].shotIdSuffix ? { shotIdSuffix: shots[index].shotIdSuffix } : {}),
+      startOffsetSec: Number(offset.toFixed(3)),
+      durationSec: Number(durationSec.toFixed(3)),
+      outputFile: basename(path),
+    };
+    offset += durationSec;
+    return segment;
+  });
+  unit.renderedDurationSec = Number((existsSync(masterPath) ? getVideoDuration(masterPath) : offset).toFixed(3));
+  return clipPaths;
+}
+
+/**
+ * A unit a re-take leaves alone: report the clips it already has (they feed
+ * a chained unit's start frame and the saved plan's segments) without
+ * rendering anything. Returns no paths when its clips are not all on disk.
+ */
+function adoptExistingOutputs(unit: GenerationUnit, shots: ShotScript[], sceneDir: string): string[] {
+  const clipPaths = unitClipPaths(sceneDir, unit, shots);
+  if (!clipPaths.every(path => existsSync(path))) return [];
+  if (unit.unitType !== 'single') return adoptCutClips(unit, shots, clipPaths, join(sceneDir, unit.outputFile));
+  const durationSec = getVideoDuration(clipPaths[0]);
+  unit.renderedDurationSec = durationSec;
+  unit.segments = [{ shotNumber: shots[0].shotNumber, startOffsetSec: 0, durationSec, outputFile: basename(clipPaths[0]) }];
+  return clipPaths;
+}
+
 function chooseAnchorImagePath(
   unit: GenerationUnit,
   sceneDir: string,
@@ -1939,10 +2022,18 @@ async function renderMultiShotUnit(
 
 /**
  * Render a montage unit: ONE single-pass generation (Seedance 2.5, up to 30s)
- * prompted with the timestamped SEQUENCE beat list, then cut at the same
- * timestamps into per-shot clips — canonical `shot-NNN.mp4` files for the
- * assembler AND organized copies in `media-library/scene-NN/` (with the
- * uncut master and a manifest) for hand editing / the Venice Video Creator.
+ * prompted with the unit's shot list (or the SEQUENCE beat list), then cut at
+ * the planned timestamps, snapped to the detected cuts, into per-shot clips —
+ * canonical `shot-NNN.mp4` files for the assembler AND organized copies in
+ * `media-library/scene-NN/` (with the uncut master and a manifest) for hand
+ * editing / the Venice Video Creator.
+ *
+ * A unit whose clips are all on disk is skipped, even when no master carries
+ * its name: the master is named after the scene and the first and last shot,
+ * so a change in grouping (a script that gains `continuity` merges places and
+ * renumbers later scenes) renames units whose shots did not change. Rendering
+ * them again would bill them again; `generate-videos --retake` does that on
+ * purpose. (Moving a master aside by hand no longer forces a re-render.)
  */
 async function renderMontageUnit(
   client: VeniceClient,
@@ -1951,26 +2042,19 @@ async function renderMontageUnit(
   unit: GenerationUnit,
   sceneDir: string,
 ): Promise<string[]> {
-  const shotOutputPaths = shots.map(shot => getShotVideoPath(sceneDir, shot.shotNumber));
+  const shotOutputPaths = unitClipPaths(sceneDir, unit, shots);
   const episodeDir = dirname(sceneDir);
   const unitOutputPath = join(sceneDir, unit.outputFile);
 
-  if (existsSync(unitOutputPath) && shotOutputPaths.every(path => existsSync(path))) {
-    console.log(`  ${unit.unitId}: montage master and shot cuts exist, skipping`);
-    let offset = 0;
-    unit.segments = shotOutputPaths.map((path, index) => {
-      const durationSec = getVideoDuration(path);
-      const segment: GenerationUnitSegment = {
-        shotNumber: shots[index].shotNumber,
-        startOffsetSec: Number(offset.toFixed(3)),
-        durationSec: Number(durationSec.toFixed(3)),
-        outputFile: `shot-${shotKey(shots[index].shotNumber)}.mp4`,
-      };
-      offset += durationSec;
-      return segment;
-    });
-    unit.renderedDurationSec = Number(getVideoDuration(unitOutputPath).toFixed(3));
-    return shotOutputPaths;
+  if (shotOutputPaths.every(path => existsSync(path))) {
+    if (existsSync(unitOutputPath)) {
+      console.log(`  ${unit.unitId}: montage master and shot cuts exist, skipping`);
+    } else {
+      const episode = /episode-(\d+)$/.exec(basename(episodeDir))?.[1];
+      console.log(`  ${unit.unitId}: shot cuts exist, skipping (no ${unit.outputFile} on disk; the cuts are kept and nothing is billed).`);
+      console.log(`    To render shots ${shots.map(shot => resolveDialogueShotId(shot)).join(', ')} again as one generation: generate-videos -p ${series.outputDir} -e ${episode ? Number(episode) : '<episode>'} --retake ${[...new Set(unit.shotNumbers)].join(',')}`);
+    }
+    return adoptCutClips(unit, shots, shotOutputPaths, unitOutputPath);
   }
 
   const prompt = buildMontagePrompt(shots, unit, series);
@@ -2011,12 +2095,12 @@ async function renderMontageUnit(
     project: series.outputDir,
   });
 
-  // Cut at the planned beat boundaries — the same timestamps the prompt's
-  // SEQUENCE block declared.
+  // Cut at the beat boundaries — the same timestamps the prompt declared,
+  // each snapped to the cut the model actually made near it.
   const { shotPaths, libraryPaths, segments } = cutMontageIntoShots({
     montagePath: savedUnitPath,
     unit,
-    shotsByNumber: new Map(shots.map(shot => [shot.shotNumber, shot])),
+    shots,
     sceneDir,
     episodeDir,
     archiveExisting,
@@ -2024,7 +2108,7 @@ async function renderMontageUnit(
   console.log(`  Media library: ${libraryPaths.length} cut(s) + master → ${join(episodeDir, 'media-library', `scene-${String(unit.sceneNumber ?? 1).padStart(2, '0')}`)}`);
 
   for (const segment of segments) {
-    const shot = shots.find(item => item.shotNumber === segment.shotNumber);
+    const shot = shots.find(item => item.shotNumber === segment.shotNumber && (item.shotIdSuffix ?? '') === (segment.shotIdSuffix ?? ''));
     if (!shot) continue;
     await saveSingleShotMetadata(series, shot, join(sceneDir, segment.outputFile), {
       ...prompt,
@@ -2217,6 +2301,16 @@ export interface GenerateEpisodeVideosOptions {
    * renders one unit at a time in plan order.
    */
   concurrency?: number;
+  /**
+   * Render only the units at these positions in `plan.units` (a re-take:
+   * `unitIndicesForShots`). Every other unit is left as it is and never
+   * rendered, even when its clips are missing; the clips it has still give a
+   * chained unit its start frame and the returned plan its segments. Pass the
+   * whole plan, not the selected units: shots are matched to units in plan
+   * order. Positions, not unit ids: an insert's single shares its base
+   * shot's id.
+   */
+  onlyUnits?: ReadonlySet<number>;
 }
 
 interface PreparedUnit {
@@ -2235,6 +2329,8 @@ interface PreparedUnit {
  * every other unit renders from its own panel or references and does not wait.
  * After a failure no further unit starts, and units already queued (Venice has
  * billed them) are polled to completion before the first error is rethrown.
+ * With `options.onlyUnits`, only those units render; the returned plan is the
+ * whole plan, with the others' segments read from their clips on disk.
  */
 export async function generateEpisodeVideos(
   client: VeniceClient,
@@ -2256,23 +2352,12 @@ export async function generateEpisodeVideos(
   // Suffixed inserts ("13b") share their base shotNumber, so a Map keyed by
   // shotNumber collapses "13" and "13b" onto one entry and the base shot is
   // silently skipped as "video exists" (the insert's video). The plan is
-  // built from `shots` in order with each shot in exactly one unit, so we
-  // resolve unit shots with a sequential cursor instead; the Map remains
-  // only as a fallback for hand-edited plans.
-  const shotsByNumber = new Map(shots.map(shot => [shot.shotNumber, shot]));
-  let shotCursor = 0;
+  // built from `shots` in order with each shot in exactly one unit, so
+  // resolveUnitShots matches unit shots with a sequential cursor instead.
+  const unitShotLists = resolveUnitShots(plan, shots);
   let previousShot: ShotScript | undefined;
   const prepared: PreparedUnit[] = plan.units.map((unit, unitIndex) => {
-    const unitShots = unit.shotNumbers
-      .map(shotNumber => {
-        const candidate = shots[shotCursor];
-        if (candidate && candidate.shotNumber === shotNumber) {
-          shotCursor += 1;
-          return candidate;
-        }
-        return shotsByNumber.get(shotNumber);
-      })
-      .filter((shot): shot is ShotScript => Boolean(shot));
+    const unitShots = unitShotLists[unitIndex];
     const entry: PreparedUnit = {
       unit,
       shots: unitShots,
@@ -2283,11 +2368,13 @@ export async function generateEpisodeVideos(
     return entry;
   });
 
-  const total = prepared.length;
+  // A re-take renders only the selected units; the rest report what they have.
+  const selected = (index: number): boolean => !options.onlyUnits || options.onlyUnits.has(index);
+  const total = prepared.filter((_, index) => selected(index)).length;
   const concurrency = Math.min(requested, Math.max(1, total));
   const parallel = concurrency > 1;
   if (parallel) {
-    const chained = prepared.filter(p => p.unit.startFrameStrategy === 'previous-last-frame').length;
+    const chained = prepared.filter((p, index) => selected(index) && p.unit.startFrameStrategy === 'previous-last-frame').length;
     console.log(`Rendering up to ${concurrency} units at once`
       + `${chained > 0 ? ` (${chained} start from the previous clip's last frame and wait for it)` : ''}.\n`);
   }
@@ -2310,12 +2397,13 @@ export async function generateEpisodeVideos(
 
   let failure: { error: unknown } | undefined;
   let finished = 0;
+  let started = 0;
   // Keyed by plan position: a suffixed insert ("13b") shares its base shot's unit id.
   const inProgress = new Map<number, string>();
 
   // Feeds the shell's `/jobs` view, so a backgrounded episode render reports
   // which units are under way instead of only whatever the latest poll said.
-  const reportUnits = (index: number): void => {
+  const reportUnits = (index: number, position: number): void => {
     reportProgress(parallel
       ? {
         phase: 'render',
@@ -2325,9 +2413,9 @@ export async function generateEpisodeVideos(
       }
       : {
         phase: 'render',
-        current: index + 1,
+        current: position,
         total,
-        detail: `unit ${index + 1}/${total} · shot ${prepared[index].shots[0].shotNumber}`,
+        detail: `unit ${position}/${total} · shot ${prepared[index].shots[0].shotNumber}`,
       });
   };
 
@@ -2364,11 +2452,21 @@ export async function generateEpisodeVideos(
   // started before it waits on them; nothing can wait on a unit not yet taken.
   let next = 0;
   const worker = async (): Promise<void> => {
-    while (next < total && !failure) {
+    while (next < prepared.length && !failure) {
       const index = next++;
       const { unit, shots: unitShots } = prepared[index];
       if (unitShots.length === 0) {
         resolvers[index]([]);
+        continue;
+      }
+      if (!selected(index)) {
+        let existing: string[] = [];
+        try {
+          existing = adoptExistingOutputs(unit, unitShots, sceneDir);
+        } catch (error) {
+          console.warn(`  ${unit.unitId}: could not read its clips (${(error as Error).message}); left as it is.`);
+        }
+        resolvers[index](existing);
         continue;
       }
 
@@ -2381,7 +2479,7 @@ export async function generateEpisodeVideos(
       }
 
       inProgress.set(index, unit.unitId);
-      reportUnits(index);
+      reportUnits(index, ++started);
       try {
         const paths = parallel
           ? await runWithLinePrefix(`[${unit.unitId}] `, () => renderUnit(index, previousRenderedShotPath))

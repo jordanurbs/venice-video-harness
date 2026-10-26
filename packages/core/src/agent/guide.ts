@@ -78,6 +78,8 @@ export const AGENT_GUIDE: readonly GuideSection[] = [
       'State placement explicitly in every prompt: lock each location\'s landmark geography (spatialAnchors) and give every character shot a blocking field (position vs named anchors, screen side, depth, facing/eyeline). Keep screen sides and eyelines constant across a scene unless a movement is scripted.',
       'The plate is the stage: the video model draws what a location plate shows, not what the shot text asks. Every shot names its plateView (the view it is staged on) and stagedOn, plus continuity (from: continuous / later / new-scene, and the endState). On a location whose plates are fixed, the workshop plan check blocks a shot whose action touches something the plates cannot show (by default only a shot on an unknown location blocks); it re-plans once, and workshop --approve refuses blocks or unread plates without --force.',
       'Prefer native model dialogue (Seedance 2.0, HappyHorse 1.1 with voice-donor references) over exact TTS lip-sync.',
+      'Keep a continuous run in ONE generation and cut it afterwards: mark its shots continuity.from "continuous" and the montage planner keeps them together even across a change of place. One generation holds the vehicle, the props and the facing across cuts; separate generations swap them. With plateView set, a montage sends only each shot\'s staged view of a place, not all four. Write a state change into the shot (the doors close, the vehicle pulls away) or split there, because one generation carries the first plate\'s state forward.',
+      'Re-take whole units, never one shot of a continuous run: `generate-videos --retake <shots>` re-renders the unit that holds them and cuts it again, and renders nothing else.',
     ],
   },
   {
