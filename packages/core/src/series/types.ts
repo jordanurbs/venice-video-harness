@@ -1564,6 +1564,10 @@ export const MODELS_USING_IMAGE_TAGS = new Set([
   // the prompt's @Image1/@Image2 assignments). NOTE: quote did NOT reject a
   // 10th ref, but we keep the documented 9-image budget.
   'happyhorse-1-1-reference-to-video',
+  // Wan 3.0 R2V honors @ImageN tags with no start frame — paid 480p probe
+  // 2026-10-26: two characters plus a location plate, each tagged character
+  // landed on the screen side the prompt gave its @ImageN.
+  'wan-3-0-reference-to-video',
   // Drift triage 2026-10-06: twins / tier variants of lanes above (see models.ts).
   'grok-imagine-1-5-reference-to-video-private',
   'grok-imagine-reference-to-video-private',

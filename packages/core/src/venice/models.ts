@@ -325,6 +325,12 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   //     here so the aspect pre-flight has real values to compare against.
   //   - Reference images need a short side ≥ 240px.
   //   - `wan-3-0-enhanced-*` are flagged beta by Venice.
+  //   - R2V binds @ImageN prompt tags in pure reference mode (probe 2026-10-26).
+  //   - Every Wan 3.0 R2V lane (base, enhanced, prime, pro) refuses a reference
+  //     image of a well-known animated character (probe 2026-10-26: a
+  //     photoreal Shrek sheet). Queue accepts the job; retrieve then fails with
+  //     "provider-side error. Credits have been refunded." The character's
+  //     name in the prompt text alone renders.
   //   - Cost reference: ~$0.55 per 5s clip at 720p (quote, 2026-08-05).
   {
     id: 'wan-3-0-text-to-video', name: 'Wan 3.0', type: 'text-to-video',

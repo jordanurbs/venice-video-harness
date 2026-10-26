@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- **Wan 3.0 R2V uses `@Image` tags and pure reference mode.** A 2026-10-26
+  paid probe (two characters and a location plate, 480p 5s) placed each
+  tagged character on the screen side its `@ImageN` was given, with no start
+  frame. `wan-3-0-reference-to-video` joins `MODELS_USING_IMAGE_TAGS`, so its
+  character shots get the same slot plan and tag grammar as Seedance and no
+  longer send a panel as `image_url`. The same day's probes found that every
+  Wan 3.0 R2V lane (base, enhanced, prime, pro) refuses a reference image of
+  a well-known animated character: queue accepts, retrieve fails as a
+  refunded "provider-side error". The name in the prompt text alone renders.
+  Noted in the registry. Test: `tests/wan3-image-tags.test.mjs`.
+
 ### Fixed
 
 - **An over-long SEQUENCE montage prompt no longer loses its STYLE tail.**
