@@ -133,9 +133,16 @@ export function buildReferenceSlotPlan(
     });
   }
 
+  // A staged plate (stage-ref) for the shot: see tier 3.
+  const staged = stagedPlate(series, shot);
+
   // --- Tier 2: storyboard blocking plate (PROTECTED) ---
+  // Not for a staged shot: the blocking plate was composed on the plate
+  // before the edit, so it would bring back what the edit removed.
   const storyboard: CandidateSlot[] = [];
-  if (shot.storyboardRef) {
+  if (shot.storyboardRef && staged) {
+    dropped.push(`storyboard ref "${shot.storyboardRef}" (the shot's staging ref replaces it)`);
+  } else if (shot.storyboardRef) {
     const sbPath = getStoryboardRefPath(series, shot.storyboardRef);
     if (sbPath && existsSync(sbPath)) {
       storyboard.push({
@@ -159,7 +166,6 @@ export function buildReferenceSlotPlan(
   // A staged plate (stage-ref) leads the location slots and the view it was
   // edited from is not sent: the original would bring back what the edit
   // removed (a boat the plate shows where the shot needs another one).
-  const staged = stagedPlate(series, shot);
   const stagedLoc = shot.location ? getLocation(series, shot.location) : undefined;
   if (staged) {
     const where = stagedLoc

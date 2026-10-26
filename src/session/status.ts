@@ -12,6 +12,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getEpisodeDir, loadEpisodeScript, loadSeries } from '../series/manager.js';
+import { staleStagedShots } from '../mini-drama/staging.js';
 import type { EpisodeScript, SeriesState } from 'venice-video-harness/core/series/types.js';
 
 export interface EpisodeStatus {
@@ -26,6 +27,12 @@ export interface EpisodeStatus {
   videoQaReported: boolean;
   panelCount: number;
   videoCount: number;
+  /**
+   * Staged shots (stage-ref) with no clip from their current pick: a clip on
+   * disk from before the pick does not count as rendered (rule 45, the same
+   * check generate-videos and assemble-episode make).
+   */
+  stagedToRender: string[];
   hasMusic: boolean;
   dialogueCount: number;
   hasFinalCut: boolean;
@@ -100,6 +107,7 @@ function classifyEpisode(
     videoQaReported: existsSync(join(episodeDir, 'video-qa-report.json')),
     panelCount: countMatching(sceneDir, /^shot-\d+\.png$/),
     videoCount: countMatching(sceneDir, /^shot-\d+\.mp4$/),
+    stagedToRender: script ? staleStagedShots(series, script, sceneDir).map(item => item.shot) : [],
     hasMusic: existsSync(join(audioDir, 'music.mp3')),
     dialogueCount: countMatching(audioDir, /^dialogue-shot-\d+\.mp3$/),
     hasFinalCut: existsSync(join(episodeDir, `episode-${padded}-final.mp4`)),
@@ -130,7 +138,14 @@ function classifyEpisode(
     status.stage = status.videoCount === 0
       ? 'ready to render'
       : `rendering (${status.videoCount}/${status.shotCount} clips)`;
-    status.nextCommand = `generate-videos ${ref}`;
+    status.nextCommand = status.stagedToRender.length > 0
+      ? qualifyCommand(`generate-videos ${ref}`, series.outputDir)
+      : `generate-videos ${ref}`;
+  } else if (status.stagedToRender.length > 0) {
+    // A clip from before a pick is the defect the pick removes: it is neither
+    // verified nor assembled until the shot renders from the pick.
+    status.stage = `staged shot(s) ${status.stagedToRender.join(', ')} need rendering from their staging ref`;
+    status.nextCommand = qualifyCommand(`generate-videos ${ref}`, series.outputDir);
   } else if (!status.videoQaReported && !status.hasFinalCut) {
     status.stage = 'clips complete, unverified';
     status.nextCommand = `qa-videos ${ref}`;
@@ -232,6 +247,7 @@ export function formatProjectStatus(status: ProjectStatus, selectedEpisode?: num
       if (ep.shotCount > 0) {
         lines.push(
           `        ${ep.shotCount} shots · ${ep.panelCount} panels · ${ep.videoCount} clips`
+          + `${ep.stagedToRender.length > 0 ? ` · ${ep.stagedToRender.length} staged to render` : ''}`
           + `${ep.dialogueCount > 0 ? ` · ${ep.dialogueCount} dialogue` : ''}`
           + `${ep.hasMusic ? ' · music' : ''}`
           + `${ep.hasFinalCut ? ' · FINAL CUT' : ''}`,

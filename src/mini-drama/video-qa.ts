@@ -87,6 +87,12 @@ export interface VideoQaReport {
   boundaries: BoundaryFinding[];
   unitIdentity: UnitIdentityResult[];
   crossUnit: CrossUnitResult;
+  /**
+   * Units not checked because a staged shot in them (stage-ref) has no clip
+   * from its pick: checking the clip on disk would pass the defect the pick
+   * removes. They count as unchecked, so the report does not pass (rule 46).
+   */
+  notChecked?: Array<{ unitId: string; shots: string[]; reason: string }>;
   summary: {
     units: number;
     criticals: number;

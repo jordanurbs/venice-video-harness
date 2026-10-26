@@ -181,38 +181,60 @@
     rewrote lettering beside it and the other kept it. Each result keeps the
     source's aspect and gets provenance and recipe sidecars (rule 39), in
     `episodes/episode-NNN/staging/shot-NNN/<session>/` with a side-by-side
-    `pick.html`; a model that fails is recorded and the other result still
-    lands. `hasFace` is false only when the source and every `--ref` are
-    recorded face-free (or with `--no-face`), so a character sheet used as a
-    ref keeps the face checks (anti-pattern 31, rule 62) on.
+    `pick.html`. A model that fails is recorded and the other result still
+    lands, and each edit that lands is in the session file at once, so a later
+    failure never loses a paid candidate. `hasFace` is false only when the
+    source and every `--ref` are recorded face-free (or with `--no-face`), so a
+    character sheet used as a ref keeps the face checks (anti-pattern 31, rule
+    62) on.
   - A person picks (`--pick <n|model|file>`, or the terminal prompt; `--use`
-    can change the role). The pick becomes the shot's `stagingRef` (core type
-    `ShotStagingRef`). A `plate` leads the shot's R2V references (on Kling O3
-    R2V, its scene image) and the view it was edited from is not sent. A
-    `start-frame` re-generates the shot i2v on its family's image-to-video lane
-    (`imageToVideoTwin` in core), with no reference stack and without the
-    location's words. `--clear` and `--list` complete it.
+    can change the role). A hand-made pick is stored as PNG with its
+    provenance, and a candidate named by its file is that candidate. The pick
+    becomes the shot's `stagingRef` (core type `ShotStagingRef`). A `plate`
+    leads the shot's R2V references (on Kling O3 R2V, its scene image), the
+    view it was edited from and the storyboard blocking plate are not sent, and
+    the prompt says the image is right where the location's words differ. A
+    `start-frame` re-generates the shot i2v, with no reference stack and
+    without the location's words. `--clear` and `--list` complete it.
+  - A start-frame re-take stays in the lane's privacy tier (rule 46): the
+    family's image-to-video lane (`imageToVideoTwin` in core, for reference-
+    and text-to-video ids, and only within the tier), else the i2v lane of the
+    project's atmosphere or action model in that tier (`stagedFrameLane`).
+    With none the shot is refused; so is an exact lip-sync shot whose i2v lane
+    takes no dialogue audio.
   - A staged shot renders on its own: the pick sets `mustStaySingle`, and the
     planner keeps a staged shot out of every group. Its clip's `.video.json`
     records the pick's hash; a clip not made from the current pick is rendered
     again, and archived only when the new one lands.
-  - `generate-videos` refuses, before anything is billed or moved, a staged
-    shot it cannot render from its pick: the picked image is gone, a MiniMax
-    i2v lane with a frame that may show a face, or a plate pick on a lane that
-    sends no location reference. It lists each shot and why, exits non-zero and
-    does not mark the episode produced; `produce-episode` stops there.
-    `stage-ref` warns about such lanes when the pick is made, and prints the
-    generation units a pick (or a clear) changes: a pick inside a montage run
-    splits it, and the units around it get new names.
-  - A staged shot's pending job carries the pick's hash (`PendingJob.tag`). A
-    render queued before the pick is still re-attached, because it is paid for
-    (rule 43), but it is saved unmarked and reported, and the next run renders
-    the shot from the pick.
+  - `generate-videos` first collects a render already queued for a staged shot
+    (rule 43): one queued from the pick is the clip, one queued before it is
+    kept until the pick's render lands. Then it refuses, before anything is
+    billed or moved, a staged shot it cannot render from its pick: the picked
+    image is gone, no i2v lane in the tier, a MiniMax i2v lane with a frame
+    that may show a face, or a plate pick on a lane that sends no location
+    reference. A unit that starts from a refused shot's last frame waits too,
+    instead of starting from an older clip. It lists each shot and why, with
+    full commands, exits non-zero and does not mark the episode produced;
+    `produce-episode` stops there. `stage-ref` warns about such lanes when the
+    pick is made, and prints the generation units a pick (or a clear) changes:
+    a pick inside a montage run splits it, and the units around it get new
+    names.
+  - A stale staged clip gets no further (rule 45): `staleStagedShots` feeds
+    `status` (back to `generate-videos -p <project> -e <n>`), `qa-videos`
+    (the unit is not checked, so the report does not pass) and
+    `assemble-episode` (refused; `--force` assembles with a warning). The
+    montage cuts in `media-library/` stay as the archive; nothing reads them as
+    current.
+  - A staged shot's pending jobs, the clip and the keyframe pass of the
+    lip-sync keyframe pipeline, carry the pick's hash (`PendingJob.tag`); a
+    keyframe render queued from other inputs is collected and rendered again,
+    and the recipe of a render queued from other inputs says so instead of
+    recording the current ones.
   - Loop mode renders a shot as it was before a start-frame pick: it picks its
     own lanes, and routed through the pick a character shot would go i2v off
     its face panel, which MiniMax fails after billing.
   - Tests: `tests/stage-ref.test.mjs`, `tests/stage-ref-render.test.mjs`,
-    `tests/loop-engine.test.mjs`.
+    `tests/stage-ref-gates.test.mjs`, `tests/loop-engine.test.mjs`.
 - **The plan check reads what a plate image shows, when a caller has read it.**
   `PlanLocation.inventory` (per view: vehicles, the places an action can use,
   loose objects, each near / mid / far) joins the location's words as evidence;

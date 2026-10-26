@@ -25,7 +25,7 @@
 // ---------------------------------------------------------------------------
 
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -51,7 +51,7 @@ import { getEpisodeDir, getLocation, getLocationDir } from '../series/manager.js
 import { resolveVideoModel } from './prompt-builder.js';
 import { shouldUseSeedanceKeyframe } from './generation-planner.js';
 import { shotKey } from './shot-paths.js';
-import { stagingRefPath } from './staging.js';
+import { repickArgs, stageRefCommand, stagingRefPath } from './staging.js';
 
 export type StagingUse = ShotStagingRef['use'];
 
@@ -422,36 +422,6 @@ export async function runStageRef(
   const baseImage = await requestDataUri(source.path);
   const referenceImages = await Promise.all(refPaths.map(requestDataUri));
   const sessionRel = projectRelative(series, sessionDir);
-  const results = await Promise.allSettled(models.map(model => multiEditImage(client, {
-    model, prompt: input.prompt, baseImage, referenceImages,
-  })));
-
-  const candidates: StageCandidate[] = [];
-  for (const [i, result] of results.entries()) {
-    const model = models[i];
-    const index = i + 1;
-    if (result.status === 'rejected') {
-      candidates.push({ index, model, error: (result.reason as Error)?.message?.split('\n')[0] ?? String(result.reason) });
-      continue;
-    }
-    const out = join(sessionDir, `${index}-${model}.png`);
-    const size = await writeCandidate(result.value, out, sourceAspect);
-    // The edit continues the source's lineage (a plate made by gpt-image-2, then this edit).
-    if (sourceProvenance) {
-      await writeImageProvenance(out, sourceProvenance.generationModel, sourceProvenance.editModels ?? [], hasFace === undefined ? {} : { hasFace });
-    }
-    await appendRecipePass(out, {
-      kind: 'multi-edit',
-      role: 'content',
-      model,
-      label: `stage-ref: ${source.use} for shot ${idOf(shot)}`,
-      prompt: input.prompt,
-      referenceImagePaths: [source.path, ...refPaths],
-      extra: { stageRef: { session: sessionRel, shot: idOf(shot), use: source.use, source: projectRelative(series, source.path), sourceNote: source.note } },
-    }, { provenance: 'edit', ...(hasFace === undefined ? {} : { hasFace }) });
-    candidates.push({ index, model, path: projectRelative(series, out), sha256: sha256Of(out), ...size });
-  }
-
   const session: StageSession = {
     id,
     episode: input.episode,
@@ -464,10 +434,56 @@ export async function runStageRef(
     refs: refPaths.map(ref => projectRelative(series, ref)),
     prompt: input.prompt,
     ...(hasFace === undefined ? {} : { hasFace }),
-    candidates,
+    candidates: [],
     createdAt: new Date().toISOString(),
   };
-  const pickPage = await writeSession(series, sessionDir, session);
+  const results = await Promise.allSettled(models.map(model => multiEditImage(client, {
+    model, prompt: input.prompt, baseImage, referenceImages,
+  })));
+
+  // The edits are paid for: every image that lands is recorded as a candidate
+  // the moment it is saved, and the session file and pick page are written
+  // whatever fails after, so each one can be picked.
+  let pickPage = join(sessionDir, 'pick.html');
+  try {
+    for (const [i, result] of results.entries()) {
+      const model = models[i];
+      const index = i + 1;
+      if (result.status === 'rejected') {
+        session.candidates.push({ index, model, error: (result.reason as Error)?.message?.split('\n')[0] ?? String(result.reason) });
+        continue;
+      }
+      const out = join(sessionDir, `${index}-${model}.png`);
+      let landed: StageCandidate;
+      try {
+        const size = await writeCandidate(result.value, out, sourceAspect);
+        landed = { index, model, path: projectRelative(series, out), sha256: sha256Of(out), ...size };
+      } catch (err) {
+        session.candidates.push({ index, model, error: `the edit came back but could not be saved: ${(err as Error).message.split('\n')[0]}` });
+        continue;
+      }
+      session.candidates.push(landed);
+      try {
+        // The edit continues the source's lineage (a plate made by gpt-image-2, then this edit).
+        if (sourceProvenance) {
+          await writeImageProvenance(out, sourceProvenance.generationModel, sourceProvenance.editModels ?? [], hasFace === undefined ? {} : { hasFace });
+        }
+      } catch (err) {
+        console.warn(`  ⚠ provenance for ${basename(out)} could not be written: ${(err as Error).message}`);
+      }
+      await appendRecipePass(out, {
+        kind: 'multi-edit',
+        role: 'content',
+        model,
+        label: `stage-ref: ${source.use} for shot ${idOf(shot)}`,
+        prompt: input.prompt,
+        referenceImagePaths: [source.path, ...refPaths],
+        extra: { stageRef: { session: sessionRel, shot: idOf(shot), use: source.use, source: projectRelative(series, source.path), sourceNote: source.note } },
+      }, { provenance: 'edit', ...(hasFace === undefined ? {} : { hasFace }) });
+    }
+  } finally {
+    pickPage = await writeSession(series, sessionDir, session);
+  }
   return { session, sessionDir, pickPage };
 }
 
@@ -535,18 +551,13 @@ export async function pickStagingRef(
   let candidate = /^\d+$/.test(pick)
     ? session.candidates.find(item => item.index === Number(pick))
     : session.candidates.find(item => item.model === pick);
-  if (!candidate && existsSync(resolve(pick))) {
-    const file = resolve(pick);
-    const index = Math.max(0, ...session.candidates.map(item => item.index)) + 1;
-    const out = join(dir, `${index}-picked${extname(file).toLowerCase() || '.png'}`);
-    await copyFile(file, out);
-    await appendRecipePass(out, {
-      kind: 'mechanical', role: 'content', model: 'manual',
-      label: `stage-ref: picked by hand for shot ${idOf(shot)} (from ${basename(file)})`,
-      extra: { stageRef: { session: projectRelative(series, dir), shot: idOf(shot), use: session.use, from: file } },
-    });
-    candidate = { index, model: 'manual', path: projectRelative(series, out), sha256: sha256Of(out) };
-    session.candidates.push(candidate);
+  if (!candidate) {
+    const file = [resolve(pick), projectPath(series, pick)].find(path => existsSync(path) && statSync(path).isFile());
+    if (file) {
+      // One of the session's own images is that candidate, not a new one.
+      candidate = session.candidates.find(item => item.path && sameFile(projectPath(series, item.path), file))
+        ?? await addHandPick(series, session, dir, idOf(shot), file);
+    }
   }
   if (!candidate?.path) {
     const usable = session.candidates.filter(item => item.path).map(item => `${item.index} (${item.model})`);
@@ -577,6 +588,39 @@ export async function pickStagingRef(
   return { ref, session, sessionDir: dir };
 }
 
+/**
+ * Add an image a person made some other way to the session, as a PNG: a PNG
+ * is copied, anything else is converted (its sidecars, `.recipe.json` and
+ * `.provenance.json`, are named after png/jpg/jpeg/webp files only, and a
+ * render sends the pick as PNG). The file's provenance comes with it.
+ */
+async function addHandPick(series: SeriesState, session: StageSession, dir: string, shotId: string, file: string): Promise<StageCandidate> {
+  const index = Math.max(0, ...session.candidates.map(item => item.index)) + 1;
+  const out = join(dir, `${index}-picked.png`);
+  const bytes = await readFile(file);
+  if (sniffImageFormat(bytes).format === 'png') {
+    await copyFile(file, out);
+  } else {
+    try {
+      await sharp(bytes).png().toFile(out);
+    } catch (err) {
+      throw new Error(`Could not read ${file} as an image to pick (${(err as Error).message.split('\n')[0]}). Save it as PNG and pick that.`);
+    }
+  }
+  const provenance = await readImageProvenance(file);
+  if (provenance) {
+    await writeImageProvenance(out, provenance.generationModel, provenance.editModels ?? [], provenance.hasFace === undefined ? {} : { hasFace: provenance.hasFace });
+  }
+  await appendRecipePass(out, {
+    kind: 'mechanical', role: 'content', model: 'manual',
+    label: `stage-ref: picked by hand for shot ${shotId} (from ${basename(file)})`,
+    extra: { stageRef: { session: projectRelative(series, dir), shot: shotId, use: session.use, from: file } },
+  });
+  const candidate: StageCandidate = { index, model: 'manual', path: projectRelative(series, out), sha256: sha256Of(out) };
+  session.candidates.push(candidate);
+  return candidate;
+}
+
 /** Remove the shot's staging ref and restore its `mustStaySingle`. Returns the removed ref. */
 export function clearStagingRef(shot: ShotScript): ShotStagingRef | null {
   const ref = shot.stagingRef;
@@ -600,22 +644,36 @@ export function describeStagingRef(ref: ShotStagingRef): string {
  * face-start-frame failure (anti-pattern 31). generate-videos refuses what it
  * cannot render from the pick; this says so at pick time.
  */
-export async function stagingLaneNotes(series: SeriesState, shot: ShotScript): Promise<string[]> {
+export async function stagingLaneNotes(series: SeriesState, shot: ShotScript, episode: number): Promise<string[]> {
   const ref = shot.stagingRef;
   if (!ref) return [];
-  const lane = resolveVideoModel(shot, series).modelId;
+  const id = idOf(shot);
+  const resolution = resolveVideoModel(shot, series);
+  if (resolution.refused) return [`generate-videos will refuse this shot: ${resolution.refused}.`];
+  const lane = resolution.modelId;
   if (ref.use === 'start-frame') {
     if (!i2vRejectsFaceStartFrame(lane)) return [];
     const provenance = await readImageProvenance(stagingRefPath(series, ref));
     return [provenance?.hasFace === false
       ? `${lane} is a MiniMax image-to-video lane: it fails server-side, after billing, on a start frame that shows a face (anti-pattern 31). This pick is recorded as showing no face, so it will render; make sure it shows none.`
-      : `${lane} is a MiniMax image-to-video lane: it fails server-side, after billing, on a start frame that shows a face (anti-pattern 31). This pick may show one, so generate-videos will refuse the shot. Put the shot on a Seedance lane, or, if the frame shows no face, edit again with --no-face (or set "hasFace": false in ${ref.path.replace(/\.(png|jpe?g|webp)$/i, '.provenance.json')}).`];
+      : `${lane} is a MiniMax image-to-video lane: it fails server-side, after billing, on a start frame that shows a face (anti-pattern 31). This pick may show one, so generate-videos will refuse the shot. Put the shot on a Seedance lane, or, if the frame shows no face, set "hasFace": false in ${stagingRefPath(series, ref).replace(/\.(png|jpe?g|webp)$/i, '.provenance.json')}.`];
   }
   if (MODELS_USING_IMAGE_TAGS.has(lane) || shouldUseSeedanceKeyframe(shot, series.videoDefaults)) return [];
   if (MODELS_SUPPORTING_SCENE_IMAGES.has(lane)) {
-    return [`${lane} takes the pick as a scene image, but still starts from the shot's panel, which was drawn on the plate before the edit. If the panel shows what the edit removed, stage the panel as a start frame instead (stage-ref --from <panel> --use start-frame).`];
+    const panel = join(getEpisodeDir(series, episode), 'scene-001', `shot-${shotKey(id)}.png`);
+    return [`${lane} takes the pick as a scene image, but still starts from the shot's panel, which was drawn on the plate before the edit. If the panel shows what the edit removed, stage the panel as a start frame instead: ${stageRefCommand(series, episode, id, `--from "${panel}" --use start-frame --prompt "..."`)}`];
   }
-  return [`${lane} sends no location reference, so generate-videos will refuse this plate pick. Pick it as a start frame instead (--pick <n> --use start-frame), or route the shot to an R2V lane with @Image tags.`];
+  return [`${lane} sends no location reference, so generate-videos will refuse this plate pick. Pick it as a start frame instead (${stageRefCommand(series, episode, id, `${repickArgs(series, ref)} --use start-frame`)}), or route the shot to an R2V lane with @Image tags.`];
+}
+
+/** The shot's montage cuts in media-library/: copies from before a pick, kept as the archive and never read as current. */
+export function mediaLibraryCopies(series: SeriesState, episode: number, shotId: string): string[] {
+  const library = join(getEpisodeDir(series, episode), 'media-library');
+  if (!existsSync(library)) return [];
+  return readdirSync(library)
+    .filter(name => /^scene-\d+$/.test(name))
+    .map(name => join(library, name, `shot-${shotKey(shotId)}.mp4`))
+    .filter(path => existsSync(path));
 }
 
 // ---- Packaging -------------------------------------------------------------------

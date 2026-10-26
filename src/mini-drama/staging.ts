@@ -17,8 +17,9 @@
 // ---------------------------------------------------------------------------
 
 import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
-import type { SeriesState, ShotScript, ShotStagingRef } from 'venice-video-harness/core/series/types.js';
+import { basename, isAbsolute, join } from 'node:path';
+import type { EpisodeScript, SeriesState, ShotScript, ShotStagingRef } from 'venice-video-harness/core/series/types.js';
+import { shotKey } from './shot-paths.js';
 
 /** Absolute path of a staging ref's image. */
 export function stagingRefPath(series: Pick<SeriesState, 'outputDir'>, ref: Pick<ShotStagingRef, 'path'>): string {
@@ -72,4 +73,63 @@ export function stagedClipIsStale(videoPath: string, shot: Pick<ShotScript, 'sta
   } catch {
     return true;
   }
+}
+
+/** A staged shot whose clip in the scene folder is not from its current pick. */
+export interface StaleStagedShot {
+  /** Shot id ("8", "8b"). */
+  shot: string;
+  shotNumber: number;
+  /** Why it still needs rendering from the pick. */
+  reason: string;
+}
+
+/**
+ * The staged shots of an episode (stage-ref, rule 65) whose clip in
+ * `sceneDir` is not from their current pick: no clip, or one rendered before
+ * the pick (or for another pick). generate-videos renders exactly these, so
+ * `status`, `qa-videos` and `assemble-episode` read the same list and never
+ * treat such a clip as the fix (rule 45). The montage cuts in media-library/
+ * are never read here: they are the archive, not the current clips.
+ */
+export function staleStagedShots(
+  series: Pick<SeriesState, 'outputDir'>,
+  script: Pick<EpisodeScript, 'shots'>,
+  sceneDir: string,
+): StaleStagedShot[] {
+  const stale: StaleStagedShot[] = [];
+  for (const shot of script.shots ?? []) {
+    const ref = shot.stagingRef;
+    if (!ref) continue;
+    const id = `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
+    const clip = join(sceneDir, `shot-${shotKey(id)}.mp4`);
+    const gone = existsSync(stagingRefPath(series, ref)) ? '' : '; the picked image is not on disk';
+    if (!existsSync(clip)) {
+      stale.push({ shot: id, shotNumber: shot.shotNumber, reason: `no clip yet${gone}` });
+    } else if (stagedClipIsStale(clip, shot)) {
+      stale.push({ shot: id, shotNumber: shot.shotNumber, reason: `its clip was not rendered from the pick${gone}` });
+    }
+  }
+  return stale;
+}
+
+/** A runnable generate-videos command for an episode (rule 44). */
+export function generateVideosCommand(series: Pick<SeriesState, 'outputDir'>, episode: number | undefined): string {
+  return `venice-video generate-videos -p "${series.outputDir}" -e ${episode ?? '<episode>'}`;
+}
+
+/** A runnable stage-ref command for a shot (rule 44: -p, -e and --shot). */
+export function stageRefCommand(series: Pick<SeriesState, 'outputDir'>, episode: number | undefined, shotId: string, args: string): string {
+  return `venice-video stage-ref -p "${series.outputDir}" -e ${episode ?? '<episode>'} --shot ${shotId} ${args}`.trimEnd();
+}
+
+/** `--pick <n> --session <id>`: the arguments that pick the shot's current staging ref again (add `--use` to change its role). */
+export function repickArgs(series: Pick<SeriesState, 'outputDir'>, ref: Pick<ShotStagingRef, 'path' | 'session'>): string {
+  let picked: unknown;
+  try {
+    picked = (JSON.parse(readFileSync(join(stagingRefPath(series, { path: ref.session }), 'session.json'), 'utf-8')) as { picked?: unknown }).picked;
+  } catch {
+    picked = undefined;
+  }
+  return `--pick ${typeof picked === 'number' ? picked : `"${stagingRefPath(series, ref)}"`} --session ${basename(ref.session)}`;
 }

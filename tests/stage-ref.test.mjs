@@ -5,16 +5,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 
-const { imageToVideoTwin } = await import('../packages/core/dist/venice/models.js');
+const { imageToVideoTwin, stagedFrameLane, getVideoModel, VIDEO_MODELS } = await import('../packages/core/dist/venice/models.js');
 const { buildReferenceSlotPlan } = await import('../dist/mini-drama/reference-slots.js');
 const { resolveVideoModel, buildVideoPrompt } = await import('../dist/mini-drama/prompt-builder.js');
 const { buildGenerationPlan } = await import('../dist/mini-drama/generation-planner.js');
-const { stagedClipIsStale, stagedPlate, stagedStartFrame } = await import('../dist/mini-drama/staging.js');
+const { stagedClipIsStale, stagedPlate, stagedStartFrame, staleStagedShots } = await import('../dist/mini-drama/staging.js');
 const stageRef = await import('../dist/mini-drama/stage-ref.js');
 
 const ffmpegAvailable = spawnSync('ffmpeg', ['-version']).status === 0;
@@ -67,8 +68,68 @@ test('imageToVideoTwin finds the family\'s i2v lane', () => {
   assert.equal(imageToVideoTwin('minimax-h3-max-reference-to-video'), 'minimax-h3-max-image-to-video');
   assert.equal(imageToVideoTwin('wan-3-0-enhanced-reference-to-video'), 'wan-3-0-image-to-video');
   assert.equal(imageToVideoTwin('seedance-2-5-image-to-video'), 'seedance-2-5-image-to-video');
-  assert.equal(imageToVideoTwin('seedance-2-5-text-to-video'), undefined);
+  assert.equal(imageToVideoTwin('seedance-2-5-text-to-video'), 'seedance-2-5-image-to-video');
   assert.equal(imageToVideoTwin('no-such-reference-to-video'), undefined);
+  // Private lanes stay private (rule 46).
+  assert.equal(imageToVideoTwin('minimax-h3-max-text-to-video'), 'minimax-h3-max-image-to-video');
+  assert.equal(imageToVideoTwin('grok-imagine-text-to-video-private'), 'grok-imagine-image-to-video-private');
+  assert.equal(imageToVideoTwin('seedance-2-5-us-text-to-video-private'), 'seedance-2-5-us-image-to-video-private');
+  assert.equal(imageToVideoTwin('seedance-2-5-us-reference-to-video-private'), 'seedance-2-5-us-image-to-video-private');
+  assert.equal(imageToVideoTwin('kling-v3-4k-reference-to-video'), undefined, 'no i2v lane in its family');
+  assert.equal(imageToVideoTwin('wan-2.2-a14b-text-to-video'), undefined, 'no private i2v lane in its family');
+});
+
+test('every lane in the registry maps to an image-to-video lane of its own privacy tier, or to none', () => {
+  const lanes = VIDEO_MODELS.map(spec => spec.id);
+  const isI2v = id => getVideoModel(id)?.type === 'image-to-video' && !id.includes('reference-to-video');
+  for (const lane of lanes) {
+    const tier = getVideoModel(lane).privacy;
+    const twin = imageToVideoTwin(lane);
+    if (twin) {
+      assert.equal(getVideoModel(twin).privacy, tier, `${lane} -> ${twin}`);
+      assert.ok(isI2v(twin), `${lane} -> ${twin} is not an image-to-video lane`);
+    }
+    // With every other lane offered as the project's own fallback.
+    for (const fallback of lanes) {
+      const picked = stagedFrameLane(lane, [fallback]);
+      if (picked) assert.equal(getVideoModel(picked).privacy, tier, `${lane} (fallback ${fallback}) -> ${picked}`);
+    }
+  }
+  assert.equal(stagedFrameLane('no-such-model'), undefined, 'an unknown lane has no known tier');
+});
+
+test('a staged start frame keeps its lane\'s privacy tier, or the shot is refused', async () => {
+  const lanes = VIDEO_MODELS.filter(spec => !spec.offline).map(spec => spec.id);
+  const { series, shot } = await project();
+  for (const lane of lanes) {
+    series.videoDefaults = { actionModel: lane, atmosphereModel: lane, characterConsistencyModel: lane };
+    for (const characters of [['ANNA'], []]) {
+      const unstaged = shot(8, { characters });
+      const staged = shot(8, { characters, stagingRef: startFrameRef() });
+      const laneTier = getVideoModel(resolveVideoModel(unstaged, series).modelId)?.privacy;
+      const resolution = resolveVideoModel(staged, series);
+      if (resolution.refused) continue;
+      assert.equal(getVideoModel(resolution.modelId)?.privacy, laneTier, `${lane}: ${resolution.modelId}`);
+    }
+  }
+  // A private lane with no private image-to-video lane is refused, not moved to the project's anonymized one.
+  const mixed = await project({ actionModel: 'wan-2.2-a14b-text-to-video', characterConsistencyModel: 'wan-2.2-a14b-text-to-video', atmosphereModel: 'seedance-2-5-reference-to-video' });
+  const refused = resolveVideoModel(mixed.shot(8, { stagingRef: startFrameRef() }), mixed.series);
+  assert.match(refused.refused, /no image-to-video lane in the private tier/);
+  assert.throws(() => buildVideoPrompt(mixed.shot(8, { stagingRef: startFrameRef() }), mixed.series), /cannot render from its staging ref: no image-to-video lane in the private tier/);
+  const notes = await stageRef.stagingLaneNotes(mixed.series, mixed.shot(8, { stagingRef: startFrameRef() }), 1);
+  assert.match(notes[0], /generate-videos will refuse this shot: no image-to-video lane in the private tier/);
+});
+
+test('a staged start frame on an exact lip-sync shot is refused unless its image-to-video lane takes the dialogue audio', async () => {
+  const dialogue = { character: 'ANNA', line: 'Here it is.' };
+  const seedance = await project({ audioStrategy: 'lip-sync', lipSyncModel: 'seedance-2-5-reference-to-video' });
+  const refused = resolveVideoModel(seedance.shot(8, { dialogue, stagingRef: startFrameRef() }), seedance.series);
+  assert.match(refused.refused, /exact lip-sync, and seedance-2-5-image-to-video .* takes no dialogue audio/);
+  const wan = await project({ audioStrategy: 'lip-sync', lipSyncModel: 'wan-2-7-image-to-video' });
+  const kept = resolveVideoModel(wan.shot(8, { dialogue, stagingRef: startFrameRef() }), wan.series);
+  assert.equal(kept.refused, undefined);
+  assert.equal(kept.modelId, 'wan-2-7-image-to-video');
 });
 
 test('a staged plate leads the location slots and its source view is not sent', async () => {
@@ -264,6 +325,106 @@ test('a pick becomes the shot\'s staging ref, --use can change its role, and a c
   assert.equal('mustStaySingle' in shot, false);
 });
 
+test('a hand-made pick becomes a PNG with its provenance; a session candidate named by its file is that candidate', async () => {
+  const { dir, series, script } = await project();
+  const client = { async postBinary() { return edited(320, 180); } };
+  await stageRef.runStageRef(client, series, script, { episode: 1, shot: '8', fromPlate: 'east', prompt: 'Remove the flag.' });
+
+  // A TIFF: its sidecars could not be named after it, so it is converted.
+  const tif = join(dir, 'hand.tif');
+  await sharp({ create: { width: 320, height: 180, channels: 3, background: '#203040' } }).tiff().toFile(tif);
+  const fromTif = await stageRef.pickStagingRef(series, script, '8', tif);
+  assert.match(fromTif.ref.path, /-picked\.png$/);
+  const picked = readFileSync(join(dir, fromTif.ref.path));
+  assert.equal(picked.subarray(1, 4).toString('latin1'), 'PNG', 'written as PNG');
+  assert.equal(createHash('sha256').update(picked).digest('hex'), fromTif.ref.sha256, 'the hash is the image, not a sidecar');
+  assert.ok(existsSync(join(dir, fromTif.ref.path.replace(/\.png$/, '.recipe.json'))), 'the recipe is a file of its own');
+
+  // A JPEG with a provenance record keeps it.
+  const jpg = join(dir, 'hand.jpg');
+  await sharp({ create: { width: 320, height: 180, channels: 3, background: '#405060' } }).jpeg().toFile(jpg);
+  writeFileSync(join(dir, 'hand.provenance.json'), JSON.stringify({ generationModel: 'gpt-image-2', editModels: [], hasFace: false }));
+  const fromJpg = await stageRef.pickStagingRef(series, script, '8', jpg);
+  assert.match(fromJpg.ref.path, /-picked\.png$/);
+  const provenance = JSON.parse(readFileSync(join(dir, fromJpg.ref.path.replace(/\.png$/, '.provenance.json')), 'utf-8'));
+  assert.equal(provenance.hasFace, false);
+
+  // Naming a candidate's own file (absolute or project-relative) picks that candidate.
+  const { session } = await stageRef.pickStagingRef(series, script, '8', '1');
+  const count = session.candidates.length;
+  const byPath = await stageRef.pickStagingRef(series, script, '8', join(dir, session.candidates[1].path));
+  assert.equal(byPath.ref.model, 'nano-banana-2-edit');
+  const byRelative = await stageRef.pickStagingRef(series, script, '8', session.candidates[0].path);
+  assert.equal(byRelative.ref.model, 'gpt-image-2-edit');
+  assert.equal(byRelative.session.candidates.length, count, 'no copy was added');
+  await assert.rejects(stageRef.pickStagingRef(series, script, '8', join(dir, 'series-notes.txt')), /No candidate/);
+  await assert.rejects(stageRef.pickStagingRef(series, script, '8', dir), /No candidate/, 'a folder is not an image');
+  // A file that is no image is refused before anything is added.
+  writeFileSync(join(dir, 'notes.tif'), 'not an image');
+  await assert.rejects(stageRef.pickStagingRef(series, script, '8', join(dir, 'notes.tif')), /Could not read .* as an image to pick/);
+  assert.equal(JSON.parse(readFileSync(join(dir, byRelative.ref.session, 'session.json'), 'utf-8')).candidates.length, count);
+  assert.equal(existsSync(join(dir, byRelative.ref.session, `${count + 1}-picked.png`)), false);
+});
+
+test('every edit that lands is pickable, even when another cannot be saved', async () => {
+  const { dir, series, script } = await project();
+  const garbage = Buffer.alloc(40_000, 7);
+  const client = {
+    async postBinary(_path, body) { return body.modelId === 'gpt-image-2-edit' ? garbage : edited(320, 180); },
+  };
+  const { session, sessionDir } = await stageRef.runStageRef(client, series, script, { episode: 1, shot: '8', fromPlate: 'north', prompt: 'Remove the boat.' });
+  assert.match(session.candidates[0].error, /could not be saved/);
+  assert.ok(session.candidates[1].path);
+  const saved = JSON.parse(readFileSync(join(sessionDir, 'session.json'), 'utf-8'));
+  assert.equal(saved.candidates.length, 2);
+  const { ref } = await stageRef.pickStagingRef(series, script, '8', '2');
+  assert.ok(existsSync(join(dir, ref.path)));
+});
+
+test('a staged plate drops the storyboard plate and outranks the location\'s words', async () => {
+  const { dir, series, shot } = await project();
+  mkdirSync(join(dir, 'storyboards'), { recursive: true });
+  writeFileSync(join(dir, 'storyboards', 'beat-1.png'), await png(320, 180, '#111111'));
+  series.storyboardRefs = [{ slug: 'beat-1', description: 'd', characters: ['ANNA'], location: 'harbour-steps' }];
+  const staged = join(dir, 'episodes', 'episode-001', 'staging', 'shot-008', 's1');
+  mkdirSync(staged, { recursive: true });
+  writeFileSync(join(staged, '1-gpt-image-2-edit.png'), await png(320, 180, '#224466'));
+  const plateRef = { path: 'episodes/episode-001/staging/shot-008/s1/1-gpt-image-2-edit.png', use: 'plate', source: 'locations/harbour-steps/north.png', replacesView: 'north', model: 'gpt-image-2-edit', prompt: 'p', sha256: 'x', session: 's', pickedAt: '' };
+  const plain = buildReferenceSlotPlan(series, shot(8, { storyboardRef: 'beat-1' }), 'seedance-2-5-reference-to-video');
+  assert.ok(plain.slots.some(slot => slot.kind === 'storyboard'), 'the fixture has a storyboard plate');
+  const plan = buildReferenceSlotPlan(series, shot(8, { storyboardRef: 'beat-1', stagingRef: plateRef }), 'seedance-2-5-reference-to-video');
+  assert.equal(plan.slots.some(slot => slot.kind === 'storyboard'), false);
+  assert.ok(plan.dropped.some(note => /staging ref replaces it/.test(note)));
+  const prompt = buildVideoPrompt(shot(8, { stagingRef: plateRef }), series);
+  const slot = prompt.referenceSlots.find(item => item.path.endsWith('1-gpt-image-2-edit.png'));
+  assert.match(prompt.prompt, new RegExp(`Location \\(where these words describe something @Image${slot.imageIndex} does not show, leave it out: the staged image is right\\):`));
+});
+
+test('staleStagedShots lists staged shots whose clip is not from the pick, and nothing else', async () => {
+  const { dir, series, script } = await project();
+  const sceneDir = join(dir, 'episodes', 'episode-001', 'scene-001');
+  mkdirSync(sceneDir, { recursive: true });
+  for (const n of ['007', '008', '009']) writeFileSync(join(sceneDir, `shot-${n}.mp4`), 'clip');
+  script.shots[1].stagingRef = { ...startFrameRef('gone.png'), sha256: 'abc' };
+  script.shots[2].stagingRef = { ...startFrameRef('gone.png'), sha256: 'def' };
+  writeFileSync(join(sceneDir, 'shot-009.video.json'), JSON.stringify({ metadata: { stagingRef: { sha256: 'def' } } }));
+  const stale = staleStagedShots(series, script, sceneDir);
+  assert.deepEqual(stale.map(item => item.shot), ['8'], 'shot 7 is not staged, shot 9 is rendered from its pick');
+  assert.match(stale[0].reason, /not rendered from the pick; the picked image is not on disk/);
+  script.shots[0].stagingRef = startFrameRef('gone.png');
+  writeFileSync(join(sceneDir, 'shot-007.mp4'), 'clip');
+  assert.deepEqual(staleStagedShots(series, script, sceneDir).map(item => item.shot), ['7', '8']);
+});
+
+test('the shot\'s montage cut in media-library is listed as the pre-pick archive', async () => {
+  const { dir, series } = await project();
+  const library = join(dir, 'episodes', 'episode-001', 'media-library', 'scene-01');
+  mkdirSync(library, { recursive: true });
+  writeFileSync(join(library, 'shot-008.mp4'), 'cut');
+  assert.deepEqual(stageRef.mediaLibraryCopies(series, 1, '8'), [join(library, 'shot-008.mp4')]);
+  assert.deepEqual(stageRef.mediaLibraryCopies(series, 1, '9'), []);
+});
+
 test('a frame source defaults to start-frame; --use and --replaces override', async () => {
   const { dir, series, script } = await project();
   const frame = join(dir, 'frame.png');
@@ -362,18 +523,19 @@ test('the pick says when its lane will refuse it: a face start frame on MiniMax 
   writeFileSync(join(staging, '1-gpt-image-2-edit.png'), await png(160, 90));
   const path = 'episodes/episode-001/staging/shot-008/s1/1-gpt-image-2-edit.png';
   const frame = shot(8, { stagingRef: startFrameRef(path) });
-  const [face] = await stageRef.stagingLaneNotes(series, frame);
+  const [face] = await stageRef.stagingLaneNotes(series, frame, 1);
   assert.match(face, /minimax-h3-max-image-to-video is a MiniMax image-to-video lane/);
   assert.match(face, /generate-videos will refuse the shot/);
   writeFileSync(join(staging, '1-gpt-image-2-edit.provenance.json'), JSON.stringify({ generationModel: 'gpt-image-2', editModels: [], hasFace: false }));
-  assert.match((await stageRef.stagingLaneNotes(series, frame))[0], /recorded as showing no face/);
+  assert.match((await stageRef.stagingLaneNotes(series, frame, 1))[0], /recorded as showing no face/);
 
   const plateRef = { ...startFrameRef(path), use: 'plate', replacesView: 'north' };
   const onI2v = await project({ atmosphereModel: 'seedance-2-0-image-to-video' });
   const atmosphere = onI2v.shot(8, { characters: [], videoModel: 'atmosphere', stagingRef: plateRef });
-  assert.match((await stageRef.stagingLaneNotes(onI2v.series, atmosphere))[0], /sends no location reference/);
+  assert.match((await stageRef.stagingLaneNotes(onI2v.series, atmosphere, 1))[0], /sends no location reference/);
+  assert.match((await stageRef.stagingLaneNotes(onI2v.series, atmosphere, 1))[0], /venice-video stage-ref -p "[^"]+" -e 1 --shot 8 --pick \S+ --session s --use start-frame/);
   const onKling = await project({ characterConsistencyModel: 'kling-o3-standard-reference-to-video' });
-  assert.match((await stageRef.stagingLaneNotes(onKling.series, onKling.shot(8, { stagingRef: plateRef })))[0], /scene image/);
+  assert.match((await stageRef.stagingLaneNotes(onKling.series, onKling.shot(8, { stagingRef: plateRef }), 1))[0], /scene image.*venice-video stage-ref -p "[^"]+" -e 1 --shot 8 --from "[^"]+shot-008\.png" --use start-frame/);
   const onSeedance = await project();
-  assert.deepEqual(await stageRef.stagingLaneNotes(onSeedance.series, onSeedance.shot(8, { stagingRef: plateRef })), []);
+  assert.deepEqual(await stageRef.stagingLaneNotes(onSeedance.series, onSeedance.shot(8, { stagingRef: plateRef }), 1), []);
 });

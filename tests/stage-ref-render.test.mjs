@@ -15,7 +15,7 @@ import sharp from 'sharp';
 
 process.env.VENICE_VIDEO_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'stage-render-config-'));
 
-const { generateEpisodeVideos } = await import('../dist/mini-drama/video-generator.js');
+const { generateEpisodeVideos, renderVideoFile } = await import('../dist/mini-drama/video-generator.js');
 const { recordPendingJob, listPendingJobs } = await import('../dist/venice/job-store.js');
 
 const MP4 = (() => {
@@ -217,12 +217,14 @@ test('generate-videos exits non-zero, names each staged shot it did not render, 
     encoding: 'utf-8', env: { ...process.env, VENICE_API_KEY: 'test-key-never-sent' },
   });
   assert.equal(run.status, 1, run.stdout + run.stderr);
-  assert.match(run.stderr, /1 staged shot\(s\) are not rendered from their staging ref/);
+  assert.match(run.stderr, /1 shot\(s\) have no clip from their staging ref/);
+  assert.match(run.stderr, /venice-video generate-videos -p "[^"]+" -e 1/);
+  assert.match(run.stderr, /venice-video stage-ref -p "[^"]+" -e 1 --shot 8 --clear/);
   assert.match(run.stderr, /shot 8: the staging ref image \S+gone\.png is not on disk/);
   assert.equal(JSON.parse(readFileSync(join(dir, 'series.json'), 'utf-8')).episodes[0].status, 'scripted', 'not marked produced');
 });
 
-test('a render queued before the pick and re-attached after an interruption is kept but not marked as made from the pick', async () => {
+test('a render queued before the pick is collected first (it is paid for), then the shot renders from the pick', async () => {
   const { sceneDir, series } = await setup();
   const output = resolve(join(sceneDir, 'shot-008.mp4'));
   // Queued before the pick (no tag), then the process died mid-poll.
@@ -230,21 +232,111 @@ test('a render queued before the pick and re-attached after an interruption is k
   const s8 = shot({ stagingRef: staged('start-frame', 'pick-1'), mustStaySingle: true });
   const c = client();
   const result = await render(c, series, [s8], sceneDir);
-  assert.equal(c.bodies.length, 0, 're-attached, not re-queued');
-  assert.ok(existsSync(output), 'the paid render is saved');
-  const meta = JSON.parse(readFileSync(join(sceneDir, 'shot-008.video.json'), 'utf-8'));
-  assert.equal(meta.metadata.stagingRef, undefined, 'not stamped with the pick');
-  assert.equal(result.unrenderedStaged.length, 1);
-  assert.match(result.unrenderedStaged[0].reason, /queued before this staging ref was picked/);
-  assert.equal((await listPendingJobs()).some(job => job.outputPath === output), false);
-
-  // The next run renders the shot from the pick, and that job carries the pick's tag.
-  const again = client();
-  const second = await render(again, series, [s8], sceneDir);
-  assert.equal(again.bodies.length, 1);
-  assert.equal(again.bodies[0].model, 'seedance-2-5-image-to-video');
-  assert.deepEqual(second.unrenderedStaged, []);
+  assert.equal(c.bodies.length, 1, 'one new render, from the pick');
+  assert.equal(c.bodies[0].model, 'seedance-2-5-image-to-video');
+  assert.ok(existsSync(join(sceneDir, 'shot-008-v1.mp4')), 'the collected render is kept, archived when the pick\'s render landed');
+  assert.deepEqual(result.unrenderedStaged, []);
   assert.equal(JSON.parse(readFileSync(join(sceneDir, 'shot-008.video.json'), 'utf-8')).metadata.stagingRef.sha256, 'pick-1');
+  assert.equal((await listPendingJobs()).some(job => job.outputPath === output), false);
+  // The collected render's recipe does not claim the current inputs made it.
+  const recipe = JSON.parse(readFileSync(join(sceneDir, 'shot-008.recipe.json'), 'utf-8'));
+  assert.match(recipe.passes[0].label, /re-attached .* queued from inputs not recorded here/);
+  assert.equal(recipe.passes[0].referenceImagePaths, undefined);
+  assert.equal(recipe.passes[0].extra.reattached.queueId, 'q-before-pick');
+});
+
+test('a render queued for the pick is collected even when the shot would now be refused', async () => {
+  const { sceneDir, series, pick } = await setup();
+  const output = resolve(join(sceneDir, 'shot-008.mp4'));
+  await recordPendingJob({ kind: 'video', model: 'seedance-2-5-image-to-video', queueId: 'q-pick', outputPath: output, project: series.outputDir, tag: 'staging:pick-3' });
+  rmSync(pick); // the pick's image is gone, which refuses a new render
+  const s8 = shot({ stagingRef: staged('start-frame', 'pick-3'), mustStaySingle: true });
+  const c = client();
+  const result = await render(c, series, [s8], sceneDir);
+  assert.equal(c.bodies.length, 0);
+  assert.deepEqual(result.videoPaths, [output], 'the collected render is the shot\'s clip from the pick');
+  assert.deepEqual(result.unrenderedStaged, []);
+  assert.equal(JSON.parse(readFileSync(join(sceneDir, 'shot-008.video.json'), 'utf-8')).metadata.stagingRef.sha256, 'pick-3');
+
+  // One queued before the pick is collected too, then the refusal stands.
+  const other = await setup();
+  const otherOutput = resolve(join(other.sceneDir, 'shot-008.mp4'));
+  await recordPendingJob({ kind: 'video', model: 'seedance-2-5-reference-to-video', queueId: 'q-old', outputPath: otherOutput, project: other.series.outputDir });
+  rmSync(other.pick);
+  const refusedRun = await render(client(), other.series, [shot({ stagingRef: staged('start-frame', 'pick-4'), mustStaySingle: true })], other.sceneDir);
+  assert.ok(existsSync(otherOutput), 'collected, not lost');
+  assert.equal(refusedRun.unrenderedStaged.length, 1);
+  assert.match(refusedRun.unrenderedStaged[0].reason, /not on disk/);
+  assert.equal((await listPendingJobs()).some(job => job.outputPath === otherOutput), false);
+});
+
+test('a unit that starts from a refused shot\'s last frame waits instead of chaining off an older clip', async () => {
+  const { sceneDir, series } = await setup();
+  writeFileSync(join(sceneDir, 'shot-007.mp4'), MP4); // an older clip it could chain from
+  const s7 = shot({ shotNumber: 7, description: 'marker-7' });
+  const s8 = shot({ stagingRef: staged('plate', 'gone', { path: 'episodes/episode-001/staging/shot-008/gone.png' }), mustStaySingle: true });
+  const s9 = shot({ shotNumber: 9, description: 'marker-9' });
+  const s10 = shot({ shotNumber: 10, description: 'marker-10' });
+  const key = n => String(n).padStart(3, '0');
+  const chained = n => ({ ...unit, unitId: `unit-${key(n)}`, shotNumbers: [n], outputFile: `shot-${key(n)}.mp4`, startFrameStrategy: 'previous-last-frame', endFrameStrategy: 'natural' });
+  const units = [
+    { ...unit, unitId: 'unit-007', shotNumbers: [7], outputFile: 'shot-007.mp4', startFrameStrategy: 'panel', endFrameStrategy: 'natural' },
+    { ...unit, startFrameStrategy: 'panel', endFrameStrategy: 'natural' },
+    // A unit that renders nothing in between does not let shot 9 reach back to shot 7.
+    { ...unit, unitId: 'unit-099', shotNumbers: [99], outputFile: 'shot-099.mp4', startFrameStrategy: 'panel', endFrameStrategy: 'natural' },
+    chained(9),
+    chained(10),
+  ];
+  const c = client();
+  const result = await render(c, series, [s7, s8, s9, s10], sceneDir, units);
+  assert.equal(c.bodies.length, 0, 'shots 9 and 10 are not rendered from shot 7\'s last frame');
+  assert.deepEqual(result.unrenderedStaged.map(item => item.shot), ['8', '9', '10']);
+  assert.match(result.unrenderedStaged[1].reason, /starts from the last frame of shot 8/);
+  assert.match(result.unrenderedStaged[2].reason, /starts from the last frame of shot 9, which has no clip from its staging ref yet \(or waits on one\)/);
+
+  // With its own clip on disk, shot 9 has nothing to render and is not
+  // reported, and shot 10 starts from it.
+  writeFileSync(join(sceneDir, 'shot-009.mp4'), MP4);
+  const c2 = client();
+  const again = await render(c2, series, [s7, s8, s9, s10], sceneDir, units);
+  assert.deepEqual(again.unrenderedStaged.map(item => item.shot), ['8']);
+  assert.equal(c2.bodies.length, 1);
+  assert.match(c2.bodies[0].prompt, /marker-10/);
+});
+
+test('a job re-attached under another tag is collected, and its recipe names the job\'s model, not this request\'s inputs', async () => {
+  const { dir, sceneDir, plates } = await setup();
+  // The keyframe pass of the lip-sync keyframe pipeline, queued before the pick.
+  const output = resolve(join(sceneDir, 'shot-008-r2v-keyframe.mp4'));
+  await recordPendingJob({ kind: 'video', model: 'seedance-2-5-reference-to-video', queueId: 'q-keyframe', outputPath: output, project: dir });
+  const c = client();
+  let resumed;
+  await quietly(() => renderVideoFile(c, {
+    prompt: { prompt: 'p', model: 'seedance-2-0-enhanced-reference-to-video', duration: '5s', audio: false },
+    outputPath: output,
+    referenceImagePaths: [join(plates, 'east.png')],
+    aspectRatio: '16:9',
+    project: dir,
+    jobTag: 'staging:pick-9',
+    onResumed: job => { resumed = job; },
+  }));
+  assert.equal(c.bodies.length, 0, 'collected, not queued again');
+  assert.equal(resumed.queueId, 'q-keyframe');
+  assert.equal(resumed.tag, undefined, 'the caller sees it was queued under another tag');
+  const recipe = JSON.parse(readFileSync(output.replace(/\.mp4$/, '.recipe.json'), 'utf-8'));
+  assert.match(recipe.passes[0].label, /queued from inputs not recorded here/);
+  assert.equal(recipe.passes[0].model, 'seedance-2-5-reference-to-video');
+  assert.equal(recipe.passes[0].referenceImagePaths, undefined);
+});
+
+test('a staged start frame with no image-to-video lane in its privacy tier is refused before any spend', async () => {
+  const { sceneDir, series } = await setup({ actionModel: 'wan-2.2-a14b-text-to-video', characterConsistencyModel: 'wan-2.2-a14b-text-to-video', atmosphereModel: 'seedance-2-5-reference-to-video' });
+  const s8 = shot({ stagingRef: staged('start-frame', 'private'), mustStaySingle: true });
+  const c = client();
+  const result = await render(c, series, [s8], sceneDir, [{ ...unit, startFrameStrategy: 'panel', endFrameStrategy: 'natural' }]);
+  assert.equal(c.bodies.length, 0);
+  assert.equal(result.unrenderedStaged.length, 1);
+  assert.match(result.unrenderedStaged[0].reason, /no image-to-video lane in the private tier/);
 });
 
 test('a render queued for the same pick and re-attached is marked as made from it', async () => {

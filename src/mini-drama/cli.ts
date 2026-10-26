@@ -101,12 +101,14 @@ import {
   describeUnit,
   findShot,
   listStageSessions,
+  mediaLibraryCopies,
   pickStagingRef,
   runStageRef,
   stagingLaneNotes,
   unitChanges,
   type StagingUse,
 } from './stage-ref.js';
+import { generateVideosCommand, stageRefCommand, staleStagedShots } from './staging.js';
 import {
   approvalForShot,
   describeMismatch,
@@ -3009,17 +3011,21 @@ async function reportStagingPick(series: SeriesState, shot: ShotScript, episode:
   const ref = shot.stagingRef!;
   const id = `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
   console.log(`Shot ${id}'s staging ref: ${describeStagingRef(ref)}.`);
-  if (ref.use === 'start-frame') {
-    console.log(`  The shot is re-generated from it on ${resolveVideoModel(shot, series).modelId} (i2v), at its own length (${shot.duration}); its negativePrompt still applies.`);
+  const resolution = resolveVideoModel(shot, series);
+  if (ref.use === 'start-frame' && !resolution.refused) {
+    console.log(`  The shot is re-generated from it on ${resolution.modelId} (i2v), at its own length (${shot.duration}); its negativePrompt still applies.`);
     const speaker = shot.dialogue?.character?.toUpperCase();
     if (speaker && !['NARRATOR', 'V.O.', 'VO'].includes(speaker)) {
       console.log(`  ⚠ ${shot.dialogue!.character} speaks on camera here. An i2v re-take sends no reference images or voice reference, so the voice can drift; a plate staging ref (R2V) keeps them.`);
     }
-  } else {
+  } else if (ref.use === 'plate') {
     console.log(`  It leads the shot's references${ref.replacesView ? ` in place of the ${ref.replacesView} view, which is no longer sent` : ''}.`);
   }
-  for (const note of await stagingLaneNotes(series, shot)) console.log(`  ⚠ ${note}`);
+  for (const note of await stagingLaneNotes(series, shot, episode)) console.log(`  ⚠ ${note}`);
   console.log('  The shot renders on its own (mustStaySingle). A clip not rendered from the pick is rendered again by the next generate-videos; the old clip is archived when the new one lands.');
+  for (const copy of mediaLibraryCopies(series, episode, id)) {
+    console.log(`  Its montage cut ${copy} is from before the pick: the media library keeps it as an archive, and the re-render lands in scene-001/ only.`);
+  }
   reportUnitChanges(changes, shot.shotNumber);
   console.log('\nNext:');
   console.log(`  venice-video generate-videos -p "${series.outputDir}" -e ${episode}`);
@@ -3562,8 +3568,24 @@ program
       checkUnitIdentity, checkCrossUnitIdentity, saveVideoQaReport,
     } = await import('./video-qa.js');
 
-    const units = plan.units.filter(u => existsSync(join(sceneDir, u.outputFile)));
+    // A unit holding a staged shot (stage-ref) whose clip is not from its
+    // pick is not checked: the clip on disk still has what the pick removes.
+    // It counts as unchecked, never as a pass (rules 45, 46).
+    const staleStaged = staleStagedShots(series, script, sceneDir);
+    const notChecked: NonNullable<import('./video-qa.js').VideoQaReport['notChecked']> = [];
+    const units = plan.units.filter(u => {
+      if (!existsSync(join(sceneDir, u.outputFile))) return false;
+      const stale = staleStaged.filter(item => u.shotNumbers.includes(item.shotNumber));
+      if (stale.length === 0) return true;
+      notChecked.push({
+        unitId: u.unitId,
+        shots: stale.map(item => item.shot),
+        reason: `staged shot(s) ${stale.map(item => `${item.shot} (${item.reason})`).join('; ')}: render them from the pick first (${generateVideosCommand(series, opts.episode)})`,
+      });
+      return false;
+    });
     console.log(`QA Videos: Episode ${opts.episode} — ${units.length} rendered unit(s)\n`);
+    for (const item of notChecked) console.log(`  ? ${item.unitId}: not checked — ${item.reason}`);
 
     // ---- Layer 1: programmatic (free) ----
     console.log('Programmatic checks:');
@@ -3641,7 +3663,7 @@ program
       }
     }
 
-    const erroredCount = unitIdentity.filter(r => r.errored).length + (crossUnit.errored ? 1 : 0);
+    const erroredCount = unitIdentity.filter(r => r.errored).length + (crossUnit.errored ? 1 : 0) + notChecked.length;
     const criticals = headGlitches.length
       + boundaries.filter(b => b.severity === 'fail').length
       + unitIdentity.filter(r => !r.errored && r.verdict === 'FLAG-CRITICAL').length
@@ -3652,7 +3674,8 @@ program
       model: opts.skipVision ? 'programmatic-only' : (opts.model ?? intelligenceFor(series).visionModel),
       analyzedAt: new Date().toISOString(),
       headGlitches, boundaries, unitIdentity, crossUnit,
-      summary: { units: units.length, criticals, errored: erroredCount, passed: criticals === 0 && erroredCount === 0 },
+      ...(notChecked.length > 0 ? { notChecked } : {}),
+      summary: { units: units.length + notChecked.length, criticals, errored: erroredCount, passed: criticals === 0 && erroredCount === 0 },
     };
     const reportPath = await saveVideoQaReport(episodeDir, report);
 
@@ -3671,6 +3694,9 @@ program
       process.exitCode = 1;
     } else if (erroredCount === 0) {
       console.log(`\nAll rendered units verified. Run: assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
+    }
+    if (notChecked.length > 0) {
+      console.log(`\n${notChecked.length} unit(s) not checked: a staged shot in them has no clip from its staging ref. Render it, then re-run qa-videos: ${generateVideosCommand(series, opts.episode)}`);
     }
   });
 
@@ -3882,9 +3908,10 @@ program
     // was made to remove.
     if (unrenderedStaged.length > 0) {
       await saveSeries(series);
-      console.error(`\n✗ ${unrenderedStaged.length} staged shot(s) are not rendered from their staging ref (stage-ref, rule 65):`);
+      console.error(`\n✗ ${unrenderedStaged.length} shot(s) have no clip from their staging ref, or wait on one (stage-ref, rule 65):`);
       for (const item of unrenderedStaged) console.error(`  shot ${item.shot}: ${item.reason}`);
-      console.error('Fix each one and run generate-videos again (shots already rendered are skipped). The episode is not marked produced.');
+      console.error(`Fix each one, then run generate-videos again (shots already rendered are skipped): ${generateVideosCommand(series, opts.episode)}`);
+      console.error('The episode is not marked produced, and assemble-episode refuses it until then.');
       process.exitCode = 1;
       await updateTreatment(series, opts.episode);
       return;
@@ -3911,6 +3938,14 @@ program
 
     if (hadMontage) {
       console.log('\nAuto-edit is OFF — the montage cuts are in the media library, organized by scene and shot.');
+      // A staged shot's cut there is from before its pick: the library keeps
+      // it as the archive, and the clip from the pick is in scene-001/ only.
+      for (const shot of script.shots.filter(item => item.stagingRef)) {
+        const id = `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
+        if (mediaLibraryCopies(series, opts.episode, id).length > 0) {
+          console.log(`  Shot ${id}: its cut there is from before its staging ref was picked; its clip from the pick is ${join(sceneDir, `shot-${shotKey(id)}.mp4`)}.`);
+        }
+      }
       console.log('Cut them by hand (or in the Venice Video Creator), or run:');
       console.log(`  assemble-episode -p ${series.outputDir} -e ${opts.episode}`);
     } else {
@@ -4387,10 +4422,11 @@ program
   // Per-shot `shot.nativeAudio: 'mute' | 'duck' | 'keep'` always wins.
   .option('--native-volume <vol>', 'Native audio volume in the final mix (0-1). Default: 0 with --dialogue-replace, 1.0 otherwise. Per-shot shot.nativeAudio overrides this default.')
   .option('--skip-video-qa', 'Assemble without a passing video-qa-report.json (you have reviewed the rendered units yourself)', false)
+  .option('--force', 'Assemble even when staged shots (stage-ref) have no clip from their pick', false)
   .action(async (opts: {
     project: string; episode: number; subtitles: boolean; music: boolean;
     ambient: boolean; ambientVolume: string;
-    dialogueReplace: boolean; nativeVolume?: string; skipVideoQa: boolean;
+    dialogueReplace: boolean; nativeVolume?: string; skipVideoQa: boolean; force: boolean;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Series not found.'); process.exit(1); }
@@ -4406,6 +4442,21 @@ program
     if (videoFiles.length === 0) {
       console.error('No video clips found. Run generate-videos first.');
       process.exit(1);
+    }
+
+    // Staged shots (stage-ref, rule 65) whose clip is not from their pick
+    // would put back into the master what the pick removed.
+    const staleStaged = staleStagedShots(series, script, sceneDir);
+    if (staleStaged.length > 0) {
+      const list = staleStaged.map(item => `shot ${item.shot} (${item.reason})`).join('; ');
+      if (!opts.force) {
+        console.error(`Blocked: ${staleStaged.length} staged shot(s) have no clip from their staging ref: ${list}.`);
+        console.error(`  Render them from the pick:  ${generateVideosCommand(series, opts.episode)}`);
+        console.error(`  Or drop a pick:  ${stageRefCommand(series, opts.episode, staleStaged[0].shot, '--clear')}`);
+        console.error('  --force assembles the clips on disk anyway.');
+        process.exit(1);
+      }
+      console.warn(`⚠ --force: assembling ${staleStaged.length} staged shot(s) without a clip from their staging ref: ${list}.`);
     }
 
     // Video QA gate. Panels were QA'd before rendering, but the rendered

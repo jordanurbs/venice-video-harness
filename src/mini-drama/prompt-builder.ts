@@ -13,6 +13,7 @@ import {
   KLING_MULTISHOT_MODEL,
   KLING_R2V_MODEL,
   DAYTIME_ENVIRONMENTS,
+  MODELS_SUPPORTING_AUDIO_INPUT,
   MODELS_SUPPORTING_ELEMENTS,
   MODELS_SUPPORTING_REFERENCE_IMAGES,
   MODELS_SUPPORTING_SCENE_IMAGES,
@@ -24,10 +25,11 @@ import {
   resolveMultiShotModel,
 } from 'venice-video-harness/core/series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
-import { parseShotDuration } from './generation-planner.js';
-import { faceCapableTwinId, getMaxPositivePromptChars, imageToVideoTwin, modelWantsSimplePrompt } from 'venice-video-harness/core/venice/models.js';
+import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
+import { faceCapableTwinId, getMaxPositivePromptChars, getVideoModel, modelWantsSimplePrompt, stagedFrameLane } from 'venice-video-harness/core/venice/models.js';
 import { getLocation } from '../series/manager.js';
 import { buildReferenceSlotPlan, type ReferenceSlot } from './reference-slots.js';
+import { stagedPlate } from './staging.js';
 
 export interface MiniDramaImagePrompt {
   prompt: string;
@@ -184,6 +186,13 @@ export interface ModelResolution {
   autoUseReferenceImages: boolean;
   /** Use @Image1/@Image2 tags instead of @Element1/@Element2 (Seedance, Grok Imagine R2V). */
   useImageTags: boolean;
+  /**
+   * Set when the shot cannot render as resolved, with why: a staged start
+   * frame (stage-ref) with no image-to-video lane in its lane's privacy tier,
+   * or one that would drop exact lip-sync. The other fields describe the
+   * shot's lane without the pick; generate-videos refuses the shot.
+   */
+  refused?: string;
 }
 
 /**
@@ -211,11 +220,31 @@ export function resolveVideoModel(
   // frame carries the place, the people, the light and the fix, so no
   // reference stack is sent and nothing can redraw what the edit removed.
   if (shot.stagingRef?.use === 'start-frame') {
-    const { stagingRef: _staged, ...unstaged } = shot;
-    const lane = resolveVideoModel(unstaged as ShotScript, series, _previousShot).modelId;
-    const i2v = imageToVideoTwin(lane)
-      ?? imageToVideoTwin(series.videoDefaults.atmosphereModel)
-      ?? 'seedance-2-5-image-to-video';
+    const { stagingRef: _staged, ...rest } = shot;
+    const unstaged = rest as ShotScript;
+    const laneResolution = resolveVideoModel(unstaged, series, _previousShot);
+    const lane = laneResolution.modelId;
+    // The re-take stays in the lane's privacy tier (rule 46): its family's
+    // image-to-video lane, else the project's own lane's, never a default
+    // from another tier.
+    const tier = getVideoModel(lane)?.privacy;
+    const i2v = stagedFrameLane(lane, [series.videoDefaults.atmosphereModel, series.videoDefaults.actionModel]);
+    if (!i2v) {
+      return {
+        ...laneResolution,
+        refused: tier
+          ? `no image-to-video lane in the ${tier} tier can re-generate it in place of ${lane} (its family has none, nor do the project's action and atmosphere lanes), and a staged start frame does not move a shot to another privacy tier. Use a plate staging ref, or set a ${tier} image-to-video lane as the atmosphere model`
+          : `${lane} is not in the model registry, so its privacy tier is unknown and a staged start frame cannot pick an image-to-video lane for it`,
+      };
+    }
+    // Exact lip-sync follows a dialogue recording through audio_url; an i2v
+    // lane that takes none would render the line without it.
+    if (mustRenderAsExactLipSync(unstaged, series.videoDefaults) && !MODELS_SUPPORTING_AUDIO_INPUT.has(i2v)) {
+      return {
+        ...laneResolution,
+        refused: `the shot is exact lip-sync, and ${i2v} (the image-to-video lane for its staged start frame) takes no dialogue audio, so the re-take would lose the lip-sync. Use a plate staging ref instead`,
+      };
+    }
     return {
       modelId: i2v,
       upgraded: false,
@@ -500,6 +529,11 @@ export function buildVideoPrompt(
   }
 
   const resolution = resolveVideoModel(shot, series, previousShot);
+  // A staged shot that cannot render from its pick gets no prompt on another
+  // lane (generate-videos refuses it before this point).
+  if (resolution.refused) {
+    throw new Error(`Shot ${shot.shotNumber}${shot.shotIdSuffix ?? ''} cannot render from its staging ref: ${resolution.refused}.`);
+  }
   const modelId = resolution.modelId;
 
   // Simple-prompt models (MiniMax H3 Max family) stage their own coverage and
@@ -717,7 +751,14 @@ export function buildVideoPrompt(
         loc.spatialAnchors ? `Fixed layout (never rearrange): ${loc.spatialAnchors}.` : '',
       ]
         .filter(Boolean).join(' ');
-      if (envNote) parts.push(`Location: ${envNote}`);
+      // A staged plate (stage-ref) shows the place as it must look in this
+      // shot; these words were written for the plate before the edit.
+      const staged = stagedPlate(series, shot);
+      const stagedSlot = staged ? referenceSlots?.find(slot => slot.kind === 'location' && slot.path === staged.path) : undefined;
+      const stagedWins = staged
+        ? ` (where these words describe something ${stagedSlot ? `@Image${stagedSlot.imageIndex}` : 'the staged image'} does not show, leave it out: the staged image is right)`
+        : '';
+      if (envNote) parts.push(`Location${stagedWins}: ${envNote}`);
     }
   }
 
