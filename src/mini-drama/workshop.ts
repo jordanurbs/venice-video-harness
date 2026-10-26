@@ -7,6 +7,7 @@ import type { ShotArtifacts, TreatmentProgress } from './treatment.js';
 import type { VeniceClient } from '../venice/client.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import type { Character, EpisodeScript, Location, SeriesState } from 'venice-video-harness/core/series/types.js';
+import { isObjectCastMember } from 'venice-video-harness/core/series/types.js';
 import { addEpisode, getCharacterDir, getLocationDir, saveEpisodeScript, saveSeries } from '../series/manager.js';
 import { getProjectLanguage } from 'venice-video-harness/core/series/project-language.js';
 import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence, resolveIntelligence } from 'venice-video-harness/core/venice/text-models.js';
@@ -459,9 +460,9 @@ function planInputs(series: Pick<SeriesState, 'locations'>, draft: WorkshopDraft
   };
 }
 
-/** Object cast members are cast like people, with traits that start "inanimate object" (RECURRING PROPS ARE CAST). */
+/** Object cast members are cast like people, with traits that start "inanimate object" (RECURRING PROPS ARE CAST) or `prop` set. */
 function isObjectCast(character: Character): boolean {
-  return /^\s*inanimate object/i.test(character.baseTraits ?? '');
+  return isObjectCastMember(character);
 }
 
 function planShotId(shot: { shotNumber: number; shotIdSuffix?: string }): string {

@@ -959,7 +959,7 @@ Use it to write the creative content **before** the harness builds the API body.
 |---|---|
 | Turning a vague idea into a brief | the `episode.workshop` **concept** string |
 | Writing one shot's look | that shot's **`description`** in `script.json` (or `insert-shot --description`) |
-| Writing a montage scene (the default lane) | the per-beat `[m:ss-m:ss] …` blocks the harness lays into `buildMontagePrompt`'s SEQUENCE section |
+| Writing a montage scene (the default lane) | each shot's `description` (plus `blocking` and `continuity.endState`), which the harness lays into `buildMontagePrompt`'s shot list (`Shot N \| a-bs \| <place>: …`), or into its timestamped SEQUENCE section with `montageGrammar: 'sequence'` |
 | Directing a voice/delivery | `character.voiceDesc` + the shot's `delivery` cue |
 
 ## Reconciliations — the harness owns these, do NOT hand-write them
@@ -978,9 +978,10 @@ creative content) is exactly right, and the harness enforces it. Concretely:
    Prompt text** (optimizer principle #7). The harness sets duration from the
    plan (2.5 ladder: every integer 4-30s), pins `720p` for Seedance, and passes
    `aspect_ratio` explicitly. Do not write "generate a 20-second 16:9 video"
-   into the Prompt. Timestamp ranges inside a montage SEQUENCE are creative
-   content and ARE kept — they double as the cutter's beat boundaries
-   (`GenerationUnit.montageBeats`).
+   into the Prompt. The time ranges inside a montage prompt (`Shot 2 | 5-9s`
+   in the shot list, `[0:05-0:09]` in the SEQUENCE grammar) ARE kept — the
+   harness writes them from the shot durations, and they double as the
+   cutter's beat boundaries (`GenerationUnit.montageBeats`).
 3. **No music / diegetic sound only.** The optimizer's audio syntax (`()` music,
    `<>` sfx, `{}` dialogue, `【】` subtitles) is compatible, but the harness owns
    the music lane: keep the mandatory close "Diegetic sound only, no music, no
@@ -988,15 +989,17 @@ creative content) is exactly right, and the harness enforces it. Concretely:
    and add music/ambient in post (`assemble.mix_audio`). Don't let the optimizer
    talk you into baking a music bed into the Prompt.
 
-## Montage SEQUENCE grammar = the optimizer's Long-Video stages
+## Montage grammar = the optimizer's Long-Video stages
 
-The harness's default lane (`buildMontagePrompt`, AGENTS.md rule 50) is the
-"Make a full trailer with Seedance 2.5" grammar, which is the same shape as the
-optimizer's **Long Videos and Time Ranges** template with explicit
-`[0:03-0:05]` beats. When compiling a montage scene, follow the optimizer's
-stage discipline (one primary state change per beat, an observable end state per
-beat, consecutive non-overlapping ranges) and the harness will slice the render
-at those exact timestamps.
+The harness's default lane (`buildMontagePrompt`, AGENTS.md rule 50) is a shot
+list: one `Shot N | a-bs | <place> (@ImageK): …` line per shot, joined by "Cut
+to". Its fallback (`montageGrammar: 'sequence'`) is the "Make a full trailer
+with Seedance 2.5" grammar with explicit `[0:03-0:05]` beats. Both have the
+shape of the optimizer's **Long Videos and Time Ranges** template. When
+compiling a montage scene, follow the optimizer's stage discipline (one primary
+state change per shot, an observable end state per shot — the shot's
+`continuity.endState` — and consecutive non-overlapping ranges) and the harness
+will slice the render at those cuts.
 
 ## Do NOT import from the optimizer
 

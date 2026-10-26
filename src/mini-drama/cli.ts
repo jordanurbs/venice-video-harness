@@ -102,7 +102,7 @@ import {
   type ShotApproval,
 } from './panel-approval.js';
 import { shotKey } from './shot-paths.js';
-import { DEFAULT_RENDER_CONCURRENCY, generateEpisodeVideos } from './video-generator.js';
+import { DEFAULT_RENDER_CONCURRENCY, archiveUnitOutputs, generateEpisodeVideos } from './video-generator.js';
 import { generateVoiceReference, harvestVoiceReferenceFromClip } from './voice-reference.js';
 import { generateLocationReferences } from './location-generator.js';
 import {
@@ -114,7 +114,7 @@ import { fixPanel, refineWithReferences, refineStyleConsistency } from './panel-
 import { multiEditImage, loadImageAsDataUri } from '../venice/multi-edit.js';
 import type { MultiEditModel } from 'venice-video-harness/core/venice/types.js';
 import { assembleEpisode, collectShotVideos } from './assembler.js';
-import { buildGenerationPlan, saveGenerationPlan } from './generation-planner.js';
+import { buildGenerationPlan, resolveUnitShots, saveGenerationPlan, unitIndicesForShots } from './generation-planner.js';
 import {
   AUDIO_STRATEGY_CHOICES,
   INTELLIGENCE_CHOICES,
@@ -3364,6 +3364,14 @@ program
 
     const units = plan.units.filter(u => existsSync(join(sceneDir, u.outputFile)));
     console.log(`QA Videos: Episode ${opts.episode} — ${units.length} rendered unit(s)\n`);
+    // A unit renamed by a change in grouping keeps its clips but has no master
+    // under its new name (generate-videos skips it rather than bill it again).
+    // These checks read masters, so say which units they cannot see.
+    const noMaster = plan.units.filter(u => !existsSync(join(sceneDir, u.outputFile)) && (u.segments ?? []).length > 0);
+    if (noMaster.length > 0) {
+      console.warn(`⚠ Not checked: ${noMaster.map(u => u.unitId).join(', ')} (clips on disk, no master under the unit's current name).`);
+      console.warn(`  To check them, render them again as one generation: generate-videos -p ${series.outputDir} -e ${opts.episode} --retake ${noMaster.flatMap(u => u.shotNumbers).join(',')}\n`);
+    }
 
     // ---- Layer 1: programmatic (free) ----
     console.log('Programmatic checks:');
@@ -3549,7 +3557,8 @@ program
   .option('--auto-edit', 'After cutting montage renders, let the harness assemble the edit automatically (overrides videoDefaults.autoEdit for this run).')
   .option('--no-auto-edit', 'Provide the montage cuts in the media library only; do not auto-assemble.')
   .option('--concurrency <n>', 'Units to render at once. A unit that starts from the previous clip\'s last frame still waits for it; 1 renders one at a time.', String(DEFAULT_RENDER_CONCURRENCY))
-  .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean; montage: boolean; autoEdit?: boolean; concurrency: string }) => {
+  .option('--retake <shots>', 'Re-render the whole generation unit(s) holding these shots (comma/range list, e.g. "4" or "2-6"; a number covers its suffixed inserts), and nothing else. Their current master and cuts are archived first (-vN). A montage unit renders again as one generation and is cut again, so its shots still match each other.')
+  .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean; montage: boolean; autoEdit?: boolean; concurrency: string; retake?: string }) => {
     const concurrency = Number(opts.concurrency);
     if (!Number.isInteger(concurrency) || concurrency < 1) {
       console.error(`--concurrency must be a whole number of at least 1 (got ${opts.concurrency}).`);
@@ -3614,6 +3623,19 @@ program
     const sceneDir = join(episodeDir, 'scene-001');
     const generationPlan = buildGenerationPlan(script, series);
 
+    // --retake: render only the units that hold the named shots, whole. The
+    // full plan still goes to the renderer (shots are matched to units in
+    // plan order, and a chained unit needs the clip before it); every other
+    // unit is left as it is, and is not rendered even if its clips are missing.
+    let retakeUnits: number[] | undefined;
+    if (opts.retake) {
+      retakeUnits = unitIndicesForShots(generationPlan, parseShotSpec(opts.retake));
+      if (retakeUnits.length === 0) {
+        console.error(`--retake ${opts.retake}: no generation unit holds those shots. Units: ${generationPlan.units.map(u => `${u.unitId} [${u.shotNumbers.join(',')}]`).join('; ')}`);
+        process.exit(1);
+      }
+    }
+
     console.log(`Generating videos for Episode ${opts.episode}: ${script.title}`);
     const ccModel = series.videoDefaults.characterConsistencyModel ?? DEFAULT_CHARACTER_CONSISTENCY_MODEL;
     console.log(`Models: action=${series.videoDefaults.actionModel}, atmosphere=${series.videoDefaults.atmosphereModel}, character-consistency=${ccModel}\n`);
@@ -3669,8 +3691,20 @@ program
       }
     }
 
+    if (retakeUnits) {
+      const unitShots = resolveUnitShots(generationPlan, script.shots);
+      const label = (shot: ShotScript) => `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
+      console.log(`Re-taking ${retakeUnits.length} unit(s), whole: ${retakeUnits.map(index => {
+        const unit = generationPlan.units[index];
+        return `${unit.unitId} (shots ${unitShots[index].map(label).join(', ')}, ${unit.duration})`;
+      }).join('; ')}`);
+      for (const index of retakeUnits) archiveUnitOutputs(sceneDir, generationPlan.units[index], unitShots[index]);
+      console.log('');
+    }
+
     const { videoPaths, plan } = await generateEpisodeVideos(
-      client, series, script.shots, sceneDir, generationPlan, effectiveAudioMix, { concurrency },
+      client, series, script.shots, sceneDir, generationPlan, effectiveAudioMix,
+      { concurrency, onlyUnits: retakeUnits ? new Set(retakeUnits) : undefined },
     );
     await saveGenerationPlan(episodeDir, plan);
 
@@ -3678,7 +3712,12 @@ program
     if (ep) ep.status = 'produced';
     await saveSeries(series);
 
-    console.log(`\nGenerated ${videoPaths.length} video clips.`);
+    if (retakeUnits) {
+      const clips = retakeUnits.reduce((sum, index) => sum + (plan.units[index].segments?.length ?? 0), 0);
+      console.log(`\nRe-took ${retakeUnits.length} unit(s): ${clips} clip(s). ${videoPaths.length} clips in the episode.`);
+    } else {
+      console.log(`\nGenerated ${videoPaths.length} video clips.`);
+    }
     console.log(`Generation plan saved to: ${join(episodeDir, 'generation-plan.json')}`);
 
     const hadMontage = plan.units.some(unit => unit.unitType === 'montage');

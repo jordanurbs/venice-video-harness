@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **An over-long SEQUENCE montage prompt no longer loses its STYLE tail.**
+  Past the 5000-character guard the prompt was hard-cut at 5000 characters,
+  which lost its end: the style token (with the face-stability and no-music
+  lines) and the negative. Every beat's description and blocking now shrink
+  by one ratio, at word boundaries; the header, dialogue, sound, geography
+  hold, STYLE and negative stay whole. Test: `tests/montage-engine.test.mjs`.
+
 - **Video registry corrections checked against `/video/quote` (drift issue
   #50).** Quote is free and validates `duration` and `resolution` with the
   same enum errors as the queue, so each change below rests on it plus the
@@ -147,6 +154,47 @@
 
 ### Changed
 
+- **Montage: one generation per continuous run, a shot-list prompt, staged
+  views, cuts snapped to the real cuts (rule 50).** From a 31-render
+  continuity bakeoff (Seedance 2.5 R2V, 720p): one generation kept a recurring
+  vehicle and a character's facing across cuts in 3 of 3 takes, where separate
+  per-shot generations swapped the vehicle in 4 of 4; its planned cuts landed
+  as hard cuts 25 of 25 times, within 0.55 s; the SEQUENCE prompt with all four
+  views of each place scored worst.
+  - `groupShotsIntoScenes` keeps a `continuity.from: 'continuous'` shot in the
+    running scene across a change of location. `new-scene` always splits.
+    Scripts without `continuity` group as before. A continuous insert rides in
+    its run.
+  - The default montage prompt is a shot list
+    (`videoDefaults.montageGrammar: 'shots'`): places named in the first line,
+    references in first-appearance order, one `Shot N | a-bs | <place>
+    (@ImageK)` line per shot joined by "Cut to", then the abrupt-cut line; a
+    count line for a vehicle prop and the previous shot's `endState` on a
+    continuous shot. Past 8000 characters the shot prose shrinks, never below
+    40%, and the STYLE tail stays whole.
+  - `buildMontageSlotPlan` sends only each shot's staged view, saying which
+    shots it serves and what it does not set (`montageReferenceViews:
+    'staged'`; `'all'` adds every view). A unit where no shot names a
+    `plateView` sends what a montage always sent: every view of its place,
+    custom angles and second angles.
+  - `cutMontageIntoShots` snaps planned cuts to the detected scene cuts
+    (`snapBoundaries`, ±0.8 s), matched in order so a boundary never takes the
+    next boundary's cut, trims one frame at each inner edge, and records the
+    boundaries and any unplanned cut in `manifest.json`.
+  - A montage unit whose clips are all on disk is skipped even when no master
+    carries its name. Masters are named after the scene and first and last
+    shot, so a change in grouping renamed units whose shots did not change and
+    the next run billed them again. The log names the `--retake` command, and
+    `qa-videos`, which reads masters, lists such units as not checked.
+  - `generate-videos --retake <shots>` archives (`-vN`) and re-renders the
+    whole unit(s) holding those shots, and nothing else. The renderer gets the
+    whole plan plus `onlyUnits` (plan positions), so a suffixed insert keeps
+    its own shot and a chained unit still starts from the clip before it
+    (`resolveUnitShots`, `unitIndicesForShots`, `archiveUnitOutputs`).
+  - `montageGrammar: 'sequence'` restores the SEQUENCE prompt with its
+    grouping (one location per generation, inserts as singles) and references.
+  - Tests: `tests/montage-engine.test.mjs`, `tests/montage-retake.test.mjs`.
+
 - **Duration and resolution are validated before the paid call instead of
   silently corrected.** `queueVideo` used to snap an unsupported duration to
   the nearest valid one, and `buildModelParams` swapped an unsupported
@@ -163,6 +211,18 @@
   behaviour is unchanged. Test: `tests/validate-before-quote.test.mjs`.
 
 ### Added
+
+- **Object cast members get object reference clauses (`Character.prop`,
+  `isObjectCastMember`).** An object cast member (a watch, a coin, a recurring
+  boat with a locked design) used to get the person clause in the reference
+  slot plan ("use this reference for THE PHONE's face, hair, and wardrobe")
+  and "wearing n/a" in the montage prompt. It now gets a clause that asks the
+  video model to match its shape, materials, colours and marks, and a montage
+  identity line that names it as an object. A cast member is an object when
+  its `baseTraits` start "inanimate object" (what the workshop and the Cast tab
+  write) or the new `prop` flag is set; reference sheets, location plates, the
+  plan check and the slot planner all read the same predicate. Test:
+  `tests/prop-cast.test.mjs`.
 
 - **Shots are planned against their location plates, and checked before any
   spend (rule 64).** The video model draws what a reference plate shows, not

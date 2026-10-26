@@ -26,13 +26,32 @@
 //
 // After the render, `cutMontageIntoShots` slices the clip at the SAME beat
 // timestamps that were written into the prompt (a single source of truth on
-// GenerationUnit.montageBeats), producing per-shot clips that are:
+// GenerationUnit.montageBeats), each snapped to the scene cut detected near
+// it, producing per-shot clips that are:
 //   - written next to the panels as canonical `shot-NNN.mp4` files, AND
 //   - organized into the episode's media library at
 //     `media-library/scene-NN/shot-NNN.mp4` (plus the uncut master),
 // so a human or the Venice Video Creator can cut by hand when
 // `videoDefaults.autoEdit` is off, while `assemble-episode` picks the same
 // canonical files up automatically when auto-edit is on.
+//
+// Since 2026-10-25 the default prompt is a shot list instead
+// (`videoDefaults.montageGrammar: 'shots'`, see `buildMontagePrompt`):
+//
+//   One continuous scene in 4 connected shots, in story order, moving through <A>, then <B>. ...
+//   References, in the order they first appear: @Image1 is ANNA — ...
+//   Shot 1 | 0-5s | <A> (@Image3): <camera>. <action> Blocking: ... Sound: ...
+//   Cut to Shot 2 | 5-9s | <A> (@Image4): ...
+//   Every cut is an abrupt single-frame hard cut: the two images never blend.
+//
+// and a scene may cross places when its shots are joined by
+// `continuity.from: 'continuous'`, so one action (boarding at the landing,
+// then the crossing on deck) stays one generation and the vehicle, the props
+// and the facing carry across the cuts. In a 31-render continuity bakeoff
+// (Seedance 2.5 R2V, 720p), one generation kept a recurring vehicle the same
+// in 3 of 3 takes; separate per-shot generations swapped it in 4 of 4.
+// `montageGrammar: 'sequence'` brings back the SEQUENCE grammar together
+// with its grouping (one location per generation) and references.
 // ---------------------------------------------------------------------------
 
 import { mkdirSync, copyFileSync, writeFileSync } from 'node:fs';
@@ -49,6 +68,7 @@ import type {
   VideoModelDefaults,
 } from 'venice-video-harness/core/series/types.js';
 import {
+  resolveMontageGrammar,
   resolveMontageMaxDurationSec,
   resolveMontageMinDurationSec,
   resolveMontageModel,
@@ -60,38 +80,72 @@ import { shotKey } from './shot-paths.js';
 // Scene grouping
 // ---------------------------------------------------------------------------
 
-/** A scene: consecutive shots sharing a location (or all untagged). */
+/** A scene: consecutive shots one generation can carry. */
 export interface SceneGroup {
   sceneNumber: number;
+  /** The first location tag in the scene. */
   location?: string;
+  /** Every location the scene passes through, in order (one, unless a continuous run crosses places). */
+  locations: string[];
   shots: ShotScript[];
 }
 
+export interface SceneGroupingOptions {
+  /**
+   * Read each shot's `continuity` (default `true`, the shot-list grammar). Set
+   * `false` for the SEQUENCE grammar: scenes then split on every change of
+   * location and nothing else, the rule from before `continuity` existed.
+   */
+  continuity?: boolean;
+}
+
 /**
- * Group an episode's shots into scenes. A scene is a maximal run of
- * consecutive shots with the same `location` tag. Untagged shots inherit the
- * running scene when they sit between same-location shots (a close-up the
- * script LLM forgot to tag), but an untagged shot after a location change
- * starts a new scene. This keeps the montage's single reference stack honest:
- * one blocking plate + one location's angles per generation (rule 21b).
+ * Group an episode's shots into scenes, the runs a single montage generation
+ * may carry.
+ *
+ * - A shot whose `continuity.from` is `continuous` stays in the scene even
+ *   when its location changes. That keeps one action across places (boarding
+ *   at the landing stage, then at the bow, then the crossing) in one
+ *   generation, so the vehicle, the props and the facing carry across the
+ *   cuts. In a 31-render continuity bakeoff, one generation kept the vehicle
+ *   the same in 3 of 3 takes; separate generations swapped it in 4 of 4.
+ * - `new-scene` always starts a scene.
+ * - Otherwise (`later`, or no continuity) a change of location starts a scene,
+ *   as it always did, so scripts without `continuity` group as before.
+ *
+ * Untagged shots inherit the running scene when they sit between
+ * same-location shots (a close-up the script LLM forgot to tag), but an
+ * untagged shot after a location change starts a new scene.
+ *
+ * With `{ continuity: false }` (the SEQUENCE grammar) a scene is a maximal
+ * run of shots with the same `location` tag: one blocking plate and one
+ * location's angles per generation (rule 21b).
  */
-export function groupShotsIntoScenes(shots: ShotScript[]): SceneGroup[] {
+export function groupShotsIntoScenes(shots: ShotScript[], options: SceneGroupingOptions = {}): SceneGroup[] {
+  const readContinuity = options.continuity ?? true;
   const scenes: SceneGroup[] = [];
   let current: SceneGroup | null = null;
 
   for (const shot of shots) {
     const loc = shot.location;
-    const startsNewScene = !current
-      || (loc !== undefined && current.location !== undefined && loc !== current.location)
-      || (loc !== undefined && current.location === undefined);
+    const from = readContinuity ? shot.continuity?.from : undefined;
+    const open = current as SceneGroup | null;
+    const lastLocation = open ? open.locations[open.locations.length - 1] : undefined;
+    const startsNewScene = !open
+      || from === 'new-scene'
+      || (from !== 'continuous' && (
+        (loc !== undefined && lastLocation !== undefined && loc !== lastLocation)
+        || (loc !== undefined && open.location === undefined)
+      ));
 
     if (startsNewScene) {
-      current = { sceneNumber: scenes.length + 1, location: loc, shots: [shot] };
+      current = { sceneNumber: scenes.length + 1, location: loc, locations: loc ? [loc] : [], shots: [shot] };
       scenes.push(current);
       continue;
     }
-    // Same location, or untagged shot continuing the current scene.
+    // Same location, an untagged shot continuing the scene, or a continuous move to another place.
     if (current!.location === undefined && loc !== undefined) current!.location = loc;
+    if (loc !== undefined && current!.locations[current!.locations.length - 1] !== loc) current!.locations.push(loc);
     current!.shots.push(shot);
   }
 
@@ -143,11 +197,14 @@ function padShot(n: number): string {
  * their own singles (they need exact framing, not montage energy), and
  * exact-lip-sync dialogue shots keep their dedicated pipeline. Everything
  * else — establishing, action, dialogue-on-native, reaction, close-up —
- * rides the montage.
+ * rides the montage. With the shot-list grammar, an insert that continues
+ * the action (`continuity.from: 'continuous'`: hands at the rail, the watch
+ * in them) rides in its run too, so the prop and the light carry across the
+ * cut.
  */
-function shotBlocksMontage(shot: ShotScript, videoDefaults?: VideoModelDefaults): boolean {
+function shotBlocksMontage(shot: ShotScript, videoDefaults: VideoModelDefaults | undefined, readContinuity: boolean): boolean {
   if (shot.mustStaySingle) return true;
-  if (shot.type === 'insert') return true;
+  if (shot.type === 'insert' && !(readContinuity && shot.continuity?.from === 'continuous')) return true;
   if (/title card/i.test(shot.description)) return true;
   // Exact-lip-sync dialogue keeps its dedicated single-clip pipeline —
   // bundling it into a montage would drop the lip-sync entirely.
@@ -183,9 +240,13 @@ function splitSceneIntoWindows(shots: ShotScript[], maxSec: number): ShotScript[
  * Build a montage-first generation plan: each scene's consecutive
  * montage-eligible beats become ONE `montage` unit (up to the model ceiling,
  * default 30s on Seedance 2.5), carrying the timestamped beat map that both
- * the prompt's SEQUENCE block and the post-render cutter consume. Shots that
- * block the montage (inserts, title cards, forced singles) fall through as
- * `single` units via the fallback builder supplied by the caller.
+ * the prompt and the post-render cutter consume. Shots that block the
+ * montage (inserts, title cards, forced singles) fall through as `single`
+ * units via the fallback builder supplied by the caller.
+ *
+ * The grammar sets the grouping: the shot list (default) reads `continuity`,
+ * so a continuous run stays one unit across places; the SEQUENCE fallback
+ * splits on every change of location, as it always did.
  */
 export function planMontageUnits(
   script: EpisodeScript,
@@ -196,8 +257,9 @@ export function planMontageUnits(
   const maxSec = resolveMontageMaxDurationSec(videoDefaults);
   const minSec = resolveMontageMinDurationSec(videoDefaults);
   const model = resolveMontageModel(videoDefaults);
+  const shotList = resolveMontageGrammar(videoDefaults) === 'shots';
   const units: GenerationUnit[] = [];
-  const scenes = groupShotsIntoScenes(script.shots);
+  const scenes = groupShotsIntoScenes(script.shots, { continuity: shotList });
 
   for (const scene of scenes) {
     // Partition the scene into montage runs and blocking singles, keeping
@@ -221,6 +283,9 @@ export function planMontageUnits(
         }
         const first = window[0];
         const last = window[window.length - 1];
+        const places = window
+          .map(s => s.location)
+          .filter((loc, i, all): loc is string => Boolean(loc) && all[i - 1] !== loc);
         units.push({
           unitId: `montage-s${String(scene.sceneNumber).padStart(2, '0')}-${padShot(first.shotNumber)}-${padShot(last.shotNumber)}`,
           unitType: 'montage',
@@ -231,8 +296,13 @@ export function planMontageUnits(
           startFrameStrategy: 'panel',
           endFrameStrategy: 'natural',
           decisionReasons: [
-            `scene ${scene.sceneNumber}${scene.location ? ` (${scene.location})` : ''}: ${window.length}-beat single-pass montage on ${model}`,
-            'timestamped SEQUENCE prompt (vault Seedance 2.5 trailer grammar); cut per-beat after render',
+            `scene ${scene.sceneNumber}${places.length ? ` (${places.join(' → ')})` : ''}: ${window.length}-beat single-pass montage on ${model}`,
+            ...(new Set(places).size > 1
+              ? ['one continuous run across places (continuity: continuous): one generation keeps the vehicle, props and facing across the cuts']
+              : []),
+            shotList
+              ? 'shot-list prompt ("Shot N | a-bs | place"); cut at the detected cuts after render'
+              : 'timestamped SEQUENCE prompt (vault Seedance 2.5 trailer grammar); cut per-beat after render',
           ],
           fallbackToSingles: false,
           montageBeats: beats,
@@ -243,7 +313,7 @@ export function planMontageUnits(
     };
 
     for (const shot of scene.shots) {
-      if (shotBlocksMontage(shot, videoDefaults)) {
+      if (shotBlocksMontage(shot, videoDefaults, shotList)) {
         flushRun();
         units.push(buildSingleFallback(shot));
         continue;
@@ -274,8 +344,8 @@ function ffprobeDuration(path: string): number {
 
 function ffmpegCut(sourcePath: string, startSec: number, durationSec: number, outputPath: string): void {
   // Re-encode (not stream copy) so every cut is frame-accurate at the beat
-  // boundary — a montage's whole point is that cuts land exactly where the
-  // SEQUENCE block said they would. Same codec settings as the multi-shot
+  // boundary — a montage's whole point is that each clip holds exactly the
+  // shot the prompt put there. Same codec settings as the multi-shot
   // splitter so downstream concat never hits a mismatch.
   const r = spawnSync('ffmpeg', [
     '-y',
@@ -291,6 +361,85 @@ function ffmpegCut(sourcePath: string, startSec: number, durationSec: number, ou
   }
 }
 
+/** Scene cuts in a video (seconds), from ffmpeg's scene score. Empty when ffmpeg finds none or fails. */
+export function detectSceneCuts(videoPath: string, threshold = 0.3): number[] {
+  const r = spawnSync('ffmpeg', [
+    '-v', 'info', '-i', videoPath, '-vf', `select='gt(scene,${threshold})',showinfo`, '-f', 'null', '-',
+  ], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
+  return [...`${r.stderr ?? ''}`.matchAll(/pts_time:([0-9.]+)/g)].map(m => Number(parseFloat(m[1]).toFixed(3)));
+}
+
+export interface SnappedBoundary {
+  /** Where the plan put the cut (seconds, already scaled to the render). */
+  planned: number;
+  /** Where the clip is cut: the detected cut matched to this boundary, else the planned time. */
+  at: number;
+  snapped: boolean;
+  /** detected - planned, when snapped. */
+  offset?: number;
+}
+
+/**
+ * Move each planned boundary to a detected scene cut within `toleranceSec`.
+ * Seedance lands a planned cut up to about half a second off, mostly early,
+ * so slicing at the planned time carries frames of the neighbouring shot.
+ *
+ * Cuts are matched in order: each cut is used once, and a boundary only
+ * takes a cut at least `minGapSec` after the edge before it. Of the
+ * assignments that allows, the one that snaps the most boundaries wins, then
+ * the one with the smallest total offset. So a lone cut between two
+ * boundaries goes to the nearer one, and a boundary never takes the next
+ * boundary's cut when that would leave the next one without its own: planned
+ * 2 s and 3 s with real cuts at 1.45 s and 2.45 s snap to 1.45 and 2.45,
+ * where taking the nearest cut for each boundary in turn gave the first one
+ * 2.45 and ended clip 1 with shot 2's footage. A boundary with no cut keeps
+ * its planned time.
+ */
+export function snapBoundaries(planned: number[], detected: number[], toleranceSec = 0.8, minGapSec = 0.3): SnappedBoundary[] {
+  const cuts = [...new Set(detected.filter(Number.isFinite))].sort((a, b) => a - b);
+  interface Assignment { snapped: number; offset: number; picks: number[] }
+  const memo = new Map<string, Assignment>();
+  // The best assignment for boundaries i.. when the edge before them is at
+  // `floor` and cuts[last] is the last cut used.
+  const best = (i: number, last: number, floor: number): Assignment => {
+    if (i === planned.length) return { snapped: 0, offset: 0, picks: [] };
+    const key = `${i}|${last}|${floor}`;
+    const known = memo.get(key);
+    if (known) return known;
+    const want = planned[i];
+    const unmatched = best(i + 1, last, Math.max(want, floor + minGapSec));
+    let result: Assignment = { ...unmatched, picks: [-1, ...unmatched.picks] };
+    for (let j = last + 1; j < cuts.length && cuts[j] <= want + toleranceSec; j++) {
+      const at = cuts[j];
+      if (at < want - toleranceSec || at <= floor + minGapSec) continue;
+      const rest = best(i + 1, j, at);
+      const snapped = rest.snapped + 1;
+      const offset = rest.offset + Math.abs(at - want);
+      if (snapped > result.snapped || (snapped === result.snapped && offset < result.offset - 1e-9)) {
+        result = { snapped, offset, picks: [j, ...rest.picks] };
+      }
+    }
+    memo.set(key, result);
+    return result;
+  };
+
+  const { picks } = best(0, -1, 0);
+  const out: SnappedBoundary[] = [];
+  let floor = 0;
+  planned.forEach((want, i) => {
+    const j = picks[i];
+    if (j >= 0) {
+      out.push({ planned: want, at: cuts[j], snapped: true, offset: Number((cuts[j] - want).toFixed(3)) });
+      floor = cuts[j];
+    } else {
+      const at = Math.max(want, floor + minGapSec);
+      out.push({ planned: want, at, snapped: false });
+      floor = at;
+    }
+  });
+  return out;
+}
+
 export interface MontageCutResult {
   /** Canonical per-shot clips (`<sceneDir>/shot-NNN.mp4`), for the assembler. */
   shotPaths: string[];
@@ -300,11 +449,15 @@ export interface MontageCutResult {
 }
 
 /**
- * Cut a rendered montage at its planned beat boundaries.
+ * Cut a rendered montage at its beat boundaries.
  *
  * The beat map is scaled to the ACTUAL rendered duration (Seedance can come
  * back a hair short or long of the requested window) so the last beat never
  * runs off the end and the proportions the prompt asked for are preserved.
+ * Each scaled boundary then snaps to the scene cut detected near it
+ * (`snapBoundaries`), and every clip loses one frame at each inner edge, so
+ * a boundary frame never shows the neighbouring shot. `manifest.json`
+ * records the detected cuts, the boundaries and any cut nobody planned.
  *
  * Every shot is written twice:
  *   1. `<sceneDir>/shot-NNN.mp4` — the canonical path every downstream step
@@ -342,11 +495,25 @@ export function cutMontageIntoShots(options: {
   const libraryPaths: string[] = [];
   const segments: GenerationUnitSegment[] = [];
 
+  // Cut at the real hard cuts: each planned boundary snaps to a detected
+  // scene change, and every clip loses one frame at each inner edge so a
+  // boundary frame never shows the neighbouring shot.
+  const SNAP_TOLERANCE_SEC = 0.8;
+  const INSET_SEC = 0.04;
+  const detected = beats.length > 1 ? detectSceneCuts(montagePath) : [];
+  const boundaries = snapBoundaries(beats.slice(1).map(beat => beat.startSec * scale), detected, SNAP_TOLERANCE_SEC);
+  const edges = [0, ...boundaries.map(b => b.at), renderedSec];
+  const missed = boundaries.filter(b => !b.snapped).length;
+  if (missed > 0) {
+    console.warn(`  ⚠ ${unit.unitId}: ${missed} of ${boundaries.length} planned cut(s) had no detected cut within ${SNAP_TOLERANCE_SEC} s; cut at the planned time. Check those joins.`);
+  }
+  const extraCuts = detected.filter(t => t > 0.3 && t < renderedSec - 0.3 && !boundaries.some(b => b.snapped && b.at === t));
+
   for (let i = 0; i < beats.length; i++) {
     const beat = beats[i];
     const isLast = i === beats.length - 1;
-    const start = beat.startSec * scale;
-    const end = isLast ? renderedSec : beat.endSec * scale;
+    const start = edges[i] + (i > 0 ? INSET_SEC : 0);
+    const end = isLast ? renderedSec : edges[i + 1] - INSET_SEC;
     const dur = Math.max(0.1, end - start);
     const key = shotKey(beat.shotNumber);
 
@@ -380,6 +547,9 @@ export function cutMontageIntoShots(options: {
     renderedDurationSec: Number(renderedSec.toFixed(3)),
     plannedDurationSec: plannedSec,
     beatScale: Number(scale.toFixed(4)),
+    detectedCuts: detected,
+    boundaries,
+    extraCuts,
     cuts: segments.map(seg => {
       const shot = shotsByNumber.get(seg.shotNumber);
       return {
