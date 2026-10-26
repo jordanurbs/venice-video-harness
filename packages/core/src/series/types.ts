@@ -1079,12 +1079,100 @@ export interface GenerationUnit {
    * land in the media library under `media-library/scene-NN/`.
    */
   sceneNumber?: number;
+  /**
+   * Shot-list montage units only: notes the generation planner
+   * (`plan-generations`) writes into a shot's line of the prompt, by shot id
+   * (`shotNumber` + `shotIdSuffix`, e.g. "13b"), without changing the script.
+   * Typically a state change the shot must show ("the doors close, the lines
+   * are cast off"), because one generation carries the first plate's state
+   * forward.
+   */
+  shotNotes?: Record<string, string>;
+}
+
+/**
+ * What decides how an episode's shots are packaged into generations: what the
+ * planner of the project's route reads, and what the packaging agent reads.
+ * An approved generation plan applies only while this is unchanged. A field
+ * no planner of the route reads is left out (the montage settings on the
+ * standard route, `continuity.from` there), and so is everything that changes
+ * a shot's prompt line only: its view, dialogue, blocking, `stagedOn`,
+ * `endState`, and its words, except where a plan's shot note amends them.
+ */
+export interface GenerationPackagingInputs {
+  settings: {
+    /** `resolveMontageMode`: false on the standard route (`--no-montage`). */
+    montage: boolean;
+    /** Montage route only. */
+    grammar?: 'shots' | 'sequence';
+    montageModel?: string;
+    /** The montage window ceiling and floor, in seconds. */
+    maxSec?: number;
+    minSec?: number;
+  };
+  shots: Array<{
+    /** Shot id: `shotNumber` + `shotIdSuffix` ("13b"). */
+    id: string;
+    seconds: number;
+    location: string | null;
+    /** `type: 'insert'`: renders alone, unless it continues the action in a shot-list montage. */
+    insert: boolean;
+    /** Standard route: `type: 'establishing'` keeps the shot out of multi-shot windows. */
+    establishing?: boolean;
+    /** Cast names, upper case, sorted: who is in the shot (standard route and the packaging agent). */
+    characters?: string[];
+    /** `continuity.from` (the shot-list montage grouping and the packaging agent). */
+    from?: string | null;
+    /** `mustStaySingle`, or a staging ref (a staged shot renders alone whatever the flag says). */
+    mustStaySingle: boolean;
+    /** Standard route: `allowMultiShot: false` keeps the shot out of multi-shot windows. */
+    allowMultiShot?: boolean;
+    /** The use of the shot's staging ref (stage-ref): a staged shot always renders alone. */
+    staged: 'plate' | 'start-frame' | null;
+    /** The description names a title card (the shot renders alone). */
+    titleCard: boolean;
+    /** The shot renders as an exact lip-sync clip (audioStrategy, dialogue, motion, faceVisible). */
+    lipSync: boolean;
+    /** A shot the plan's shot note amends: sha256 (16 hex) of its description, so a rewrite stales the plan. */
+    description?: string;
+  }>;
+}
+
+/** How a generation plan was made (`plan-generations`), and whether a person approved it. */
+export interface GenerationPlanning {
+  /** `agent`: the packaging sub-agent's units, validated. `rules`: the deterministic planner. */
+  by: 'agent' | 'rules';
+  /** The intelligence model that planned (agent plans). */
+  model?: string;
+  /** sha256 (first 16 hex characters) of `inputs`. */
+  packagingHash: string;
+  inputs: GenerationPackagingInputs;
+  /**
+   * Agent plans: the units as shot ids, in script order. The plan that renders
+   * is rebuilt from them with the settings of the run, so its models and frame
+   * strategies are current while the packaging stays the approved one.
+   */
+  groups?: Array<{ shots: string[]; reason: string }>;
+  /** Agent plans: every validated shot note, by shot id. Units carry the ones a prompt reads. */
+  shotNotes?: Record<string, string>;
+  createdAt: string;
+  approved?: boolean;
+  approvedBy?: string;
+  approvedAt?: string;
+  /** Why each split was made (after shot id N). */
+  splits?: Array<{ after: string; reason: string }>;
+  /** What the planner wants a person to know: risks, state changes, notes a prompt cannot use. */
+  notes?: string[];
+  /** Problems the validator found in the agent's answer (the plan was then made by rules). */
+  problems?: string[];
 }
 
 export interface GenerationPlan {
   episode: number;
   generatedAt: string;
   units: GenerationUnit[];
+  /** Set on plans made by `plan-generations` (and copied onto the rendered plan when one was used). */
+  planning?: GenerationPlanning;
 }
 
 // ---------------------------------------------------------------------------

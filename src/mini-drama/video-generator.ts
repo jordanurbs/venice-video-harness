@@ -782,6 +782,49 @@ async function submitVideoQueue(
   }
 }
 
+/**
+ * The resolution `renderVideoFile` requests for a model when no override
+ * applies, by family. Undefined leaves the field off (the model's default).
+ */
+export function defaultRenderResolution(modelId: string): string | undefined {
+  if (modelId.includes('seedance')) return '720p';
+  // H3 Max / Max Turbo top out at 768P and reject 2K outright. This branch
+  // MUST stay above the `minimax-h3` one — the substring match below would
+  // otherwise pin them to 2K and 400 every render. 480P exists as a draft
+  // tier but is not auto-selected; 768P is the finish resolution.
+  if (modelId.includes('minimax-h3-max')) return '768P';
+  // 2K is H3's only resolution — anything else is a hard 400.
+  if (modelId.includes('minimax-h3')) return '2K';
+  if (modelId.includes('veo')) return '720p';
+  if (modelId.includes('wan-2.6') || modelId.includes('wan-2.5')) return '1080p';
+  if (modelId.includes('ltx-2')) return '1080p';
+  if (modelId.includes('sora-2-pro')) return '1080p';
+  if (modelId.includes('sora-2')) return '720p';
+  return undefined;
+}
+
+/**
+ * The resolution `renderVideoFile` requests: an override the model lists
+ * (a single shot passes `videoDefaults.resolution`), else the family default.
+ */
+export function resolveRenderResolution(modelId: string, override?: string): string | undefined {
+  if (override && getVideoModel(modelId)?.resolutions.includes(override)) return override;
+  return defaultRenderResolution(modelId);
+}
+
+/**
+ * Whether `renderVideoFile` sends `aspect_ratio` for a model. Image-to-video
+ * inherits aspect from the start image. Reference-to-video and text-to-video
+ * variants take aspect_ratio explicitly — MiniMax H3 / H3 Max t2v go further
+ * and return HTTP 400 ("aspect_ratio: Required") without it, which made loop
+ * watch mode's opening t2v take unqueueable.
+ */
+export function sendsAspectRatio(modelId: string): boolean {
+  return modelId.includes('reference-to-video')
+    || modelId.includes('text-to-video')
+    || (modelId.includes('seedance') && !modelId.includes('image-to-video'));
+}
+
 export async function renderVideoFile(
   client: VeniceClient,
   options: RenderVideoOptions,
@@ -886,37 +929,11 @@ export async function renderVideoFile(
   // family defaults below when absent or unsupported. The loop-preview engine
   // uses this to pin MiniMax H3 Max Turbo to its 480P draft tier.
   const resolutionOverride = options.resolution;
-  const overrideSpec = resolutionOverride ? getVideoModel(effectiveModel) : undefined;
-  if (resolutionOverride && overrideSpec?.resolutions.includes(resolutionOverride)) {
-    body.resolution = resolutionOverride;
-  } else if (resolutionOverride) {
+  if (resolutionOverride && !getVideoModel(effectiveModel)?.resolutions.includes(resolutionOverride)) {
     console.warn(`  ⚠ Resolution override ${resolutionOverride} not valid for ${effectiveModel}; using the model default.`);
   }
-
-  if (body.resolution !== undefined) {
-    // Already pinned by the override above.
-  } else if (effectiveModel.includes('seedance')) {
-    body.resolution = '720p';
-  } else if (effectiveModel.includes('minimax-h3-max')) {
-    // H3 Max / Max Turbo top out at 768P and reject 2K outright. This branch
-    // MUST stay above the `minimax-h3` one — the substring match below would
-    // otherwise pin them to 2K and 400 every render. 480P exists as a draft
-    // tier but is not auto-selected; 768P is the finish resolution.
-    body.resolution = '768P';
-  } else if (effectiveModel.includes('minimax-h3')) {
-    // 2K is H3's only resolution — anything else is a hard 400.
-    body.resolution = '2K';
-  } else if (effectiveModel.includes('veo')) {
-    body.resolution = '720p';
-  } else if (effectiveModel.includes('wan-2.6') || effectiveModel.includes('wan-2.5')) {
-    body.resolution = '1080p';
-  } else if (effectiveModel.includes('ltx-2')) {
-    body.resolution = '1080p';
-  } else if (effectiveModel.includes('sora-2-pro')) {
-    body.resolution = '1080p';
-  } else if (effectiveModel.includes('sora-2')) {
-    body.resolution = '720p';
-  }
+  const resolution = resolveRenderResolution(effectiveModel, resolutionOverride);
+  if (resolution) body.resolution = resolution;
 
   // bitrate_mode: Seedance 2.5 encodes at 'high' by default — ~5-6x the
   // bitrate for a sharp, artifact-free file at no extra token cost. Other
@@ -925,15 +942,7 @@ export async function renderVideoFile(
   const bitrateMode = resolveBitrateMode(effectiveModel, options.bitrateMode);
   if (bitrateMode) body.bitrate_mode = bitrateMode;
 
-  // Image-to-video inherits aspect from the start image. Reference-to-video
-  // and text-to-video variants take aspect_ratio explicitly — MiniMax H3 / H3
-  // Max t2v go further and return HTTP 400 ("aspect_ratio: Required") without
-  // it, which made loop watch mode's opening t2v take unqueueable.
-  if (
-    effectiveModel.includes('reference-to-video')
-    || effectiveModel.includes('text-to-video')
-    || (effectiveModel.includes('seedance') && !effectiveModel.includes('image-to-video'))
-  ) {
+  if (sendsAspectRatio(effectiveModel)) {
     body.aspect_ratio = options.aspectRatio ?? '16:9';
   }
 
@@ -1546,7 +1555,7 @@ function getShotVideoPath(sceneDir: string, shotId: number | string): string {
  * insert riding in its base shot's montage gets its own file. Multi-shot units
  * cut their clips by shot number.
  */
-function unitClipPaths(sceneDir: string, unit: Pick<GenerationUnit, 'unitType'>, shots: ShotScript[]): string[] {
+export function unitClipPaths(sceneDir: string, unit: Pick<GenerationUnit, 'unitType'>, shots: ShotScript[]): string[] {
   const suffixed = unit.unitType === 'single' || unit.unitType === 'montage';
   return shots.map(shot => getShotVideoPath(sceneDir, suffixed ? resolveDialogueShotId(shot) : shot.shotNumber));
 }
@@ -2350,7 +2359,11 @@ async function renderMontageUnit(
     } else {
       const episode = /episode-(\d+)$/.exec(basename(episodeDir))?.[1];
       console.log(`  ${unit.unitId}: shot cuts exist, skipping (no ${unit.outputFile} on disk; the cuts are kept and nothing is billed).`);
-      console.log(`    To render shots ${shots.map(shot => resolveDialogueShotId(shot)).join(', ')} again as one generation: generate-videos -p ${series.outputDir} -e ${episode ? Number(episode) : '<episode>'} --retake ${[...new Set(unit.shotNumbers)].join(',')}`);
+      // A bare number re-takes the units holding the shot and its inserts; an
+      // insert whose base shot is in another unit is named by its own id.
+      const ids = shots.map(shot => String(resolveDialogueShotId(shot)));
+      const tokens = [...new Set(ids.map(id => (ids.includes(id.replace(/[a-z]+$/i, '')) ? id.replace(/[a-z]+$/i, '') : id)))];
+      console.log(`    To render shots ${ids.join(', ')} again as one generation: generate-videos -p ${series.outputDir} -e ${episode ? Number(episode) : '<episode>'} --retake ${tokens.join(',')}`);
     }
     return adoptCutClips(unit, shots, shotOutputPaths, unitOutputPath);
   }
@@ -2808,7 +2821,7 @@ export async function generateEpisodeVideos(
           for (const shot of staged) {
             run.report({
               shot: String(resolveDialogueShotId(shot)),
-              reason: `it has no clip from its staging ref, and this re-take leaves it as it is; render it too: ${generateVideosCommand(series, plan.episode)} --retake ${shot.shotNumber}`,
+              reason: `it has no clip from its staging ref, and this re-take leaves it as it is; render it too: ${generateVideosCommand(series, plan.episode)} --retake ${resolveDialogueShotId(shot)}`,
             });
           }
         }

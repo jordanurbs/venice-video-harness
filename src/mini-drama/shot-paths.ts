@@ -44,6 +44,26 @@ export function shotKey(id: ShotId): string {
   return id;
 }
 
+/**
+ * A shot's id as people write it: the number plus any insert suffix ("13",
+ * "13b"). Unlike `shotKey` it is not padded. Suffixed inserts share their
+ * base shot's `shotNumber`, so anything that tells shots apart uses this.
+ */
+export function shotIdOf(shot: { shotNumber: number; shotIdSuffix?: string }): string {
+  return `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
+}
+
+/**
+ * A shot id from any spelling ("13b", "013B", 13), for matching ids that
+ * come from a model or a person against `shotIdOf`. Null when it is not one.
+ */
+export function normalizeShotId(value: unknown): string | null {
+  if (typeof value === 'number') return Number.isInteger(value) && value >= 0 ? String(value) : null;
+  if (typeof value !== 'string') return null;
+  const match = /^\s*(\d+)\s*([a-z]*)\s*$/i.exec(value);
+  return match ? `${Number(match[1])}${match[2].toLowerCase()}` : null;
+}
+
 /** Dialogue file path: `dialogueDir/dialogue-shot-<key>.mp3`. */
 export function dialogueFileForShot(dialogueDir: string, id: ShotId): string {
   return join(dialogueDir, `dialogue-shot-${shotKey(id)}.mp3`);

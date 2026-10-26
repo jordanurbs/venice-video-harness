@@ -135,6 +135,21 @@ function term(key: string, words: string[], flags: Omit<Term, 'key' | 'pattern'>
  */
 const NOUN_CUE = '(?:the|a|an|its|their|his|her|our|this|that|these|those|another|each|every|one|two|three|several)';
 
+/**
+ * In a shot's words, a vehicle word that only says whose or what kind of thing
+ * another noun is does not put the vehicle in the shot: a possessive or a
+ * modifier of a thing that is not part of it ("the ship's compass", "a bus
+ * ticket", "the tram timetable", "a train ticket"). Parts still count ("the
+ * train doors", "the ship's rail"), and so do verbs that look like these
+ * nouns ("the gondola passes", "the tram stops"). A location's words, and an
+ * inventory's, read as they always did (`loose`).
+ */
+const NOT_THE_VEHICLE = "(?!(?:['’]s?)?[\\s-]+(?:tickets?|timetables?|schedules?|fares?|tokens?|maps?|routes?|compass(?:es)?|stop|shelter|depots?|terminals?|models?|toys?|posters?|compan(?:y|ies))\\b)";
+
+function vehicleTerm(t: Term): Term {
+  return { ...t, vehicle: true, loose: t.loose ?? t.pattern, pattern: new RegExp(`(?:${t.pattern.source})${NOT_THE_VEHICLE}`, t.pattern.flags) };
+}
+
 /** Vehicles by kind: synonyms share a key, so "liner" and "ship" are one thing and "ferry" another. */
 const VEHICLES: Term[] = [
   term('ferry', ['ferry', 'ferrie']),
@@ -145,7 +160,7 @@ const VEHICLES: Term[] = [
   term('barge', ['barge']),
   term('sandolo', ['sandolo', 'sandoli', 'skiff', 'rowboat', 'rowing boat']),
   term('sailboat', ['sailboat', 'sailing boat', 'yacht']),
-].map(t => ({ ...t, vehicle: true, water: true }));
+].map(t => vehicleTerm({ ...t, water: true }));
 
 const LAND_VEHICLES: Term[] = [
   { key: 'train', pattern: new RegExp(`\\b(?:(?:${NOUN_CUE}|night|sleeper|passenger|freight|steam|electric|local|express|waiting|departing|arriving|stationary|empty|last|first|old)\\s+trains?|trains?\\s+(?:doors?|windows?|carriages?|cars?|tracks?|platforms?|stations?)|by\\s+train|carriages?|railcars?|locomotives?)\\b`, 'i'), loose: /\b(?:train|carriage|sleeper|railcar|locomotive)(?:e?s)?\b/i },
@@ -153,7 +168,7 @@ const LAND_VEHICLES: Term[] = [
   term('bus', ['bus']),
   term('cart', ['cart', 'wagon']),
   term('bicycle', ['bicycle', 'bike']),
-].map(t => ({ ...t, vehicle: true }));
+].map(vehicleTerm);
 
 /** Parts of a boat: a shot that stands on one is aboard whatever vessel the plate shows. */
 const VESSEL_PARTS: Term[] = [
@@ -425,8 +440,13 @@ export function viewEvidence(location: PlanLocation): Partial<Record<PlateView, 
 /** A boat the vocabulary has no kind for ("a long dark boat", "a small craft"). */
 const GENERIC_BOAT = /\b(?:boat|vessel|craft|ship|motorboat|skiff|dinghy)s?\b/i;
 
-/** Every vehicle kind a text names ("ferry", "launch", "train"): a shot's words strictly, an inventory's like a place's. */
-function vehicleKinds(text: string, how: 'shot' | 'place' = 'shot'): Set<string> {
+/**
+ * Every vehicle kind a text names ("tram", "barge", "train"): a shot's words
+ * strictly (a word that is also a verb counts only as a noun, and a vehicle
+ * word that only qualifies another thing, "a bus ticket", not at all), an
+ * inventory's like a place's.
+ */
+export function vehicleKinds(text: string, how: 'shot' | 'place' = 'shot'): Set<string> {
   return new Set([...VEHICLES, ...LAND_VEHICLES].filter(t => (how === 'place' ? placePattern(t) : t.pattern).test(text)).map(t => t.key));
 }
 
@@ -451,20 +471,27 @@ function vesselsIn(text: string, how: 'shot' | 'place' = 'shot'): Set<string> {
 const PHRASE_END = /[,;:.(]|\s(?:with|of|from|for|that|which|whose|in|on|at|by|carrying|bearing|holding|showing)\s/i;
 
 /**
- * Whether a cast object is a vehicle, and which kind: decided by what it is,
- * the head noun of its name and of its description's first phrase, read with
- * the noun-cued vocabulary above. A word in passing does not count: a CAR KEY,
- * "a bus ticket" and "a ship's compass" are not vehicles.
+ * Whether a cast object is a vehicle, which one, and of which kind: decided by
+ * what it is, the head noun of its name and of its description's first
+ * phrase, read with the noun-cued vocabulary above. A word in passing does not
+ * count: a CAR KEY, "a bus ticket" and "a ship's compass" are not vehicles.
  */
-export function objectVehicleKind(name: string, description = ''): 'water' | 'land' | undefined {
+export function objectVehicle(name: string, description = ''): { key: string; kind: 'water' | 'land' } | undefined {
   for (const phrase of [name.replace(/^the\s+/i, ''), description.split(PHRASE_END)[0]]) {
     // A leading article gives a bare head noun ("TRAIN") the cue the vocabulary asks for.
     const text = `the ${phrase.trim()}`;
     const endsWith = (t: Term) => new RegExp(`(?:${t.pattern.source})$`, 'i').test(text);
-    if (VEHICLES.some(endsWith)) return 'water';
-    if (LAND_VEHICLES.some(endsWith)) return 'land';
+    const water = VEHICLES.find(endsWith);
+    if (water) return { key: water.key, kind: 'water' };
+    const land = LAND_VEHICLES.find(endsWith);
+    if (land) return { key: land.key, kind: 'land' };
   }
   return undefined;
+}
+
+/** Whether a cast object is a vehicle, and which kind (`objectVehicle`). */
+export function objectVehicleKind(name: string, description = ''): 'water' | 'land' | undefined {
+  return objectVehicle(name, description)?.kind;
 }
 
 // ---- The check ---------------------------------------------------------------

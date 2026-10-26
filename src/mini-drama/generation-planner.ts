@@ -20,6 +20,7 @@ import {
 } from 'venice-video-harness/core/series/types.js';
 import { formatShotDuration, parseShotDuration } from 'venice-video-harness/core/series/duration.js';
 import { planMontageUnits } from './montage.js';
+import { normalizeShotId, shotIdOf } from './shot-paths.js';
 
 // Moved to core so browser hosts can read `"5s"` strings; kept on this module
 // for its existing importers (prompt-builder, montage, video-generator).
@@ -376,31 +377,108 @@ export function buildGenerationPlan(
       buildSingleUnit(shot, prev, next, videoDefaults));
   }
 
-  const units: GenerationUnit[] = [];
-  let index = 0;
-
-  while (index < script.shots.length) {
-    const previousShot = index > 0 ? script.shots[index - 1] : undefined;
-    const currentShot = script.shots[index];
-    const multiWindow = selectMultiShotWindow(script.shots, index, videoDefaults);
-
-    if (multiWindow) {
-      const window = script.shots.slice(index, index + multiWindow.length);
-      const nextShot = script.shots[index + multiWindow.length];
-      units.push(buildMultiShotUnit(window, previousShot, nextShot, multiWindow.reasons, videoDefaults));
-      index += multiWindow.length;
-      continue;
-    }
-
-    const nextShot = script.shots[index + 1];
-    units.push(buildSingleUnit(currentShot, previousShot, nextShot, videoDefaults));
-    index += 1;
-  }
-
   return {
     episode: script.episode,
     generatedAt: new Date().toISOString(),
-    units,
+    units: planStandardUnits(script.shots, [[0, script.shots.length]], videoDefaults),
+  };
+}
+
+/**
+ * The standard (2.0-era) planner: singles and up to 15 s native multi-shot
+ * windows. A window never crosses the end of its range, so ranges decided
+ * elsewhere (`buildGenerationPlanFromGroups`) only ever split; the frame
+ * strategies still look at the neighbouring shots in the script.
+ */
+function planStandardUnits(
+  shots: ShotScript[],
+  ranges: Array<[number, number]>,
+  videoDefaults?: VideoModelDefaults,
+): GenerationUnit[] {
+  const units: GenerationUnit[] = [];
+  for (const [start, end] of ranges) {
+    const bounded = shots.slice(0, end);
+    let index = start;
+    while (index < end) {
+      const previousShot = index > 0 ? shots[index - 1] : undefined;
+      const currentShot = shots[index];
+      const multiWindow = selectMultiShotWindow(bounded, index, videoDefaults);
+
+      if (multiWindow) {
+        const window = shots.slice(index, index + multiWindow.length);
+        const nextShot = shots[index + multiWindow.length];
+        units.push(buildMultiShotUnit(window, previousShot, nextShot, multiWindow.reasons, videoDefaults));
+        index += multiWindow.length;
+        continue;
+      }
+
+      const nextShot = shots[index + 1];
+      units.push(buildSingleUnit(currentShot, previousShot, nextShot, videoDefaults));
+      index += 1;
+    }
+  }
+  return units;
+}
+
+/**
+ * A plan from groups decided elsewhere (the generation planner,
+ * `plan-generations`): each group is a run of consecutive shots, named by
+ * shot id ("13", "13b": an insert shares its base shot's number, so ids, not
+ * numbers, tell them apart), and together the groups hold every shot once, in
+ * script order. Throws when they do not.
+ *
+ * The groups bound what the project's own route may render together, and the
+ * route's rules still apply inside them:
+ *   - montage mode (default): each group is the run a montage may carry
+ *     (`planMontageUnits` with `groups`); blocking shots, exact lip-sync
+ *     among them, still render alone, and shot notes go into shot-list
+ *     montage units;
+ *   - the standard route (`montageMode: false`, `--no-montage`): no montage
+ *     units; the singles and multi-shot windows of `buildGenerationPlan`,
+ *     never across a group's end.
+ */
+export function buildGenerationPlanFromGroups(
+  script: EpisodeScript,
+  series: Pick<SeriesState, 'videoDefaults'>,
+  options: { groups: Array<{ shots: Array<string | number>; reason?: string }>; shotNotes?: Record<string, string> },
+): GenerationPlan {
+  const videoDefaults = series.videoDefaults;
+  const index = new Map<string, number>();
+  script.shots.forEach((shot, i) => {
+    const id = normalizeShotId(shotIdOf(shot)) ?? shotIdOf(shot);
+    if (index.has(id)) throw new Error(`Shot id ${shotIdOf(shot)} appears twice in the script: groups cannot name its shots apart.`);
+    index.set(id, i);
+  });
+  let cursor = 0;
+  const ranges: Array<[number, number]> = [];
+  const groups = options.groups.map((group, g) => {
+    const positions = group.shots.map(id => {
+      const at = index.get(normalizeShotId(id) ?? String(id));
+      if (at === undefined) throw new Error(`Group ${g + 1} names shot ${id}, which is not in the script.`);
+      return at;
+    });
+    if (positions.length === 0) throw new Error(`Group ${g + 1} has no shots.`);
+    positions.forEach(at => {
+      if (at !== cursor) throw new Error(`Group ${g + 1} does not continue the script in order at shot ${shotIdOf(script.shots[at])} (expected ${script.shots[cursor] ? shotIdOf(script.shots[cursor]) : 'the end'}).`);
+      cursor += 1;
+    });
+    ranges.push([positions[0], positions[positions.length - 1] + 1]);
+    return { shots: positions.map(at => script.shots[at]), reason: group.reason };
+  });
+  if (cursor !== script.shots.length) throw new Error(`The groups leave out shot ${shotIdOf(script.shots[cursor])} and those after it.`);
+
+  if (resolveMontageMode(videoDefaults)) {
+    return planMontageUnits(
+      script,
+      series,
+      (shot, prev, next) => buildSingleUnit(shot, prev, next, videoDefaults),
+      { groups, shotNotes: options.shotNotes },
+    );
+  }
+  return {
+    episode: script.episode,
+    generatedAt: new Date().toISOString(),
+    units: planStandardUnits(script.shots, ranges, videoDefaults),
   };
 }
 
@@ -437,6 +515,55 @@ export function resolveUnitShots(plan: Pick<GenerationPlan, 'units'>, shots: Sho
 export function unitIndicesForShots(plan: Pick<GenerationPlan, 'units'>, shotNumbers: number[]): number[] {
   const wanted = new Set(shotNumbers);
   return plan.units.flatMap((unit, index) => (unit.shotNumbers.some(n => wanted.has(n)) ? [index] : []));
+}
+
+const baseNumber = (id: string): string => id.replace(/[a-z]+$/i, '');
+
+/**
+ * Whether a `--retake` token names a shot id: a bare number covers the shot
+ * and its suffixed inserts ("13" names 13 and 13b), an id with a suffix names
+ * that insert alone ("13b").
+ */
+export function retakeTokenNames(token: string, shotId: string): boolean {
+  const wanted = normalizeShotId(token);
+  const id = normalizeShotId(shotId);
+  if (!wanted || !id) return false;
+  return /^\d+$/.test(wanted) ? baseNumber(id) === wanted : id === wanted;
+}
+
+/**
+ * Positions in `plan.units` of the units that hold a shot the tokens name
+ * (`retakeTokenNames`), for a re-take of whole units. Units are matched to
+ * the script's shots in plan order (`resolveUnitShots`), so 13 and 13b are
+ * told apart.
+ */
+export function unitIndicesForShotIds(plan: Pick<GenerationPlan, 'units'>, shots: ShotScript[], tokens: string[]): number[] {
+  const unitShots = resolveUnitShots(plan, shots);
+  return plan.units.flatMap((_, index) => (
+    unitShots[index].some(shot => tokens.some(token => retakeTokenNames(token, shotIdOf(shot)))) ? [index] : []
+  ));
+}
+
+/**
+ * The `--retake` tokens that select the unit at `index` and no other, from
+ * each unit's shot ids: a shot by its number when every shot with that number
+ * is in the unit, else an insert by its own id. When no shot of the unit can
+ * be named apart (shot 14 alone, its insert 14b in another unit), the bare
+ * numbers are given, with the other units they also select.
+ */
+export function retakeTokensForUnit(unitShotIds: string[][], index: number): { tokens: string[]; alsoRetakes: number[] } {
+  const members = unitShotIds[index] ?? [];
+  const holders = (number: string): number[] => unitShotIds.flatMap((ids, i) => (ids.some(id => baseNumber(id) === number) ? [i] : []));
+  const tokens = [...new Set(members.flatMap(id => {
+    const number = baseNumber(id);
+    if (holders(number).every(i => i === index)) return [number];
+    return id !== number ? [id] : [];
+  }))];
+  if (tokens.length > 0) return { tokens, alsoRetakes: [] };
+  const bare = [...new Set(members.map(baseNumber))];
+  const also = new Set(bare.flatMap(holders));
+  also.delete(index);
+  return { tokens: bare, alsoRetakes: [...also] };
 }
 
 export async function saveGenerationPlan(episodeDir: string, plan: GenerationPlan): Promise<string> {

@@ -424,6 +424,15 @@ Three gates block progress by design:
 | Storyboard QA | `qa-approve`, after `qa-storyboard` reports no critical issues — the approval reads the report, and criticals/unchecked shots require `--force` | `generate-videos` |
 | Video QA | `qa-videos` writing a passing `video-qa-report.json` (cross-unit identity, continuity at the cuts, head glitches, boundary jumps) — a failing report blocks; a missing one warns | `assemble-episode` |
 
+One more is optional. `plan-generations -p <dir> -e <n>` proposes how the shots
+are packaged into generations (`generation-plan.proposed.md`). Without it nothing
+changes. With one, `generate-videos` refuses to run until a person approves it
+(`plan-generations --approve "<name>"`); it then renders the approved plan, and
+refuses to run when the shots or settings that decide its packaging have changed
+since: plan again, or pass `--ignore-plan` for one run. It also refuses while
+renders queued under another packaging are still in flight, since it would
+never collect them (`--ignore-in-flight` renders anyway). See AGENTS.md rule 66.
+
 **Do not route around a gate.** `--skip-approval` and `--skip-qa` exist for
 operators who have already reviewed the work by other means. An agent that hits
 a gate error and retries with a skip flag is spending money to render
@@ -823,8 +832,8 @@ just leaves that cell blank.
 
 Commands that refresh the page: `approve-script`, `storyboard-episode`,
 `fix-panel`, `insert-shot`, `stage-ref` (a pick or a clear), `qa-storyboard`,
-`qa-approve`, `generate-videos`, `generate-music`, `override-audio`,
-`assemble-episode`, and `finish`.
+`qa-approve`, `plan-generations`, `generate-videos`, `generate-music`,
+`override-audio`, `assemble-episode`, and `finish`.
 
 The workshop also asks for the final delivery target. Choose **4K master** to
 keep generation/drafts economical and upscale only the approved assembled cut:

@@ -341,6 +341,79 @@
     first frame, is not checked against the old plate.
   - Test: `tests/plan-check-inventory.test.mjs`.
 
+- **`plan-generations`: three passes of thinking about consistency before any
+  spend, and an approval `generate-videos` honours or refuses (rule 66).**
+  Packaging shots into generations is a judgement per run: one generation keeps
+  the vehicle and the facing across its cuts, but carries the first plate's
+  state into a departure.
+  - The continuity ledger (deterministic, free) lists what each cut carries,
+    where a shot's words change a state, and which vehicles lack a reference.
+    A cast object's vehicle kind comes from `objectVehicle` (`plan-check.ts`,
+    now behind `objectVehicleKind`), so a CAR KEY is not a vehicle; the
+    shot's words from `vehicleKinds` (now exported, the one vehicle reader).
+  - The packaging sub-agent (the project's intelligence model through
+    `chatJson`, 32k-token budget) proposes units, a reason for every split, and
+    `shotNotes` that write a state change into a shot's prompt line.
+    `validatePackaging` reads the answer by shot id (an insert "13b" is not
+    shot 13), checks every field's shape, and never throws, even on values
+    `String()` cannot convert; a bad answer or a failed call plans by rules
+    with the problems recorded. A montage unit whose references overflow its
+    model's budget is a note. Notes are one line, at most 300 characters,
+    never an `@Image` tag, and shrink with their shot's description under the
+    montage prompt's guard and the model's hard cap (`fitMontageProse`); a
+    note no prompt reads (a shot that renders alone, the `sequence` grammar)
+    is recorded. On the standard route or the `sequence` grammar the agent is
+    not asked.
+  - The reference audit, per unit: the model, references against the budget,
+    plan-check findings read as the workshop reads them (fixed sets and plate
+    inventories, so `competing-vehicle` too: `planCheckLocations` and
+    `planCheckCast` in `workshop.ts` are shared), a free `/video/quote` quote
+    at the resolution the render uses (`resolveRenderResolution`; skipped
+    without a key or network, and the first network failure stops the rest),
+    carries that cross a cut between generations, and each shot's clip
+    already on disk. A unit the skip rule keeps gets the `--retake` command,
+    with shot ids that select it alone (`retakeTokensForUnit`); a staged
+    shot's clip from before its pick renders again and is quoted as such.
+  - Writes `generation-plan.proposed.json` and `.md` (the previous proposal is
+    archived as `-vN`); `generation-plan.json` stays the record of what
+    rendered. `--approve "<name>"` approves the proposal while it still
+    applies. The approval is bound to what the route's planner and the agent
+    read (`packagingInputs`): shot ids, order, durations, locations, inserts,
+    title cards, `mustStaySingle`, staging refs and their use, exact lip-sync;
+    the montage settings on the montage route, with `continuity.from` and cast
+    under the shot-list grammar; cast, establishing shots and `allowMultiShot`
+    on the standard route; and the description of every shot a note amends.
+    Views, other type changes, cast order, dialogue, blocking, `stagedOn` and
+    `endState` keep it.
+  - `generate-videos`, before it reads the API key: renders an approved
+    proposal rebuilt from its packaging with the run's settings; refuses one
+    that no longer applies, listing what changed; refuses a proposal no one
+    approved (`--ignore-plan` renders by rules for one run in both cases);
+    refuses while renders queued under another packaging are still in flight,
+    which this plan would never collect (rule 43; `inFlightOutsidePlan`, with
+    the packaging that collects each one, and `--ignore-in-flight`); and runs
+    the staged-shot `--retake` refusal of rule 65. `--retake` takes shot ids:
+    "13b" names that insert alone, a number still covers its inserts.
+  - `stage-ref --pick` and `--clear` say when the edit makes an approved plan
+    stale or valid again, with the command to run next. `status` reports a
+    waiting, stale or unreadable plan, and renders in flight under another
+    packaging (`src/mini-drama/in-flight.ts`), with runnable `-p`/`-e` commands
+    (`qualifyCommand` leaves `queue`, which takes no project, as it is),
+    `pipeline` lists `plan-generations` as an optional branch and gives the
+    render stage its gate, and the web runner allows `plan-generations`,
+    `--ignore-plan` and `--ignore-in-flight`.
+  - `buildGenerationPlanFromGroups` keeps to the route: no montage units on
+    the standard route; exact lip-sync and staged shots render alone.
+    `montageBlockReason` names why a shot renders alone, `staged` first.
+  - A vehicle word that only qualifies another thing ("a bus ticket", "the
+    ship's compass", "the tram timetable") no longer puts a vehicle in a
+    shot's words, for the ledger and the plan check; parts and verbs still
+    count, and a location's words read as before.
+  - Core types: `GenerationPlanning`, `GenerationPackagingInputs`,
+    `GenerationPlan.planning`, `GenerationUnit.shotNotes`.
+  - On a 33-shot film, one chat call packed 13 units against 17 by rules.
+  - Test: `tests/plan-generations.test.mjs`.
+
 - **Object cast members get object reference clauses (`Character.prop`,
   `isObjectCastMember`).** An object cast member (a red umbrella, a ledger, a
   recurring tram with a locked design) used to get the person clause in the reference

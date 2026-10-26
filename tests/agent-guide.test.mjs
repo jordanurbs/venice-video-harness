@@ -33,10 +33,12 @@ test('the pipeline stages follow the on-disk gate order', () => {
     'aesthetic', 'cast', 'episode', 'script', 'approve-script',
     'storyboard', 'qa-storyboard', 'qa-approve', 'render', 'qa-videos', 'assemble',
   ]);
-  // The human gates are the ones that carry a gate note: the two sign-offs
-  // plus assembly, which blocks on a failing video-qa-report.json (rule 52).
+  // The human gates are the ones that carry a gate note: the two sign-offs,
+  // the render, which blocks on a generation plan proposal no one approved
+  // or an approved one that no longer applies (rule 66), and assembly, which
+  // blocks on a failing video-qa-report.json (rule 52).
   const gated = PIPELINE_STAGES.filter(s => s.gate).map(s => s.id);
-  assert.deepEqual(gated, ['approve-script', 'qa-approve', 'assemble']);
+  assert.deepEqual(gated, ['approve-script', 'qa-approve', 'render', 'assemble']);
 });
 
 test('the pipeline never presents --skip-* as the fix', () => {
