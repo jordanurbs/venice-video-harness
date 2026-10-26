@@ -2,21 +2,6 @@
 
 ## Unreleased
 
-### Added
-
-- **Seedance 2.5 R2V Enhanced (`seedance-2-5-enhanced-reference-to-video`).**
-  Like 2.0 Enhanced, it is missing from `GET /models` but works on quote and
-  queue. The 2026-10-25 quote probe showed the same 4-30s ladder as 2.5 R2V,
-  480p/720p/1080p, and the same 720p price ($8.67 for 30s). It joins every
-  capability set 2.5 R2V is in (reference images, `@Image` tags, `audio_url`,
-  reference audio, 30-image budget). Pick it per project with `videoDefaults`.
-  It is not a default.
-- **`videoDefaults.improviseDialogue: false`.** Simple-prompt models (MiniMax
-  H3 Max) improvise from the scripted line by default (rule 59). With this
-  set, the line is quoted verbatim, for scripts where the exact words are the
-  point. A 2026-10-26 probe showed H3 Max R2V delivers a quoted line word for
-  word.
-
 ### Fixed
 
 - **An over-long SEQUENCE montage prompt no longer loses its STYLE tail.**
@@ -276,6 +261,19 @@
   behaviour is unchanged. Test: `tests/validate-before-quote.test.mjs`.
 
 ### Added
+
+- **Seedance 2.5 R2V Enhanced (`seedance-2-5-enhanced-reference-to-video`).**
+  Like 2.0 Enhanced, it is missing from `GET /models` but works on quote and
+  queue. The 2026-10-25 quote probe showed the same 4-30s ladder as 2.5 R2V,
+  480p/720p/1080p, and the same 720p price ($8.67 for 30s). It joins every
+  capability set 2.5 R2V is in (reference images, `@Image` tags, `audio_url`,
+  reference audio, 30-image budget). Pick it per project with `videoDefaults`.
+  It is not a default.
+- **`videoDefaults.improviseDialogue: false`.** Simple-prompt models (MiniMax
+  H3 Max) improvise from the scripted line by default (rule 59). With this
+  set, the line is quoted verbatim, for scripts where the exact words are the
+  point. A 2026-10-26 probe showed H3 Max R2V delivers a quoted line word for
+  word.
 
 - **`stage-ref`: edit the reference first, then generate from it (rule 65).**
   The video model copies a reference's whole composition, not just the thing
