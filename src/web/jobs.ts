@@ -42,9 +42,10 @@ export const COMMAND_WHITELIST: Record<string, CommandSpec> = {
   'fix-panel': { options: ['shot', 'characters', 'prompt', 'edit-model'], flags: [], episode: true },
   'fix-flagged': { options: ['severity', 'edit-model'], flags: ['requa'], episode: true },
   // A generation plan is approved like QA (rule 66); --ignore-plan is the way
-  // past a stale one without leaving the browser.
+  // past a waiting or stale one, and --ignore-in-flight past renders queued
+  // under another packaging, without leaving the browser.
   'plan-generations': { options: ['model', 'approve'], flags: ['no-agent', 'no-quote'], episode: true },
-  'generate-videos': { options: [], flags: ['skip-qa', 'no-montage', 'auto-edit', 'no-auto-edit', 'ignore-plan'], episode: true },
+  'generate-videos': { options: [], flags: ['skip-qa', 'no-montage', 'auto-edit', 'no-auto-edit', 'ignore-plan', 'ignore-in-flight'], episode: true },
   'qa-videos': { options: ['model', 'continuity'], flags: [], episode: true },
   'generate-music': { options: ['prompt', 'duration', 'model'], flags: [], episode: true },
   'assemble-episode': {

@@ -517,6 +517,55 @@ export function unitIndicesForShots(plan: Pick<GenerationPlan, 'units'>, shotNum
   return plan.units.flatMap((unit, index) => (unit.shotNumbers.some(n => wanted.has(n)) ? [index] : []));
 }
 
+const baseNumber = (id: string): string => id.replace(/[a-z]+$/i, '');
+
+/**
+ * Whether a `--retake` token names a shot id: a bare number covers the shot
+ * and its suffixed inserts ("13" names 13 and 13b), an id with a suffix names
+ * that insert alone ("13b").
+ */
+export function retakeTokenNames(token: string, shotId: string): boolean {
+  const wanted = normalizeShotId(token);
+  const id = normalizeShotId(shotId);
+  if (!wanted || !id) return false;
+  return /^\d+$/.test(wanted) ? baseNumber(id) === wanted : id === wanted;
+}
+
+/**
+ * Positions in `plan.units` of the units that hold a shot the tokens name
+ * (`retakeTokenNames`), for a re-take of whole units. Units are matched to
+ * the script's shots in plan order (`resolveUnitShots`), so 13 and 13b are
+ * told apart.
+ */
+export function unitIndicesForShotIds(plan: Pick<GenerationPlan, 'units'>, shots: ShotScript[], tokens: string[]): number[] {
+  const unitShots = resolveUnitShots(plan, shots);
+  return plan.units.flatMap((_, index) => (
+    unitShots[index].some(shot => tokens.some(token => retakeTokenNames(token, shotIdOf(shot)))) ? [index] : []
+  ));
+}
+
+/**
+ * The `--retake` tokens that select the unit at `index` and no other, from
+ * each unit's shot ids: a shot by its number when every shot with that number
+ * is in the unit, else an insert by its own id. When no shot of the unit can
+ * be named apart (shot 14 alone, its insert 14b in another unit), the bare
+ * numbers are given, with the other units they also select.
+ */
+export function retakeTokensForUnit(unitShotIds: string[][], index: number): { tokens: string[]; alsoRetakes: number[] } {
+  const members = unitShotIds[index] ?? [];
+  const holders = (number: string): number[] => unitShotIds.flatMap((ids, i) => (ids.some(id => baseNumber(id) === number) ? [i] : []));
+  const tokens = [...new Set(members.flatMap(id => {
+    const number = baseNumber(id);
+    if (holders(number).every(i => i === index)) return [number];
+    return id !== number ? [id] : [];
+  }))];
+  if (tokens.length > 0) return { tokens, alsoRetakes: [] };
+  const bare = [...new Set(members.map(baseNumber))];
+  const also = new Set(bare.flatMap(holders));
+  also.delete(index);
+  return { tokens: bare, alsoRetakes: [...also] };
+}
+
 export async function saveGenerationPlan(episodeDir: string, plan: GenerationPlan): Promise<string> {
   const planPath = join(episodeDir, 'generation-plan.json');
   await writeFile(planPath, JSON.stringify(plan, null, 2), 'utf-8');

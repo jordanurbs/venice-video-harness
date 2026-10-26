@@ -42,6 +42,7 @@ import {
   resolveMontageGrammar,
   resolveMontageMaxDurationSec,
   resolveMontageMinDurationSec,
+  resolveMontageMode,
   resolveMontageModel,
   resolveMontageReferenceViews,
 } from 'venice-video-harness/core/series/types.js';
@@ -51,17 +52,31 @@ import { VeniceRequestError, type VeniceClient } from '../venice/client.js';
 import { isAbortError } from '../venice/operation-context.js';
 import { VideoRequestValidationError, quoteVideo } from '../venice/video.js';
 import { getLocation } from '../series/manager.js';
-import { buildGenerationPlan, buildGenerationPlanFromGroups, parseShotDuration, resolveUnitShots } from './generation-planner.js';
+import { buildGenerationPlan, buildGenerationPlanFromGroups, parseShotDuration, resolveUnitShots, retakeTokensForUnit } from './generation-planner.js';
 import { hashPackagingInputs, packagingInputs } from './generation-plan-approval.js';
 import { montageBlockReason, type MontageBlockReason } from './montage.js';
-import { checkShotPlan, describePlanFindings, objectVehicle, vehiclesIn } from './plan-check.js';
+import { checkShotPlan, describePlanFindings, objectVehicle, vehicleKinds } from './plan-check.js';
 import { resolveVideoModel } from './prompt-builder.js';
 import { buildMontageSlotPlan, buildReferenceSlotPlan, primaryReferencePath } from './reference-slots.js';
 import { normalizeShotId, shotIdOf } from './shot-paths.js';
-import { defaultRenderResolution, sendsAspectRatio, unitClipPaths } from './video-generator.js';
-import { workshopPlanOptions } from './workshop.js';
+import { stagedClipIsStale } from './staging.js';
+import { resolveRenderResolution, sendsAspectRatio, unitClipPaths } from './video-generator.js';
+import { planCheckCast, planCheckLocations, workshopPlanOptions } from './workshop.js';
 
-const firstLine = (err: unknown): string => (err instanceof Error ? err.message : String(err)).split('\n')[0];
+/**
+ * A value as text for a message, from anything a model may answer: never
+ * throws, as `String({ "toString": 1 })` does.
+ */
+function asText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value) ?? typeof value;
+  } catch {
+    return typeof value;
+  }
+}
+const firstLine = (err: unknown): string => (err instanceof Error ? asText(err.message) : asText(err)).split('\n')[0];
 const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
@@ -135,8 +150,9 @@ export function buildContinuityLedger(series: SeriesState, shots: ShotScript[]):
       const label = member?.name ?? name;
       enter(label.toUpperCase(), () => ({ name: label, kind, shots: [], hasReference: Boolean(primaryReferencePath(series, label)) }), id, here);
     }
-    // A vehicle only the words name is drawn fresh by every generation it is in.
-    for (const kind of vehiclesIn(shotWords(shot))) {
+    // A vehicle only the words name is drawn fresh by every generation it is
+    // in. "A bus ticket" names a ticket, not a bus (`vehicleKinds`).
+    for (const kind of vehicleKinds(shotWords(shot))) {
       const member = castVehicleByKind.get(kind);
       if (member) {
         enter(member.name.toUpperCase(), () => ({ name: member.name, kind: 'vehicle', shots: [], hasReference: Boolean(primaryReferencePath(series, member.name)) }), id, here);
@@ -238,7 +254,6 @@ export function packagingPrompt(series: SeriesState, shots: ShotScript[], ledger
         seconds: parseShotDuration(shot.duration),
         type: shot.type,
         place: shot.location ? getLocation(series, shot.location)?.name ?? shot.location : null,
-        ...(shot.plateView ? { view: shot.plateView } : {}),
         cast: shot.characters,
         action: (shot.description ?? '').slice(0, 400),
         ...(shot.continuity ? { continuity: shot.continuity } : {}),
@@ -312,7 +327,7 @@ function capNote(text: string, max = SHOT_NOTE_MAX_CHARS): string {
  */
 export function validatePackaging(
   proposal: unknown,
-  series: Pick<SeriesState, 'videoDefaults'>,
+  series: SeriesState,
   shots: ShotScript[],
 ): ValidatedPackaging {
   const problems: string[] = [];
@@ -356,7 +371,7 @@ export function validatePackaging(
     const unknown: string[] = [];
     for (const value of unit.shots) {
       const at = find(value);
-      if (at === undefined) unknown.push(String(value));
+      if (at === undefined) unknown.push(asText(value));
       else positions.push(at);
     }
     if (unknown.length) problems.push(`unit ${u + 1} names shots that are not in the script: ${unknown.join(', ')}`);
@@ -397,7 +412,7 @@ export function validatePackaging(
         }
         const at = find(split.after);
         if (at === undefined) {
-          notes.push(`split ${s + 1} names shot ${String(split.after)}, which is not in the script; ignored`);
+          notes.push(`split ${s + 1} names shot ${asText(split.after)}, which is not in the script; ignored`);
           return;
         }
         splits.push({ after: ids[at], reason: typeof split.reason === 'string' ? oneLine(split.reason) : '' });
@@ -418,7 +433,7 @@ export function validatePackaging(
         }
         const at = find(entry.shot);
         if (at === undefined) {
-          notes.push(`a shot note names shot ${String(entry.shot)}, which is not in the script; dropped`);
+          notes.push(`a shot note names shot ${asText(entry.shot)}, which is not in the script; dropped`);
           return;
         }
         const id = ids[at];
@@ -479,7 +494,32 @@ export function validatePackaging(
   result.groups = units.map(unit => ({ shots: unit.positions.map(at => ids[at]), reason: unit.reason }));
   result.shotNotes = shotNotes;
   result.agentNotes = agentNotes;
+  if (problems.length === 0) notes.push(...referenceBudgetNotes(series, shots, result.groups));
   return result;
+}
+
+/**
+ * The reference budget of each montage unit the groups build, as notes (never
+ * a structural problem): past the model's budget the slot planner drops
+ * images (extra views first, the cast last), and a split keeps them.
+ */
+function referenceBudgetNotes(series: SeriesState, shots: ShotScript[], groups: ValidatedPackaging['groups']): string[] {
+  try {
+    const plan = buildGenerationPlanFromGroups({ episode: 0, title: '', seriesName: '', totalDuration: '', shots }, series, { groups });
+    const unitShots = resolveUnitShots(plan, shots);
+    return plan.units.flatMap((unit, index) => {
+      const members = unitShots[index] ?? [];
+      if (unit.unitType !== 'montage' || members.length === 0) return [];
+      const { model, slots } = unitModelAndSlots(series, unit, members);
+      const over = (slots?.dropped ?? []).filter(drop => /budget/.test(drop));
+      if (over.length === 0) return [];
+      const group = groups.findIndex(item => item.shots.includes(shotIdOf(members[0])));
+      return [`unit ${group + 1} (shots ${members.map(shotIdOf).join(', ')}) needs more reference images than ${model} takes (${getMaxReferenceImages(model)}): ${over.length} dropped (${over.join('; ')}). A split keeps them.`];
+    });
+  } catch {
+    // The plan is built again by planGenerations, which records why it fails.
+    return [];
+  }
 }
 
 /**
@@ -528,8 +568,12 @@ export interface UnitAudit {
   findings: string[];
   /** Things that must carry into the next unit across a cut between generations. */
   carriesOut: string[];
-  /** The unit's clips already on disk; a unit with all of them is skipped by generate-videos. */
-  onDisk?: { clips: number; of: number; master: boolean };
+  /**
+   * The unit's clips generate-videos keeps (on disk, and a staged shot's from
+   * its current pick); a unit with all of them is skipped. `stale`: staged
+   * shots whose clip on disk predates their pick, so the unit renders again.
+   */
+  onDisk?: { clips: number; of: number; master: boolean; stale?: string[] };
   costUsd?: number;
 }
 
@@ -562,16 +606,10 @@ export async function auditPlan(
   options: { quote?: UnitQuote; sceneDir?: string } = {},
 ): Promise<UnitAudit[]> {
   const unitShots = resolveUnitShots(plan, shots);
-  const planOptions = workshopPlanOptions(series);
-  const locations = (series.locations ?? []).map(location => ({
-    slug: String(location.slug ?? ''),
-    name: String(location.name ?? ''),
-    description: String(location.description ?? ''),
-    spatialAnchors: location.spatialAnchors,
-    fixed: planOptions.fixedLocation?.(location) ?? false,
-    near: location.near,
-  }));
-  const cast = (series.characters ?? []).map(member => ({ name: member.name, prop: isObjectCastMember(member), description: member.description }));
+  // The workshop review's reading of the places (fixed sets, plate
+  // inventories from a downstream provider) and of the cast.
+  const locations = planCheckLocations(series.locations ?? [], workshopPlanOptions(series));
+  const cast = planCheckCast(series.characters ?? []);
   const audits: UnitAudit[] = [];
   for (const [index, unit] of plan.units.entries()) {
     const members = unitShots[index] ?? [];
@@ -595,8 +633,17 @@ export async function auditPlan(
     const cut = ledger.joins.find(item => item.from === last);
     let onDisk: UnitAudit['onDisk'];
     if (options.sceneDir) {
-      const clips = unitClipPaths(options.sceneDir, unit, members).filter(path => existsSync(path)).length;
-      onDisk = { clips, of: members.length, master: unit.unitType !== 'single' && existsSync(join(options.sceneDir, unit.outputFile)) };
+      // What generate-videos keeps: a clip on disk, unless it is a staged
+      // shot's clip from before its pick (stage-ref), which renders again.
+      const paths = unitClipPaths(options.sceneDir, unit, members);
+      const stale = members.filter((shot, i) => existsSync(paths[i]) && stagedClipIsStale(paths[i], shot)).map(shotIdOf);
+      const clips = paths.filter((path, i) => existsSync(path) && !stagedClipIsStale(path, members[i])).length;
+      onDisk = {
+        clips,
+        of: members.length,
+        master: unit.unitType !== 'single' && existsSync(join(options.sceneDir, unit.outputFile)),
+        ...(stale.length ? { stale } : {}),
+      };
     }
     let costUsd: number | undefined;
     if (options.quote && getVideoModel(model)) {
@@ -625,22 +672,24 @@ export async function auditPlan(
 
 /**
  * Quotes from `POST /video/quote` (free), for the request `renderVideoFile`
- * would send: the unit's model and duration, the family's resolution, the
- * aspect ratio when the model takes one. Identical requests are asked once. A
- * request the endpoint rejects costs only that unit its quote; no network, a
- * bad key or a service error stops quoting for the rest of the plan
- * (`stopped` says why), so an offline run does not wait on every unit.
+ * would send: the unit's model and duration, the resolution it renders at (a
+ * single shot takes `videoDefaults.resolution` when the model lists it, as the
+ * render does; other units the family's), the aspect ratio when the model
+ * takes one. Identical requests are asked once. A request the endpoint
+ * rejects costs only that unit its quote; no network, a bad key or a service
+ * error stops quoting for the rest of the plan (`stopped` says why), so an
+ * offline run does not wait on every unit.
  */
 export function unitQuoter(
   client: Pick<VeniceClient, 'post'>,
-  series: Pick<SeriesState, 'storyboardAspectRatio'>,
+  series: Pick<SeriesState, 'storyboardAspectRatio' | 'videoDefaults'>,
 ): { quote: UnitQuote; readonly stopped: string | undefined } {
   const asked = new Map<string, Promise<number | undefined>>();
   let stopped: string | undefined;
   const quote: UnitQuote = async (unit, model) => {
     if (stopped) return undefined;
     const request: VideoQuoteRequest = { model, duration: unit.duration };
-    const resolution = defaultRenderResolution(model);
+    const resolution = resolveRenderResolution(model, unit.unitType === 'single' ? series.videoDefaults?.resolution : undefined);
     if (resolution) request.resolution = resolution;
     if (sendsAspectRatio(model)) request.aspect_ratio = series.storyboardAspectRatio ?? '16:9';
     if (getVideoModel(model)?.audioConfigurable !== false) request.audio = true;
@@ -694,7 +743,6 @@ export async function planGenerations(
 ): Promise<PlanGenerationsResult> {
   const shots = script.shots;
   const ledger = buildContinuityLedger(series, shots);
-  const inputs = packagingInputs(script, series);
   const problems: string[] = [];
   const notes: string[] = [];
   let answer: unknown;
@@ -703,9 +751,9 @@ export async function planGenerations(
   if (options.agent !== false) {
     if (!client || !options.model) {
       notes.push('The packaging agent was not asked (no Venice client or no intelligence model): this plan is by rules.');
-    } else if (!inputs.settings.montage) {
+    } else if (!resolveMontageMode(series.videoDefaults)) {
       notes.push('Montage mode is off (the standard route): the packaging agent plans montage units, so this plan is by rules and the agent was not asked.');
-    } else if (inputs.settings.grammar !== 'shots') {
+    } else if (resolveMontageGrammar(series.videoDefaults) !== 'shots') {
       notes.push('The montage grammar is "sequence" (one place per generation): the packaging agent plans shot-list montages, so this plan is by rules and the agent was not asked.');
     } else {
       try {
@@ -730,6 +778,8 @@ export async function planGenerations(
   const byAgent = Boolean(plan);
   plan ??= buildGenerationPlan(script, series);
   const shotNotes = byAgent && validated && Object.keys(validated.shotNotes).length ? validated.shotNotes : undefined;
+  // Bound with the notes: the description of each shot a note amends.
+  const inputs = packagingInputs(script, series, shotNotes);
 
   plan.planning = {
     by: byAgent ? 'agent' : 'rules',
@@ -791,6 +841,8 @@ export function describeGenerationPlan(
   for (const problem of planning?.problems ?? []) lines.push(`  ✗ ${problem}${planning?.by === 'rules' ? ' (planned by rules instead)' : ''}`);
   let quoted = 0;
   let quotedSkipped = 0;
+  // Each unit's shots as ids ("13b"); a unit with no matching audit by number.
+  const unitIds = plan.units.map((unit, i) => (audits[i]?.unitId === unit.unitId ? audits[i].shots : unit.shotNumbers.map(String)));
   plan.units.forEach((unit, index) => {
     const audit = audits[index]?.unitId === unit.unitId ? audits[index] : undefined;
     const skipped = Boolean(audit?.onDisk && audit.onDisk.of > 0 && audit.onDisk.clips === audit.onDisk.of);
@@ -812,13 +864,17 @@ export function describeGenerationPlan(
     for (const item of audit?.carriesOut ?? []) lines.push(`      ⚠ carries across a cut between generations: ${item}`);
     for (const finding of audit?.findings ?? []) lines.push(`      ${finding}`);
     for (const drop of audit?.dropped ?? []) lines.push(`      reference dropped: ${drop}`);
-    if (audit?.onDisk && audit.onDisk.clips > 0) {
-      // --retake takes shot numbers; a number covers its suffixed inserts.
-      const retake = `generate-videos ${ref} --retake ${[...new Set(unit.shotNumbers)].join(',')}`;
+    const stale = audit?.onDisk?.stale ?? [];
+    if (stale.length > 0) {
+      lines.push(`      on disk: the clip of shot ${stale.join(', ')} predates its staging ref (stage-ref): generate-videos renders it again from the pick (billed) and archives the old clip when the new one lands`);
+    } else if (audit?.onDisk && audit.onDisk.clips > 0) {
       if (skipped && (unit.unitType === 'single' || audit.onDisk.master)) {
         lines.push('      on disk: rendered; generate-videos skips it and bills nothing');
       } else if (skipped) {
-        lines.push(`      on disk: every clip, but no ${unit.outputFile}: generate-videos keeps the cuts and bills nothing, and qa-videos checks the unit from its clips. To render shots ${audit.shots.join(', ')} again as one generation: ${retake}`);
+        // Ids that select this unit and no other: a bare number covers its inserts.
+        const retake = retakeTokensForUnit(unitIds, index);
+        const also = retake.alsoRetakes.map(i => plan.units[i].unitId);
+        lines.push(`      on disk: every clip, but no ${unit.outputFile}: generate-videos keeps the cuts and bills nothing, and qa-videos checks the unit from its clips. To render shots ${audit.shots.join(', ')} again as one generation: generate-videos ${ref} --retake ${retake.tokens.join(',')}${also.length ? ` (this also re-takes ${also.join(', ')}, which holds an insert of the same shot number)` : ''}`);
       } else {
         lines.push(`      on disk: ${audit.onDisk.clips} of ${audit.onDisk.of} clips: the unit renders whole, and those clips are archived (-vN) and cut again`);
       }

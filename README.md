@@ -426,10 +426,12 @@ Three gates block progress by design:
 
 One more is optional. `plan-generations -p <dir> -e <n>` proposes how the shots
 are packaged into generations (`generation-plan.proposed.md`). Without it nothing
-changes. Once a person approves the proposal (`plan-generations --approve
-"<name>"`), `generate-videos` renders it, and refuses to run when the shots or
-settings that decide its packaging have changed since: plan again, or pass
-`--ignore-plan` for one run. See AGENTS.md rule 66.
+changes. With one, `generate-videos` refuses to run until a person approves it
+(`plan-generations --approve "<name>"`); it then renders the approved plan, and
+refuses to run when the shots or settings that decide its packaging have changed
+since: plan again, or pass `--ignore-plan` for one run. It also refuses while
+renders queued under another packaging are still in flight, since it would
+never collect them (`--ignore-in-flight` renders anyway). See AGENTS.md rule 66.
 
 **Do not route around a gate.** `--skip-approval` and `--skip-qa` exist for
 operators who have already reviewed the work by other means. An agent that hits

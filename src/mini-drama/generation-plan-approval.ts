@@ -4,11 +4,13 @@
 // `plan-generations` writes its plan as a proposal
 // (`generation-plan.proposed.json` and `.md`) that only it ever writes, so a
 // render never overwrites it. A person approves the proposal; the approval is
-// bound to what decided the packaging (`packagingInputs`): the shots' ids,
-// order, length, type, place, view, cast and continuity, the flags that keep a
-// shot alone, and the series settings of the montage lane. A shot's dialogue,
-// blocking, `stagedOn` and `endState` change its prompt line, not its
-// packaging, so editing them keeps the approval.
+// bound to what decided the packaging (`packagingInputs`): what the planner
+// of the project's route reads (the shots' ids, order, length and place, what
+// keeps a shot alone, a staging ref among it, and the route's own settings
+// and fields), what the packaging agent reads, and the description of each
+// shot a plan's note amends. A shot's view, dialogue, blocking, `stagedOn` and
+// `endState` change its prompt line, not its packaging, so editing them keeps
+// the approval.
 //
 // `generate-videos` renders an approved proposal only while those inputs hash
 // the same and the planner still packages the shots exactly as approved. The
@@ -16,7 +18,8 @@
 // settings, so models and frame strategies are current. When anything that
 // decides the packaging changed, it refuses the run and says what changed
 // (`--ignore-plan` renders by rules for one run instead), like the QA binding
-// of rule 63.
+// of rule 63. A proposal no one approved blocks it too, so a run never
+// bypasses one without saying so.
 // ---------------------------------------------------------------------------
 
 import { createHash } from 'node:crypto';
@@ -46,37 +49,64 @@ export const PLAN_PROPOSAL_NOTES_FILE = 'generation-plan.proposed.md';
 
 // ---- What decides the packaging ---------------------------------------------
 
+const sha16 = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16);
+
+/**
+ * What decides the packaging, read the way the project's route reads it:
+ *   - every route: each shot's id, length and place, and what renders a shot
+ *     alone (an insert, a title card, `mustStaySingle`, a staging ref, exact
+ *     lip-sync);
+ *   - the montage route: its grammar, model, ceiling and floor; with the
+ *     shot-list grammar also each shot's `continuity.from` and cast, which
+ *     the grouping and the packaging agent read;
+ *   - the standard route: each shot's cast (multi-shot windows need it to
+ *     overlap), an establishing shot and `allowMultiShot`.
+ * With `shotNotes` (an agent plan's), the description of each noted shot: the
+ * note amends it, so rewriting the shot stales the plan.
+ */
 export function packagingInputs(
   script: Pick<EpisodeScript, 'shots'>,
   series: Pick<SeriesState, 'videoDefaults'>,
+  shotNotes?: Record<string, string>,
 ): GenerationPackagingInputs {
   const videoDefaults = series.videoDefaults;
+  const montage = resolveMontageMode(videoDefaults);
+  const grammar = montage ? resolveMontageGrammar(videoDefaults) : undefined;
+  const shotList = grammar === 'shots';
   return {
-    settings: {
-      montage: resolveMontageMode(videoDefaults),
-      grammar: resolveMontageGrammar(videoDefaults),
-      montageModel: resolveMontageModel(videoDefaults),
-      maxSec: resolveMontageMaxDurationSec(videoDefaults),
-      minSec: resolveMontageMinDurationSec(videoDefaults),
-    },
-    shots: script.shots.map(shot => ({
-      id: shotIdOf(shot),
-      seconds: parseShotDuration(shot.duration),
-      type: shot.type ?? '',
-      location: shot.location ?? null,
-      plateView: shot.plateView ?? null,
-      characters: (shot.characters ?? []).map(name => name.toUpperCase()),
-      from: shot.continuity?.from ?? null,
-      mustStaySingle: shot.mustStaySingle === true,
-      allowMultiShot: shot.allowMultiShot !== false,
-      titleCard: /title card/i.test(shot.description ?? ''),
-      lipSync: mustRenderAsExactLipSync(shot, videoDefaults),
-    })),
+    settings: montage
+      ? {
+        montage,
+        grammar,
+        montageModel: resolveMontageModel(videoDefaults),
+        maxSec: resolveMontageMaxDurationSec(videoDefaults),
+        minSec: resolveMontageMinDurationSec(videoDefaults),
+      }
+      : { montage },
+    shots: script.shots.map(shot => {
+      const id = shotIdOf(shot);
+      return {
+        id,
+        seconds: parseShotDuration(shot.duration),
+        location: shot.location ?? null,
+        insert: shot.type === 'insert',
+        ...(montage ? {} : { establishing: shot.type === 'establishing' }),
+        ...(!montage || shotList ? { characters: [...new Set((shot.characters ?? []).map(name => name.toUpperCase()))].sort() } : {}),
+        ...(shotList ? { from: shot.continuity?.from ?? null } : {}),
+        // A staged shot renders alone whatever its mustStaySingle says.
+        mustStaySingle: shot.mustStaySingle === true || Boolean(shot.stagingRef),
+        ...(montage ? {} : { allowMultiShot: shot.allowMultiShot !== false }),
+        staged: shot.stagingRef?.use ?? null,
+        titleCard: /title card/i.test(shot.description ?? ''),
+        lipSync: mustRenderAsExactLipSync(shot, videoDefaults),
+        ...(shotNotes?.[id] ? { description: sha16((shot.description ?? '').replace(/\s+/g, ' ').trim()) } : {}),
+      };
+    }),
   };
 }
 
 export function hashPackagingInputs(inputs: GenerationPackagingInputs): string {
-  return createHash('sha256').update(JSON.stringify(inputs)).digest('hex').slice(0, 16);
+  return sha16(JSON.stringify(inputs));
 }
 
 const onOff = (value: boolean): string => (value ? 'on' : 'off');
@@ -93,10 +123,12 @@ export function describePackagingChanges(
   const was = before.settings;
   const now = after.settings;
   if (was.montage !== now.montage) changes.push(`montage mode: ${onOff(was.montage)} → ${onOff(now.montage)} (videoDefaults.montageMode, or --no-montage for one run)`);
-  if (was.grammar !== now.grammar) changes.push(`montage grammar: ${was.grammar} → ${now.grammar} (videoDefaults.montageGrammar)`);
-  if (was.montageModel !== now.montageModel) changes.push(`montage model: ${was.montageModel} → ${now.montageModel} (videoDefaults.montageModel)`);
-  if (was.maxSec !== now.maxSec) changes.push(`montage ceiling: ${was.maxSec} s → ${now.maxSec} s (videoDefaults.montageMaxDurationSec, or the montage model's own ceiling)`);
-  if (was.minSec !== now.minSec) changes.push(`montage floor: ${was.minSec} s → ${now.minSec} s (the montage model's shortest duration)`);
+  // The montage settings are compared on the montage route only.
+  const both = (key: keyof GenerationPackagingInputs['settings']): boolean => key in was && key in now;
+  if (both('grammar') && was.grammar !== now.grammar) changes.push(`montage grammar: ${was.grammar} → ${now.grammar} (videoDefaults.montageGrammar)`);
+  if (both('montageModel') && was.montageModel !== now.montageModel) changes.push(`montage model: ${was.montageModel} → ${now.montageModel} (videoDefaults.montageModel)`);
+  if (both('maxSec') && was.maxSec !== now.maxSec) changes.push(`montage ceiling: ${was.maxSec} s → ${now.maxSec} s (videoDefaults.montageMaxDurationSec, or the montage model's own ceiling)`);
+  if (both('minSec') && was.minSec !== now.minSec) changes.push(`montage floor: ${was.minSec} s → ${now.minSec} s (the montage model's shortest duration)`);
 
   const idsBefore = before.shots.map(shot => shot.id);
   const idsAfter = after.shots.map(shot => shot.id);
@@ -111,21 +143,33 @@ export function describePackagingChanges(
     const prior = old.get(shot.id);
     if (!prior) continue;
     const at = `shot ${shot.id}:`;
+    // A field is compared when both sides read it (the route decides which do).
+    const has = (key: keyof typeof shot): boolean => key in prior && key in shot;
     if (prior.seconds !== shot.seconds) changes.push(`${at} ${prior.seconds} s → ${shot.seconds} s`);
-    if (prior.type !== shot.type) changes.push(`${at} type ${prior.type || 'none'} → ${shot.type || 'none'}`);
     if (prior.location !== shot.location) changes.push(`${at} location ${prior.location ?? 'none'} → ${shot.location ?? 'none'}`);
-    if (prior.plateView !== shot.plateView) changes.push(`${at} plateView ${prior.plateView ?? 'none'} → ${shot.plateView ?? 'none'}`);
-    if ((prior.characters ?? []).join(', ') !== shot.characters.join(', ')) {
-      changes.push(`${at} cast ${(prior.characters ?? []).join(', ') || 'none'} → ${shot.characters.join(', ') || 'none'}`);
+    if (has('insert') && prior.insert !== shot.insert) changes.push(`${at} ${shot.insert ? 'now' : 'no longer'} an insert`);
+    if (has('establishing') && prior.establishing !== shot.establishing) changes.push(`${at} ${shot.establishing ? 'now' : 'no longer'} an establishing shot`);
+    if (has('characters') && (prior.characters ?? []).join(', ') !== (shot.characters ?? []).join(', ')) {
+      changes.push(`${at} cast ${(prior.characters ?? []).join(', ') || 'none'} → ${(shot.characters ?? []).join(', ') || 'none'}`);
     }
-    if (prior.from !== shot.from) changes.push(`${at} continuity ${prior.from ?? 'unmarked'} → ${shot.from ?? 'unmarked'}`);
-    if (prior.mustStaySingle !== shot.mustStaySingle) changes.push(`${at} mustStaySingle ${prior.mustStaySingle} → ${shot.mustStaySingle}`);
-    if (prior.allowMultiShot !== shot.allowMultiShot) changes.push(`${at} allowMultiShot ${prior.allowMultiShot} → ${shot.allowMultiShot}`);
+    if (has('from') && prior.from !== shot.from) changes.push(`${at} continuity ${prior.from ?? 'unmarked'} → ${shot.from ?? 'unmarked'}`);
+    const pickChanged = has('staged') && prior.staged !== shot.staged;
+    if (pickChanged) {
+      changes.push(shot.staged
+        ? `${at} ${prior.staged ? `staging ref now used as a ${shot.staged}` : `staging ref picked (${shot.staged}, stage-ref): it renders alone`}`
+        : `${at} staging ref cleared`);
+    }
+    // A pick sets mustStaySingle and a clear restores it: said once, above.
+    if (prior.mustStaySingle !== shot.mustStaySingle && !pickChanged) changes.push(`${at} mustStaySingle ${prior.mustStaySingle} → ${shot.mustStaySingle}`);
+    if (has('allowMultiShot') && prior.allowMultiShot !== shot.allowMultiShot) changes.push(`${at} allowMultiShot ${prior.allowMultiShot} → ${shot.allowMultiShot}`);
     if (prior.titleCard !== shot.titleCard) changes.push(`${at} ${shot.titleCard ? 'now' : 'no longer'} a title card`);
     if (prior.lipSync !== shot.lipSync) {
       changes.push(shot.lipSync
         ? `${at} now renders as an exact lip-sync clip, on its own (audioStrategy "lip-sync", its dialogue, motion and faceVisible)`
         : `${at} no longer renders as an exact lip-sync clip`);
+    }
+    if (has('description') && prior.description !== shot.description) {
+      changes.push(`${at} description rewritten, and the plan's shot note for it was written for the old one`);
     }
   }
   return changes;
@@ -183,7 +227,7 @@ export function checkPlanApproval(
 ): PlanApproval {
   const planning = saved?.planning;
   if (!saved || !planning) return { status: 'none' };
-  const current = packagingInputs(script, series);
+  const current = packagingInputs(script, series, planning.shotNotes);
   const unchanged = planning.packagingHash === hashPackagingInputs(current);
   const changes = unchanged ? [] : describePackagingChanges(planning.inputs, current);
   if (!unchanged && changes.length === 0) changes.push('what decides the packaging changed since the plan was made');
@@ -201,6 +245,33 @@ export function checkPlanApproval(
   if (changes.length > 0 || !plan) return { status: 'stale', proposal: saved, changes };
   plan.planning = planning;
   return { status: 'approved', proposal: saved, plan };
+}
+
+/**
+ * What an edit to the script made outside `plan-generations` (a `stage-ref`
+ * pick or clear) did to the episode's plan proposal: lines for a person when
+ * the edit made an approved plan stale or valid again (or a waiting proposal
+ * out of date or current again), and the command generate-videos needs next.
+ * `ref` is the `-p … -e …` part of a command.
+ */
+export function describePlanAfterEdit(before: PlanApproval, after: PlanApproval, ref: string): { lines: string[]; next: string } {
+  const by = (approval: PlanApproval) => ('proposal' in approval ? approval.proposal.planning?.approvedBy ?? 'a person' : 'a person');
+  const planAgain = `plan-generations ${ref}`;
+  const lines: string[] = [];
+  if (before.status === 'approved' && after.status === 'stale') {
+    lines.push(`This makes the generation plan approved by ${by(after)} out of date (${after.changes.join('; ')}). generate-videos refuses to run until the episode is planned again and the new plan approved (--ignore-plan renders by rules for one run).`);
+  } else if (before.status === 'stale' && after.status === 'approved') {
+    lines.push(`The generation plan approved by ${by(after)} applies again: generate-videos renders it.`);
+  } else if (before.status === 'unapproved' && after.status === 'unapproved') {
+    if (before.changes.length === 0 && after.changes.length > 0) {
+      lines.push(`This makes the generation plan proposal waiting for approval out of date (${after.changes.join('; ')}): plan again before approving it.`);
+    } else if (before.changes.length > 0 && after.changes.length === 0) {
+      lines.push('The generation plan proposal waiting for approval matches the script again: approve it to render it.');
+    }
+  }
+  if (after.status === 'stale' || (after.status === 'unapproved' && after.changes.length > 0)) return { lines, next: planAgain };
+  if (after.status === 'unapproved') return { lines, next: `${planAgain} --approve "<your name>"` };
+  return { lines, next: `generate-videos ${ref}` };
 }
 
 // ---- The proposal on disk ------------------------------------------------------

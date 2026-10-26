@@ -39,7 +39,8 @@ export interface PipelineStage {
 /**
  * The canonical order. Project prerequisites gate everything downstream, then
  * each episode walks its own steps. Two gates — `approve-script` and
- * `qa-approve` — are explicit human sign-offs.
+ * `qa-approve` — are explicit human sign-offs; approving a generation plan
+ * proposal (`render`) is a third, when `plan-generations` made one.
  */
 export const PIPELINE_STAGES: readonly PipelineStage[] = [
   {
@@ -105,6 +106,7 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
     name: 'Render the shots (billed at queue time)',
     scope: 'episode',
     produces: 'scene-001/shot-NNN.mp4',
+    gate: 'When plan-generations made a proposal, a human must approve it (plan-generations -p <project> -e <n> --approve "<name>"), and an approved plan blocks the render once the shots or settings that decide its packaging change: plan again. --ignore-plan renders by rules for one run; it does not approve or update the plan. Renders still in flight from another packaging also block; --ignore-in-flight does not collect them.',
     command: 'generate-videos -p <project> -e <n>',
   },
   {
@@ -164,7 +166,7 @@ export const PIPELINE_BRANCHES: readonly PipelineBranch[] = [
     summary:
       'A continuity ledger, a packaging sub-agent (the project\'s intelligence model) checked by a validator, and a reference audit and free quote per unit. Writes generation-plan.proposed.json and .md. Optional: without it, generate-videos plans by rules.',
     note:
-      'Approving the proposal (plan-generations --approve "<name>") is a human decision. generate-videos then renders the approved plan, and refuses to run once the shots or settings that decide its packaging change: plan again, or pass --ignore-plan for one run.',
+      'Approving the proposal (plan-generations --approve "<name>") is a human decision. Until then generate-videos refuses to run (it would bypass the proposal); once approved it renders the approved plan, and refuses to run when the shots or settings that decide its packaging change: plan again, or pass --ignore-plan for one run.',
     command: 'plan-generations -p <project> -e <n>',
   },
 ];

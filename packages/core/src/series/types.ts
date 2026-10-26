@@ -1091,38 +1091,50 @@ export interface GenerationUnit {
 }
 
 /**
- * What decides how an episode's shots are packaged into generations. An
- * approved generation plan applies only while this is unchanged. A shot's
- * dialogue, blocking, `stagedOn` and `endState` change its prompt line, not
- * its packaging, so they are not part of it.
+ * What decides how an episode's shots are packaged into generations: what the
+ * planner of the project's route reads, and what the packaging agent reads.
+ * An approved generation plan applies only while this is unchanged. A field
+ * no planner of the route reads is left out (the montage settings on the
+ * standard route, `continuity.from` there), and so is everything that changes
+ * a shot's prompt line only: its view, dialogue, blocking, `stagedOn`,
+ * `endState`, and its words, except where a plan's shot note amends them.
  */
 export interface GenerationPackagingInputs {
   settings: {
     /** `resolveMontageMode`: false on the standard route (`--no-montage`). */
     montage: boolean;
-    grammar: 'shots' | 'sequence';
-    montageModel: string;
+    /** Montage route only. */
+    grammar?: 'shots' | 'sequence';
+    montageModel?: string;
     /** The montage window ceiling and floor, in seconds. */
-    maxSec: number;
-    minSec: number;
+    maxSec?: number;
+    minSec?: number;
   };
   shots: Array<{
     /** Shot id: `shotNumber` + `shotIdSuffix` ("13b"). */
     id: string;
     seconds: number;
-    type: string;
     location: string | null;
-    plateView: string | null;
-    /** Cast names, upper case, in script order. */
-    characters: string[];
-    /** `continuity.from`. */
-    from: string | null;
+    /** `type: 'insert'`: renders alone, unless it continues the action in a shot-list montage. */
+    insert: boolean;
+    /** Standard route: `type: 'establishing'` keeps the shot out of multi-shot windows. */
+    establishing?: boolean;
+    /** Cast names, upper case, sorted: who is in the shot (standard route and the packaging agent). */
+    characters?: string[];
+    /** `continuity.from` (the shot-list montage grouping and the packaging agent). */
+    from?: string | null;
+    /** `mustStaySingle`, or a staging ref (a staged shot renders alone whatever the flag says). */
     mustStaySingle: boolean;
-    allowMultiShot: boolean;
+    /** Standard route: `allowMultiShot: false` keeps the shot out of multi-shot windows. */
+    allowMultiShot?: boolean;
+    /** The use of the shot's staging ref (stage-ref): a staged shot always renders alone. */
+    staged: 'plate' | 'start-frame' | null;
     /** The description names a title card (the shot renders alone). */
     titleCard: boolean;
     /** The shot renders as an exact lip-sync clip (audioStrategy, dialogue, motion, faceVisible). */
     lipSync: boolean;
+    /** A shot the plan's shot note amends: sha256 (16 hex) of its description, so a rewrite stales the plan. */
+    description?: string;
   }>;
 }
 

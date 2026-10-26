@@ -135,6 +135,21 @@ function term(key: string, words: string[], flags: Omit<Term, 'key' | 'pattern'>
  */
 const NOUN_CUE = '(?:the|a|an|its|their|his|her|our|this|that|these|those|another|each|every|one|two|three|several)';
 
+/**
+ * In a shot's words, a vehicle word that only says whose or what kind of thing
+ * another noun is does not put the vehicle in the shot: a possessive or a
+ * modifier of a thing that is not part of it ("the ship's compass", "a bus
+ * ticket", "the tram timetable", "a train ticket"). Parts still count ("the
+ * train doors", "the ship's rail"), and so do verbs that look like these
+ * nouns ("the gondola passes", "the tram stops"). A location's words, and an
+ * inventory's, read as they always did (`loose`).
+ */
+const NOT_THE_VEHICLE = "(?!(?:['’]s?)?[\\s-]+(?:tickets?|timetables?|schedules?|fares?|tokens?|maps?|routes?|compass(?:es)?|stop|shelter|depots?|terminals?|models?|toys?|posters?|compan(?:y|ies))\\b)";
+
+function vehicleTerm(t: Term): Term {
+  return { ...t, vehicle: true, loose: t.loose ?? t.pattern, pattern: new RegExp(`(?:${t.pattern.source})${NOT_THE_VEHICLE}`, t.pattern.flags) };
+}
+
 /** Vehicles by kind: synonyms share a key, so "liner" and "ship" are one thing and "ferry" another. */
 const VEHICLES: Term[] = [
   term('ferry', ['ferry', 'ferrie']),
@@ -145,7 +160,7 @@ const VEHICLES: Term[] = [
   term('barge', ['barge']),
   term('sandolo', ['sandolo', 'sandoli', 'skiff', 'rowboat', 'rowing boat']),
   term('sailboat', ['sailboat', 'sailing boat', 'yacht']),
-].map(t => ({ ...t, vehicle: true, water: true }));
+].map(t => vehicleTerm({ ...t, water: true }));
 
 const LAND_VEHICLES: Term[] = [
   { key: 'train', pattern: new RegExp(`\\b(?:(?:${NOUN_CUE}|night|sleeper|passenger|freight|steam|electric|local|express|waiting|departing|arriving|stationary|empty|last|first|old)\\s+trains?|trains?\\s+(?:doors?|windows?|carriages?|cars?|tracks?|platforms?|stations?)|by\\s+train|carriages?|railcars?|locomotives?)\\b`, 'i'), loose: /\b(?:train|carriage|sleeper|railcar|locomotive)(?:e?s)?\b/i },
@@ -153,7 +168,7 @@ const LAND_VEHICLES: Term[] = [
   term('bus', ['bus']),
   term('cart', ['cart', 'wagon']),
   term('bicycle', ['bicycle', 'bike']),
-].map(t => ({ ...t, vehicle: true }));
+].map(vehicleTerm);
 
 /** Parts of a boat: a shot that stands on one is aboard whatever vessel the plate shows. */
 const VESSEL_PARTS: Term[] = [
@@ -425,8 +440,13 @@ export function viewEvidence(location: PlanLocation): Partial<Record<PlateView, 
 /** A boat the vocabulary has no kind for ("a long dark boat", "a small craft"). */
 const GENERIC_BOAT = /\b(?:boat|vessel|craft|ship|motorboat|skiff|dinghy)s?\b/i;
 
-/** Every vehicle kind a text names ("ferry", "launch", "train"): a shot's words strictly, an inventory's like a place's. */
-function vehicleKinds(text: string, how: 'shot' | 'place' = 'shot'): Set<string> {
+/**
+ * Every vehicle kind a text names ("tram", "barge", "train"): a shot's words
+ * strictly (a word that is also a verb counts only as a noun, and a vehicle
+ * word that only qualifies another thing, "a bus ticket", not at all), an
+ * inventory's like a place's.
+ */
+export function vehicleKinds(text: string, how: 'shot' | 'place' = 'shot'): Set<string> {
   return new Set([...VEHICLES, ...LAND_VEHICLES].filter(t => (how === 'place' ? placePattern(t) : t.pattern).test(text)).map(t => t.key));
 }
 
@@ -445,14 +465,6 @@ function stagedPastPlate(shot: PlanShot): boolean {
 /** Water vessels a text names (by kind). */
 function vesselsIn(text: string, how: 'shot' | 'place' = 'shot'): Set<string> {
   return new Set(VEHICLES.filter(t => (how === 'place' ? placePattern(t) : t.pattern).test(text)).map(t => t.key));
-}
-
-/**
- * Every vehicle a shot's words name, by kind, water or land ("tram",
- * "barge"). A word that is also a verb counts only as a noun.
- */
-export function vehiclesIn(text: string): string[] {
-  return [...VEHICLES, ...LAND_VEHICLES].filter(t => hasTerm(text, t)).map(t => t.key);
 }
 
 /** The words before a noun phrase's first qualifier ("a red tram with brass rails" -> "a red tram"). */

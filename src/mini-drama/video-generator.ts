@@ -804,6 +804,15 @@ export function defaultRenderResolution(modelId: string): string | undefined {
 }
 
 /**
+ * The resolution `renderVideoFile` requests: an override the model lists
+ * (a single shot passes `videoDefaults.resolution`), else the family default.
+ */
+export function resolveRenderResolution(modelId: string, override?: string): string | undefined {
+  if (override && getVideoModel(modelId)?.resolutions.includes(override)) return override;
+  return defaultRenderResolution(modelId);
+}
+
+/**
  * Whether `renderVideoFile` sends `aspect_ratio` for a model. Image-to-video
  * inherits aspect from the start image. Reference-to-video and text-to-video
  * variants take aspect_ratio explicitly — MiniMax H3 / H3 Max t2v go further
@@ -920,17 +929,11 @@ export async function renderVideoFile(
   // family defaults below when absent or unsupported. The loop-preview engine
   // uses this to pin MiniMax H3 Max Turbo to its 480P draft tier.
   const resolutionOverride = options.resolution;
-  const overrideSpec = resolutionOverride ? getVideoModel(effectiveModel) : undefined;
-  if (resolutionOverride && overrideSpec?.resolutions.includes(resolutionOverride)) {
-    body.resolution = resolutionOverride;
-  } else if (resolutionOverride) {
+  if (resolutionOverride && !getVideoModel(effectiveModel)?.resolutions.includes(resolutionOverride)) {
     console.warn(`  ⚠ Resolution override ${resolutionOverride} not valid for ${effectiveModel}; using the model default.`);
   }
-
-  if (body.resolution === undefined) {
-    const pinned = defaultRenderResolution(effectiveModel);
-    if (pinned) body.resolution = pinned;
-  }
+  const resolution = resolveRenderResolution(effectiveModel, resolutionOverride);
+  if (resolution) body.resolution = resolution;
 
   // bitrate_mode: Seedance 2.5 encodes at 'high' by default — ~5-6x the
   // bitrate for a sharp, artifact-free file at no extra token cost. Other
@@ -2356,7 +2359,11 @@ async function renderMontageUnit(
     } else {
       const episode = /episode-(\d+)$/.exec(basename(episodeDir))?.[1];
       console.log(`  ${unit.unitId}: shot cuts exist, skipping (no ${unit.outputFile} on disk; the cuts are kept and nothing is billed).`);
-      console.log(`    To render shots ${shots.map(shot => resolveDialogueShotId(shot)).join(', ')} again as one generation: generate-videos -p ${series.outputDir} -e ${episode ? Number(episode) : '<episode>'} --retake ${[...new Set(unit.shotNumbers)].join(',')}`);
+      // A bare number re-takes the units holding the shot and its inserts; an
+      // insert whose base shot is in another unit is named by its own id.
+      const ids = shots.map(shot => String(resolveDialogueShotId(shot)));
+      const tokens = [...new Set(ids.map(id => (ids.includes(id.replace(/[a-z]+$/i, '')) ? id.replace(/[a-z]+$/i, '') : id)))];
+      console.log(`    To render shots ${ids.join(', ')} again as one generation: generate-videos -p ${series.outputDir} -e ${episode ? Number(episode) : '<episode>'} --retake ${tokens.join(',')}`);
     }
     return adoptCutClips(unit, shots, shotOutputPaths, unitOutputPath);
   }
@@ -2814,7 +2821,7 @@ export async function generateEpisodeVideos(
           for (const shot of staged) {
             run.report({
               shot: String(resolveDialogueShotId(shot)),
-              reason: `it has no clip from its staging ref, and this re-take leaves it as it is; render it too: ${generateVideosCommand(series, plan.episode)} --retake ${shot.shotNumber}`,
+              reason: `it has no clip from its staging ref, and this re-take leaves it as it is; render it too: ${generateVideosCommand(series, plan.episode)} --retake ${resolveDialogueShotId(shot)}`,
             });
           }
         }

@@ -10,11 +10,14 @@
 // ---------------------------------------------------------------------------
 
 import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { getEpisodeDir, loadEpisodeScript, loadSeries } from '../series/manager.js';
 import { staleStagedShots } from '../mini-drama/staging.js';
 import type { EpisodeScript, SeriesState } from 'venice-video-harness/core/series/types.js';
-import { checkPlanApproval, loadPlanProposalSync } from '../mini-drama/generation-plan-approval.js';
+import { checkPlanApproval, loadPlanProposalSync, type PlanApproval } from '../mini-drama/generation-plan-approval.js';
+import { buildGenerationPlan } from '../mini-drama/generation-planner.js';
+import { inFlightOutsidePlan, planQueueOutputs } from '../mini-drama/in-flight.js';
+import { listPendingJobs, type PendingJob } from '../venice/job-store.js';
 
 export interface EpisodeStatus {
   episode: number;
@@ -77,13 +80,50 @@ function countMatching(dir: string, pattern: RegExp): number {
   }
 }
 
-/** The stage when the episode's generation plan blocks `generate-videos`, else null. */
-function generationPlanBlock(series: SeriesState, script: EpisodeScript, episodeDir: string): string | null {
+/**
+ * Why generate-videos would refuse to render before it reads the API key, as
+ * a stage and the command that clears it, or null (rule 45: the same checks).
+ *   - A generation plan proposal no one approved, an approved one that no
+ *     longer applies, or one that cannot be read (rule 66).
+ *   - Renders in flight under another packaging of the shots, which the plan
+ *     it would render never collects (rule 43): collect them with the
+ *     packaging that queued them, or look at them with `venice-video queue`.
+ */
+function renderBlock(
+  series: SeriesState,
+  script: EpisodeScript,
+  episodeDir: string,
+  ref: string,
+  pending: PendingJob[],
+): { stage: string; nextCommand: string } | null {
+  const qualified = (command: string) => qualifyCommand(command, series.outputDir);
+  let check: PlanApproval;
   try {
-    const check = checkPlanApproval(loadPlanProposalSync(episodeDir), script, series);
-    return check.status === 'stale' ? 'approved generation plan out of date' : null;
+    check = checkPlanApproval(loadPlanProposalSync(episodeDir), script, series);
   } catch {
-    return 'generation plan unreadable';
+    return { stage: 'generation plan unreadable', nextCommand: qualified(`plan-generations ${ref}`) };
+  }
+  if (check.status === 'stale') return { stage: 'approved generation plan out of date', nextCommand: qualified(`plan-generations ${ref}`) };
+  if (check.status === 'unapproved') {
+    return check.changes.length > 0
+      ? { stage: 'generation plan proposal out of date', nextCommand: qualified(`plan-generations ${ref}`) }
+      : { stage: 'generation plan awaiting approval', nextCommand: qualified(`plan-generations ${ref} --approve "<your name>"`) };
+  }
+  if (pending.length === 0) return null;
+  try {
+    const sceneDir = join(episodeDir, 'scene-001');
+    const plan = check.status === 'approved' ? check.plan : buildGenerationPlan(script, series);
+    const inFlight = inFlightOutsidePlan(pending, sceneDir, plan, script.shots);
+    if (inFlight.length === 0) return null;
+    // Under an approved plan, renders the rules planner queued are collected with --ignore-plan.
+    const rules = check.status === 'approved' ? planQueueOutputs(sceneDir, buildGenerationPlan(script, series), script.shots) : null;
+    const byRules = rules !== null && inFlight.every(job => rules.has(resolve(job.outputPath)));
+    return {
+      stage: `${inFlight.length} render(s) in flight under another packaging`,
+      nextCommand: byRules ? qualified(`generate-videos ${ref} --ignore-plan`) : 'queue',
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -97,6 +137,7 @@ function classifyEpisode(
   episode: number,
   script: EpisodeScript | null,
   episodeDir: string,
+  pending: PendingJob[] = [],
 ): EpisodeStatus {
   const sceneDir = join(episodeDir, 'scene-001');
   const audioDir = join(episodeDir, 'audio');
@@ -145,26 +186,25 @@ function classifyEpisode(
   } else if (!status.qaApproved) {
     status.stage = 'at QA gate';
     status.nextCommand = `qa-approve ${ref}`;
-  } else if (status.videoCount < status.shotCount) {
-    // Mirror generate-videos: an approved generation plan that no longer
-    // applies (or cannot be read) blocks the render until it is planned again.
-    const plan = generationPlanBlock(series, script!, episodeDir);
-    if (plan) {
-      status.stage = plan;
-      status.nextCommand = `plan-generations ${ref}`;
-    } else {
+  } else if (status.videoCount < status.shotCount || status.stagedToRender.length > 0) {
+    // Mirror generate-videos: what it refuses before the API key is read.
+    const blocked = renderBlock(series, script!, episodeDir, ref, pending);
+    if (blocked) {
+      status.stage = blocked.stage;
+      status.nextCommand = blocked.nextCommand;
+    } else if (status.videoCount < status.shotCount) {
       status.stage = status.videoCount === 0
         ? 'ready to render'
         : `rendering (${status.videoCount}/${status.shotCount} clips)`;
       status.nextCommand = status.stagedToRender.length > 0
         ? qualifyCommand(`generate-videos ${ref}`, series.outputDir)
         : `generate-videos ${ref}`;
+    } else {
+      // A clip from before a pick is the defect the pick removes: it is neither
+      // verified nor assembled until the shot renders from the pick.
+      status.stage = `staged shot(s) ${status.stagedToRender.join(', ')} need rendering from their staging ref`;
+      status.nextCommand = qualifyCommand(`generate-videos ${ref}`, series.outputDir);
     }
-  } else if (status.stagedToRender.length > 0) {
-    // A clip from before a pick is the defect the pick removes: it is neither
-    // verified nor assembled until the shot renders from the pick.
-    status.stage = `staged shot(s) ${status.stagedToRender.join(', ')} need rendering from their staging ref`;
-    status.nextCommand = qualifyCommand(`generate-videos ${ref}`, series.outputDir);
   } else if (!status.videoQaReported && !status.hasFinalCut) {
     status.stage = 'clips complete, unverified';
     status.nextCommand = `qa-videos ${ref}`;
@@ -186,12 +226,14 @@ function classifyEpisode(
  * gets suggested there. Anywhere the project is not implied -- the treatment
  * page, a log someone reads tomorrow -- the command needs the directory or it
  * fails on a missing required option. A trailing `# comment` stays trailing.
+ * A command that takes no project (`queue`) is left as it is.
  */
 export function qualifyCommand(command: string, projectDir: string): string {
   if (/(^|\s)(-p|--project)(\s|=)/.test(command)) return command;
   const [body, ...comment] = command.split('#');
   const tokens = body.trimEnd().split(/\s+/);
   const head = tokens.shift() ?? command;
+  if (head === 'queue') return command;
   const rest = tokens.length > 0 ? ` ${tokens.join(' ')}` : '';
   const suffix = comment.length > 0 ? `   #${comment.join('#')}` : '';
   return `${head} -p "${projectDir}"${rest}${suffix}`;
@@ -202,10 +244,11 @@ export async function collectProjectStatus(projectDir: string): Promise<ProjectS
   if (!series) return null;
 
   const episodes: EpisodeStatus[] = [];
+  const pending = await listPendingJobs();
   for (const meta of series.episodes) {
     const episodeDir = getEpisodeDir(series, meta.number);
     const script = await loadEpisodeScript(series, meta.number);
-    episodes.push(classifyEpisode(series, meta.number, script, episodeDir));
+    episodes.push(classifyEpisode(series, meta.number, script, episodeDir, pending));
   }
 
   const characters = series.characters ?? [];

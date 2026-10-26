@@ -1,7 +1,7 @@
 // plan-generations: the continuity ledger, the packaging agent's answer checked
 // by the validator (with a rules fallback), the reference audit, and the
-// approval that generate-videos honours or refuses. The agent and the quote
-// endpoint are stubs: no network calls.
+// approval that generate-videos honours or refuses. The agent, the quote
+// endpoint and the pending-job store are stubs: no network calls.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,13 +15,19 @@ import {
   toProposal, unitQuoter, unusedShotNotes, validatePackaging,
 } from '../dist/mini-drama/generation-planning.js';
 import {
-  checkPlanApproval, hashPackagingInputs, loadPlanProposal, packagingInputs, savePlanProposal,
+  checkPlanApproval, describePlanAfterEdit, hashPackagingInputs, loadPlanProposal, packagingInputs, savePlanProposal,
 } from '../dist/mini-drama/generation-plan-approval.js';
-import { buildGenerationPlan, buildGenerationPlanFromGroups, resolveUnitShots } from '../dist/mini-drama/generation-planner.js';
+import {
+  buildGenerationPlan, buildGenerationPlanFromGroups, resolveUnitShots, retakeTokensForUnit, unitIndicesForShotIds,
+} from '../dist/mini-drama/generation-planner.js';
+import { montageBlockReason } from '../dist/mini-drama/montage.js';
+import { vehicleKinds } from '../dist/mini-drama/plan-check.js';
 import { buildMontagePrompt } from '../dist/mini-drama/prompt-builder.js';
+import { inFlightOutsidePlan } from '../dist/mini-drama/in-flight.js';
+import { setWorkshopPlanProvider } from '../dist/mini-drama/workshop.js';
 import { VeniceRequestError } from '../dist/venice/client.js';
-import { collectProjectStatus } from '../dist/session/status.js';
-import { PIPELINE_BRANCHES } from '../packages/core/dist/agent/pipeline.js';
+import { collectProjectStatus, qualifyCommand } from '../dist/session/status.js';
+import { PIPELINE_BRANCHES, PIPELINE_STAGES } from '../packages/core/dist/agent/pipeline.js';
 import { formatGuide } from '../packages/core/dist/agent/guide.js';
 
 const PNG = Buffer.from('89504e470d0a1a0a', 'hex');
@@ -90,6 +96,18 @@ const GOOD = {
   notes: ['cast the bus if it returns'],
 };
 
+/** A packaging the rules planner would not make: shot 3 in a generation of its own. */
+const SPLIT = {
+  units: [{ shots: ['1', '2'], reason: 'the boarding' }, { shots: ['3'], reason: 'inside, alone' }, { shots: ['4', '5'], reason: 'later' }],
+};
+
+/** A staging ref as stage-ref records it; the image need not exist for the plan. */
+const staged = (use, extra = {}) => ({
+  path: 'episodes/episode-001/staging/shot-003/s1/1-gpt-image-2-edit.png', use, source: 'locations/tram-interior/north.png',
+  ...(use === 'plate' ? { replacesView: 'north' } : {}), model: 'gpt-image-2-edit', prompt: 'remove the poster',
+  sha256: 'a'.repeat(64), session: 'episodes/episode-001/staging/shot-003/s1', pickedAt: '2026-10-26T00:00:00.000Z', ...extra,
+});
+
 function stubAgent(answer) {
   const calls = [];
   return { calls, client: { async chatJson(options) { calls.push(options); if (answer instanceof Error) throw answer; return typeof answer === 'function' ? answer() : answer; } } };
@@ -130,6 +148,34 @@ test('the ledger: what carries across each cut, the state a shot changes, and th
   }
 });
 
+test('a vehicle word that only qualifies another thing is not a vehicle in the shot; its parts and its verbs still are', () => {
+  const kinds = (text) => [...vehicleKinds(text)];
+  assert.deepEqual(kinds("Close on the ship's compass."), []);
+  assert.deepEqual(kinds('She holds out a bus ticket.'), []);
+  assert.deepEqual(kinds('He reads the tram timetable on the wall.'), []);
+  assert.deepEqual(kinds('A train ticket falls from her hand.'), []);
+  assert.deepEqual(kinds('She waits at the tram stop.'), []);
+  assert.deepEqual(kinds('A bus-ticket stub on the floor.'), []);
+  assert.deepEqual(kinds('The train doors close.'), ['train']);
+  assert.deepEqual(kinds("She grips the ship's rail."), ['ship']);
+  assert.deepEqual(kinds('The tram stops at the corner.'), ['tram']);
+  assert.deepEqual(kinds('A gondola passes the steps.'), ['gondola']);
+  // A place's words read as before: a tram stop in a location still names a tram there.
+  assert.deepEqual([...vehicleKinds('A steep street with the tram stop.', 'place')], ['tram']);
+
+  const { dir, series } = fixture();
+  try {
+    const ledger = buildContinuityLedger(series, [
+      shot(1, { characters: ['ANNA'], description: 'ANNA shows a bus ticket to LEO.' }),
+      shot(2, { characters: ['ANNA'], description: "ANNA checks the tram timetable and the ship's compass." }),
+    ]);
+    assert.ok(!ledger.entities.some(e => e.kind === 'vehicle'), JSON.stringify(ledger.entities));
+    assert.ok(!ledger.risks.some(r => /no reference of its own/.test(r)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the validator accepts a clean answer, flattens its notes, and names every structural problem in a bad one', () => {
   const { dir, series, script } = fixture();
   try {
@@ -158,6 +204,30 @@ test('the validator accepts a clean answer, flattens its notes, and names every 
     assert.deepEqual(lists.problems, []);
     assert.ok(lists.notes.some(n => /unit 1 \(shots 1, 2, 3\) gives no reason/.test(n)));
     assert.ok(lists.notes.some(n => /no reason given for the split after shot 3/.test(n)));
+    // Values String() cannot convert are named, never thrown on.
+    const odd = validatePackaging({
+      units: [{ shots: [{ toString: 1 }, '1', '2', '3', '4', '5'] }],
+      splits: [{ after: { toString: 1 } }],
+      shotNotes: [{ shot: { toString: 1 }, note: 'x' }],
+    }, series, script.shots);
+    assert.match(odd.problems.join(' | '), /unit 1 names shots that are not in the script: \{"toString":1\}/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the validator records a unit whose references overflow its model\'s budget, as a note', () => {
+  const { dir, series, script } = fixture({ montageModel: 'seedance-2-0-reference-to-video', montageReferenceViews: 'all' });
+  try {
+    for (const slug of ['market-street', 'tram-interior', 'hill-station']) {
+      for (const view of ['east', 'south', 'west']) writeFileSync(join(dir, 'locations', slug, `${view}.png`), PNG);
+    }
+    const shots = script.shots.map(s => ({ ...s, plateView: 'north' }));
+    const result = validatePackaging(GOOD, series, shots);
+    assert.deepEqual(result.problems, []);
+    const note = result.notes.find(n => /needs more reference images/.test(n));
+    assert.match(note, /^unit 1 \(shots 1, 2, 3\) needs more reference images than seedance-2-0-reference-to-video takes \(9\): \d+ dropped \(.*over 9-image budget.*\)\. A split keeps them\.$/);
+    assert.ok(!result.notes.some(n => /^unit 2 .*needs more reference images/.test(n)), 'one place and one person fit');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -235,6 +305,42 @@ test('shot ids tell an insert from its base shot, in the answer, the beats and t
   }
 });
 
+test('a re-take names shot ids that select exactly one unit', async () => {
+  const { dir, series } = fixture();
+  try {
+    const shots = [
+      shot(12, { location: 'hill-station', characters: ['ANNA'] }),
+      shot(13, { location: 'hill-station', characters: ['ANNA'], continuity: { from: 'continuous' } }),
+      shot(13, { shotIdSuffix: 'b', location: 'hill-station', characters: ['ANNA'], continuity: { from: 'continuous' } }),
+      shot(14, { location: 'hill-station', characters: ['ANNA'], continuity: { from: 'continuous' } }),
+    ];
+    const script = { episode: 1, title: 't', shots };
+    const plan = buildGenerationPlanFromGroups(script, series, { groups: [{ shots: ['12', '13'] }, { shots: ['13b', '14'] }] });
+    assert.deepEqual(resolveUnitShots(plan, shots).map(ids), [['12', '13'], ['13b', '14']]);
+    // A bare number covers its inserts; an id with its suffix names that insert alone.
+    assert.deepEqual(unitIndicesForShotIds(plan, shots, ['13']), [0, 1]);
+    assert.deepEqual(unitIndicesForShotIds(plan, shots, ['13b']), [1]);
+    assert.deepEqual(unitIndicesForShotIds(plan, shots, ['13B', '14']), [1]);
+    const unitIds = [['12', '13'], ['13b', '14']];
+    assert.deepEqual(retakeTokensForUnit(unitIds, 0), { tokens: ['12'], alsoRetakes: [] });
+    assert.deepEqual(retakeTokensForUnit(unitIds, 1), { tokens: ['13b', '14'], alsoRetakes: [] });
+    assert.deepEqual(retakeTokensForUnit([['12', '13', '13b'], ['14']], 0), { tokens: ['12', '13'], alsoRetakes: [] });
+    // No shot of the unit can be named apart: the bare number, and what else it re-takes.
+    assert.deepEqual(retakeTokensForUnit([['14'], ['14b', '15']], 0), { tokens: ['14'], alsoRetakes: [1] });
+
+    // Every clip on disk and no master: the audit's re-take line picks only that unit.
+    const sceneDir = join(dir, 'scene-001');
+    mkdirSync(sceneDir, { recursive: true });
+    for (const key of ['012', '013', '013b', '014']) writeFileSync(join(sceneDir, `shot-${key}.mp4`), PNG);
+    const audits = await auditPlan(series, shots, plan, buildContinuityLedger(series, shots), { sceneDir });
+    const text = describeGenerationPlan({ plan, audits }, { project: dir, episode: 1 }).join('\n');
+    assert.match(text, /To render shots 12, 13 again as one generation: generate-videos -p \S+ -e 1 --retake 12$/m);
+    assert.match(text, /To render shots 13b, 14 again as one generation: generate-videos -p \S+ -e 1 --retake 13b,14$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the agent\'s plan is used when valid: units, reasons, splits and a shot note in the prompt', async () => {
   const { dir, series, script } = fixture();
   try {
@@ -250,7 +356,10 @@ test('the agent\'s plan is used when valid: units, reasons, splits and a shot no
     const planning = result.plan.planning;
     assert.equal(planning.by, 'agent');
     assert.equal(planning.model, 'stub-model');
-    assert.equal(planning.packagingHash, hashPackagingInputs(packagingInputs(script, series)));
+    // The hash binds the description of the shot the note amends, and no other.
+    assert.equal(planning.packagingHash, hashPackagingInputs(packagingInputs(script, series, planning.shotNotes)));
+    assert.match(planning.inputs.shots[1].description, /^[0-9a-f]{16}$/);
+    assert.equal(planning.inputs.shots[0].description, undefined);
     assert.deepEqual(planning.groups.map(g => g.shots), [['1', '2', '3'], ['4', '5']]);
     assert.deepEqual(result.plan.units.map(u => u.shotNumbers), [[1, 2, 3], [4, 5]]);
     assert.match(result.plan.units[0].decisionReasons[0], /^planner: the tram and LEO carry/);
@@ -265,6 +374,13 @@ test('the agent\'s plan is used when valid: units, reasons, splits and a shot no
 
     const { prompt } = buildMontagePrompt(script.shots.slice(0, 3), result.plan.units[0], series);
     assert.match(prompt, /\nCut to Shot 2 \| 5-9s \| Market Street \(@Image\d+\): [^.]+\. The tram pulls away uphill from the stop\. The doors fold shut and the tram starts to climb\.\n/);
+
+    // The agent is told what renders alone; a shot's view is not its business.
+    const viewed = withShot(withShot(script, 1, { plateView: 'east' }), 3, { stagingRef: staged('plate') });
+    const asked = stubAgent(GOOD);
+    await planGenerations(asked.client, series, viewed, { model: 'stub-model' });
+    assert.doesNotMatch(asked.calls[0].userPrompt, /"view"/);
+    assert.match(asked.calls[0].userPrompt, /"alone": "a picked staging ref \(stage-ref\) that only its own render sends"/);
 
     const rules = await planGenerations(null, series, script, { agent: false });
     assert.equal(rules.plan.planning.by, 'rules');
@@ -320,7 +436,7 @@ test('shot notes are one capped line, never an @Image tag, inside the length gua
   }
 });
 
-test('plans built from groups keep to the route: no montage units with montage off, and exact lip-sync shots render alone', async () => {
+test('plans built from groups keep to the route: no montage units with montage off, exact lip-sync and staged shots render alone', async () => {
   const { dir, series, script } = fixture();
   try {
     const off = { ...series, videoDefaults: { ...series.videoDefaults, montageMode: false } };
@@ -340,6 +456,14 @@ test('plans built from groups keep to the route: no montage units with montage o
     const lipSync = { ...series, videoDefaults: { ...series.videoDefaults, audioStrategy: 'lip-sync' } };
     const lip = buildGenerationPlanFromGroups(speaking, lipSync, { groups: [{ shots: ['1', '2', '3'] }, { shots: ['4', '5'] }] });
     assert.deepEqual(lip.units.map(u => [u.unitType, u.shotNumbers.join()]), [['montage', '1'], ['single', '2'], ['montage', '3'], ['montage', '4,5']]);
+
+    // A staged shot renders alone even when its mustStaySingle was edited away.
+    const picked = withShot(script, 2, { stagingRef: staged('plate'), mustStaySingle: false });
+    assert.equal(montageBlockReason(picked.shots[1], series.videoDefaults), 'staged');
+    assert.equal(montageBlockReason(withShot(picked, 2, { mustStaySingle: true }).shots[1], series.videoDefaults), 'staged');
+    const grouped = buildGenerationPlanFromGroups(picked, series, { groups: [{ shots: ['1', '2', '3'] }, { shots: ['4', '5'] }] });
+    assert.deepEqual(grouped.units.map(u => [u.unitType, u.shotNumbers.join()]), [['montage', '1'], ['single', '2'], ['montage', '3'], ['montage', '4,5']]);
+    assert.deepEqual(buildGenerationPlan(picked, series).units.find(u => u.shotNumbers.includes(2)).unitType, 'single');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -377,6 +501,48 @@ test('the audit flags a carry across a cut between generations, quotes each unit
   }
 });
 
+test('the audit reads the plate inventories the workshop reads, and a staged shot\'s clip from before its pick renders again', async () => {
+  const { dir, series, script } = fixture();
+  setWorkshopPlanProvider(() => ({
+    fixedLocation: location => location.slug === 'market-street',
+    plateInventory: location => (location.slug === 'market-street'
+      ? { north: { vehicles: [{ what: 'red bus', distance: 'near', count: 1 }], places: [], objects: [] } }
+      : undefined),
+  }));
+  try {
+    const picked = withShot(script, 3, { stagingRef: staged('start-frame'), mustStaySingle: true });
+    const plan = buildGenerationPlan(picked, series);
+    const sceneDir = join(dir, 'scene-001');
+    mkdirSync(sceneDir, { recursive: true });
+    // Shot 3's clip predates its pick: no .video.json records the pick's hash.
+    writeFileSync(join(sceneDir, 'shot-003.mp4'), PNG);
+    for (const n of [4, 5]) writeFileSync(join(sceneDir, `shot-00${n}.mp4`), PNG);
+    writeFileSync(join(sceneDir, plan.units.find(u => u.shotNumbers.includes(4)).outputFile), PNG);
+    const audits = await auditPlan(series, picked.shots, plan, buildContinuityLedger(series, picked.shots), {
+      sceneDir,
+      quote: async unit => Number(unit.duration.replace('s', '')) * 0.1,
+    });
+    const street = audits.find(a => a.shots.includes('1'));
+    assert.ok(street.findings.some(f => /names the tram at market-street \(north\), but that plate shows a red bus/.test(f)), street.findings.join('\n'));
+    const alone = audits.find(a => a.shots.includes('3'));
+    assert.equal(alone.unitType, 'single');
+    assert.deepEqual(alone.onDisk, { clips: 0, of: 1, master: false, stale: ['3'] });
+    const text = describeGenerationPlan({ plan, audits }, { project: dir, episode: 1 }).join('\n');
+    assert.match(text, /on disk: the clip of shot 3 predates its staging ref \(stage-ref\): generate-videos renders it again from the pick \(billed\)/);
+    assert.doesNotMatch(text.split('\n').filter(line => /shot 3/.test(line)).join('\n'), /bills nothing/);
+    // Its quote counts among the units that would render; only shots 4 and 5 are kept.
+    assert.match(text, /Quoted: \$1\.40 for the units that would render \(\$1\.00 more for units already on disk, if re-taken\)/);
+
+    // A clip rendered from the current pick is kept.
+    writeFileSync(join(sceneDir, 'shot-003.video.json'), JSON.stringify({ metadata: { stagingRef: { sha256: 'a'.repeat(64) } } }));
+    const kept = await auditPlan(series, picked.shots, plan, buildContinuityLedger(series, picked.shots), { sceneDir });
+    assert.deepEqual(kept.find(a => a.shots.includes('3')).onDisk, { clips: 1, of: 1, master: false });
+  } finally {
+    setWorkshopPlanProvider(null);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('quotes ask what the render would send, once per request, and stop after a failure that is not the request\'s', async () => {
   const { dir, series, script } = fixture();
   try {
@@ -396,6 +562,16 @@ test('quotes ask what the render would send, once per request, and stop after a 
     assert.deepEqual(bodies[0].body, { model: MODEL, duration: unit.duration, resolution: '720p', aspect_ratio: '16:9', audio: true });
     assert.equal(await quoter.quote({ ...unit, duration: '9s' }, MODEL), undefined);
     assert.equal(quoter.stopped, undefined, 'a rejected request costs only its own quote');
+
+    // A single renders at videoDefaults.resolution when its model lists it, as the render does; a montage does not.
+    const sharp = { ...series, videoDefaults: { ...series.videoDefaults, resolution: '1080p' } };
+    const seen = [];
+    const hd = unitQuoter({ async post(path, body) { seen.push(body); return { quote: 2 }; } }, sharp);
+    const single = { ...unit, unitType: 'single', unitId: 'unit-002', outputFile: 'shot-002.mp4', duration: '4s' };
+    await hd.quote(single, MODEL);
+    await hd.quote(unit, MODEL);
+    await hd.quote({ ...single, duration: '5s' }, 'minimax-h3-reference-to-video');
+    assert.deepEqual(seen.map(body => body.resolution), ['1080p', '720p', '2K']);
 
     let calls = 0;
     const offline = unitQuoter({ async post() { calls += 1; throw new TypeError('fetch failed'); } }, series);
@@ -424,13 +600,14 @@ test('an approved plan applies while what decides its packaging is unchanged, re
     assert.deepEqual(ok.plan.units[0].shotNotes, { 2: 'The doors fold shut and the tram starts to climb' });
     assert.equal(ok.plan.planning.approvedBy, 'Tester');
 
-    // A shot's words change its prompt line, not its packaging.
-    let edited = withShot(script, 2, { description: 'The tram pulls away from the stone stop.', blocking: 'LEO left', stagedOn: 'the stop', dialogue: { character: 'LEO', line: 'Safe trip.' } });
+    // A shot's words, view and type change its prompt line, not its packaging; nor does the order of its cast.
+    let edited = withShot(script, 3, { description: 'ANNA sits by the window.', blocking: 'ANNA right', stagedOn: 'the bench', plateView: 'east', type: 'close-up' });
+    edited = withShot(edited, 2, { blocking: 'LEO left', dialogue: { character: 'LEO', line: 'Safe trip.' }, characters: ['CABLE TRAM', 'LEO'] });
     edited = withShot(edited, 1, { continuity: { from: 'new-scene', endState: 'ANNA inside' } });
     assert.equal(checkPlanApproval(proposal, edited, series).status, 'approved');
 
-    const stale = (s, settings = {}) => {
-      const result = checkPlanApproval(proposal, s, { ...series, videoDefaults: { ...series.videoDefaults, ...settings } });
+    const stale = (s, settings = {}, from = proposal) => {
+      const result = checkPlanApproval(from, s, { ...series, videoDefaults: { ...series.videoDefaults, ...settings } });
       assert.equal(result.status, 'stale');
       return result.changes.join(' | ');
     };
@@ -442,8 +619,27 @@ test('an approved plan applies while what decides its packaging is unchanged, re
     assert.match(stale(withShot(script, 2, { dialogue: { character: 'LEO', line: 'Go.' } }), { audioStrategy: 'lip-sync' }), /shot 2: now renders as an exact lip-sync clip/);
     assert.match(stale(withShot(script, 3, { continuity: { from: 'later' } })), /shot 3: continuity continuous → later/);
     assert.match(stale(withShot(script, 4, { description: 'Title card: LATER' })), /shot 4: now a title card/);
+    assert.match(stale(withShot(script, 5, { type: 'insert' })), /shot 5: now an insert/);
     assert.match(stale({ ...script, shots: [...script.shots.slice(0, 3), shot(3, { shotIdSuffix: 'b', location: 'tram-interior' }), ...script.shots.slice(3)] }), /shot 3b is new/);
     assert.match(stale(withShot(script, 5, { characters: ['ANNA', 'LEO'] })), /shot 5: cast ANNA → ANNA, LEO/);
+
+    // A shot note amends its shot's description: rewriting that shot stales the plan.
+    assert.match(stale(withShot(script, 2, { description: 'The tram stays at the stop, its doors open.' })), /shot 2: description rewritten, and the plan's shot note for it was written for the old one/);
+    assert.equal(checkPlanApproval(proposal, withShot(script, 2, { description: '  The tram pulls away   uphill from the stop. ' }), series).status, 'approved', 'whitespace is not a rewrite');
+
+    // A staging ref picked (stage-ref) renders its shot alone: said once, not as a mustStaySingle change too.
+    const picked = withShot(script, 3, { stagingRef: staged('plate'), mustStaySingle: true });
+    const pickChanges = stale(picked);
+    assert.match(pickChanges, /shot 3: staging ref picked \(plate, stage-ref\): it renders alone/);
+    assert.doesNotMatch(pickChanges, /mustStaySingle/);
+    const stagedProposal = await approvedProposal(series, picked);
+    assert.equal(checkPlanApproval(stagedProposal, picked, series).status, 'approved');
+    assert.equal(checkPlanApproval(stagedProposal, withShot(picked, 3, { stagingRef: staged('plate', { sha256: 'b'.repeat(64) }) }), series).status, 'approved', 'another pick of the same use');
+    assert.match(stale(withShot(picked, 3, { stagingRef: staged('start-frame') }), {}, stagedProposal), /shot 3: staging ref now used as a start-frame/);
+    assert.match(stale(script, {}, stagedProposal), /shot 3: staging ref cleared/);
+    // A staged shot renders alone whatever its mustStaySingle says: editing it away keeps the plan.
+    assert.equal(checkPlanApproval(stagedProposal, withShot(picked, 3, { mustStaySingle: false }), series).status, 'approved');
+    assert.match(stale(withShot(script, 3, { mustStaySingle: true })), /shot 3: mustStaySingle false → true/);
 
     // An exact lip-sync shot that turns high-motion leaves the lip-sync lane: the approval follows.
     const lipSeries = { ...series, videoDefaults: { ...series.videoDefaults, audioStrategy: 'lip-sync' } };
@@ -469,11 +665,88 @@ test('an approved plan applies while what decides its packaging is unchanged, re
   }
 });
 
+test('on the standard route the approval reads what that planner reads: no montage settings or continuity, but establishing shots and allowMultiShot', async () => {
+  const { dir, series, script } = fixture({ montageMode: false });
+  try {
+    const proposal = toProposal(await planGenerations(null, series, script, { agent: false }));
+    proposal.planning.approved = true;
+    assert.deepEqual(Object.keys(proposal.planning.inputs.settings), ['montage']);
+    const check = (s, settings = {}) => checkPlanApproval(proposal, s, { ...series, videoDefaults: { ...series.videoDefaults, ...settings } });
+    assert.equal(check(script, { montageModel: 'seedance-2-0-reference-to-video', montageGrammar: 'sequence', montageMaxDurationSec: 12 }).status, 'approved');
+    assert.equal(check(withShot(script, 3, { continuity: { from: 'new-scene' } })).status, 'approved');
+    assert.equal(check(withShot(script, 1, { characters: ['CABLE TRAM', 'ANNA', 'LEO'] })).status, 'approved');
+    assert.match(check(withShot(script, 4, { type: 'establishing' })).changes.join(' | '), /shot 4: now an establishing shot/);
+    assert.match(check(withShot(script, 5, { allowMultiShot: false })).changes.join(' | '), /shot 5: allowMultiShot true → false/);
+    assert.match(check(withShot(script, 5, { characters: [] })).changes.join(' | '), /shot 5: cast ANNA → none/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a script edit outside plan-generations says when it makes the plan stale or valid again, and what to run next', async () => {
+  const { dir, series, script } = fixture();
+  try {
+    const ref = '-p "/x" -e 1';
+    const proposal = await approvedProposal(series, script);
+    const picked = withShot(script, 3, { stagingRef: staged('plate'), mustStaySingle: true });
+    const approved = checkPlanApproval(proposal, script, series);
+    const stale = checkPlanApproval(proposal, picked, series);
+    const toStale = describePlanAfterEdit(approved, stale, ref);
+    assert.match(toStale.lines[0], /^This makes the generation plan approved by Tester out of date \(shot 3: staging ref picked \(plate, stage-ref\): it renders alone\)\. generate-videos refuses to run until/);
+    assert.equal(toStale.next, 'plan-generations -p "/x" -e 1');
+    const back = describePlanAfterEdit(stale, approved, ref);
+    assert.deepEqual(back, { lines: ['The generation plan approved by Tester applies again: generate-videos renders it.'], next: 'generate-videos -p "/x" -e 1' });
+
+    const waiting = { ...proposal, planning: { ...proposal.planning, approved: false } };
+    const current = checkPlanApproval(waiting, script, series);
+    const outOfDate = checkPlanApproval(waiting, picked, series);
+    assert.match(describePlanAfterEdit(current, outOfDate, ref).lines[0], /proposal waiting for approval out of date \(shot 3: staging ref picked/);
+    assert.equal(describePlanAfterEdit(current, outOfDate, ref).next, 'plan-generations -p "/x" -e 1');
+    assert.deepEqual(describePlanAfterEdit(outOfDate, current, ref), { lines: ['The generation plan proposal waiting for approval matches the script again: approve it to render it.'], next: 'plan-generations -p "/x" -e 1 --approve "<your name>"' });
+    assert.deepEqual(describePlanAfterEdit({ status: 'none' }, { status: 'none' }, ref), { lines: [], next: 'generate-videos -p "/x" -e 1' });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('renders in flight under another packaging are the ones a plan would never collect', () => {
+  const { dir, series, script } = fixture();
+  try {
+    const sceneDir = join(dir, 'episodes', 'episode-001', 'scene-001');
+    const now = Date.parse('2026-10-26T12:00:00.000Z');
+    const job = (file, fields = {}) => ({
+      kind: 'video', model: MODEL, queueId: `q-${file}`, outputPath: join(sceneDir, file), project: dir,
+      createdAt: '2026-10-26T11:50:00.000Z', updatedAt: '2026-10-26T11:55:00.000Z', pid: 1, ...fields,
+    });
+    const picked = withShot(script, 2, { stagingRef: staged('plate'), mustStaySingle: true });
+    const plan = buildGenerationPlan(picked, series);
+    assert.deepEqual(plan.units.map(u => u.outputFile), ['montage-s01-001-001.mp4', 'shot-002.mp4', 'montage-s01-003-003.mp4', 'montage-s02-004-005.mp4']);
+    const jobs = [
+      job('montage-s01-001-001.mp4'),
+      job('shot-002.mp4'),
+      job('shot-002-r2v-keyframe.mp4'),
+      job('montage-s01-001-003.mp4'),
+      job('shot-004.mp4'),
+      job('montage-s01-002-003.mp4', { updatedAt: '2026-10-26T05:00:00.000Z' }),
+      job('montage-s01-001-002.mp4', { kind: 'audio' }),
+      { ...job('montage-s01-001-002.mp4'), outputPath: join(dir, 'episodes', 'episode-002', 'scene-001', 'montage-s01-001-002.mp4') },
+    ];
+    // Another packaging's master and a single's clip that this plan cuts from a montage; not
+    // a job past the queue's lifetime, an audio job, or another episode's.
+    assert.deepEqual(inFlightOutsidePlan(jobs, sceneDir, plan, picked.shots, now).map(item => item.queueId), ['q-montage-s01-001-003.mp4', 'q-shot-004.mp4']);
+    assert.deepEqual(inFlightOutsidePlan([], sceneDir, plan, picked.shots, now), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---- The commands -----------------------------------------------------------
 
-function run(args) {
+function run(args, { pending } = {}) {
   return new Promise((resolve, reject) => {
     const config = mkdtempSync(join(tmpdir(), 'plan-generations-config-'));
+    // The pending-job store, stubbed with the registry's own file.
+    if (pending) writeFileSync(join(config, 'pending-jobs.json'), JSON.stringify({ version: 1, jobs: pending }, null, 2));
     const child = spawn(process.execPath, [cli, ...args], {
       env: { ...process.env, VENICE_API_KEY: '', VENICE_VIDEO_CONFIG_DIR: config, VENICE_VIDEO_NO_OPEN: '1' },
     });
@@ -486,18 +759,25 @@ function run(args) {
   });
 }
 
-function project() {
-  const { dir, series, script } = fixture();
+function project(edit = s => s) {
+  const { dir, series, script: base } = fixture();
+  const script = edit(base);
   writeFileSync(join(dir, 'series.json'), JSON.stringify(series, null, 2));
   const episodeDir = join(dir, 'episodes', 'episode-001');
   mkdirSync(join(episodeDir, 'scene-001'), { recursive: true });
   const writeScript = (s) => writeFileSync(join(episodeDir, 'script.json'), JSON.stringify({ ...s, status: 'approved' }, null, 2));
   writeScript(script);
-  return { dir, series, script, episodeDir, writeScript };
+  // QA cleared and every panel drawn, so status reaches the render.
+  const qaCleared = () => {
+    writeFileSync(join(episodeDir, 'qa-report.json'), '{}');
+    writeFileSync(join(episodeDir, 'qa-approved.json'), '{}');
+    for (const n of [1, 2, 3, 4, 5]) writeFileSync(join(episodeDir, 'scene-001', `shot-00${n}.png`), PNG);
+  };
+  return { dir, series, script, episodeDir, writeScript, qaCleared };
 }
 
-test('plan-generations writes a proposal beside the rendered plan; generate-videos warns about it until it is approved', async () => {
-  const { dir, episodeDir } = project();
+test('plan-generations writes a proposal beside the rendered plan; generate-videos refuses to bypass it until it is approved', async () => {
+  const { dir, episodeDir, qaCleared } = project();
   try {
     const planned = await run(['plan-generations', '-p', dir, '-e', '1', '--no-agent']);
     assert.equal(planned.status, 0, planned.stderr);
@@ -507,11 +787,20 @@ test('plan-generations writes a proposal beside the rendered plan; generate-vide
     assert.ok(!existsSync(join(episodeDir, 'generation-plan.json')), 'the rendered plan is not touched');
 
     const render = await run(['generate-videos', '-p', dir, '-e', '1', '--skip-qa']);
-    assert.notEqual(render.status, 0);
-    assert.match(render.stderr, /A generation plan proposal is waiting for approval/);
-    assert.match(render.stderr, /plan-generations -p .* -e 1 --approve/);
-    assert.match(render.stderr, /Venice API key is required/, 'it went on to the key, as before');
+    assert.equal(render.status, 1);
+    assert.match(render.stderr, /Blocked: a generation plan proposal is waiting for approval \(.*generation-plan\.proposed\.md\): 2 unit\(s\), planned by rules\. This run would render by the rules planner instead/);
+    assert.match(render.stderr, /To render it, approve it: {2}plan-generations -p .* -e 1 --approve "<your name>"/);
+    assert.doesNotMatch(render.stderr, /API key/, 'refused before the key is read');
     assert.ok(existsSync(join(episodeDir, 'generation-plan.proposed.json')), 'the proposal survives a run');
+
+    qaCleared();
+    const status = await collectProjectStatus(dir);
+    assert.equal(status.episodes[0].stage, 'generation plan awaiting approval');
+    assert.equal(status.episodes[0].nextCommand, `plan-generations -p "${dir}" -e 1 --approve "<your name>"`);
+
+    const ignored = await run(['generate-videos', '-p', dir, '-e', '1', '--skip-qa', '--ignore-plan']);
+    assert.match(ignored.stderr, /--ignore-plan: the generation plan proposal waiting for approval \(.*\) is left as it is; rendering by the rules planner/);
+    assert.match(ignored.stderr, /Venice API key is required/, 'it went on to the key');
 
     const replanned = await run(['plan-generations', '-p', dir, '-e', '1', '--no-agent']);
     assert.equal(replanned.status, 0, replanned.stderr);
@@ -522,7 +811,7 @@ test('plan-generations writes a proposal beside the rendered plan; generate-vide
 });
 
 test('an approved plan renders while it applies; once the shots change, generate-videos and --approve refuse, and status says to plan again', async () => {
-  const { dir, script, episodeDir, writeScript } = project();
+  const { dir, script, episodeDir, writeScript, qaCleared } = project();
   try {
     assert.equal((await run(['plan-generations', '-p', dir, '-e', '1', '--no-agent'])).status, 0);
     const approve = await run(['plan-generations', '-p', dir, '-e', '1', '--approve', 'Tester']);
@@ -553,14 +842,122 @@ test('an approved plan renders while it applies; once the shots change, generate
     assert.equal(reapprove.status, 1);
     assert.match(reapprove.stderr, /shot 2: 4 s → 6 s/);
 
-    writeFileSync(join(episodeDir, 'qa-report.json'), '{}');
-    writeFileSync(join(episodeDir, 'qa-approved.json'), '{}');
-    for (const n of [1, 2, 3, 4, 5]) writeFileSync(join(episodeDir, 'scene-001', `shot-00${n}.png`), PNG);
+    qaCleared();
     const status = await collectProjectStatus(dir);
     assert.equal(status.episodes[0].stage, 'approved generation plan out of date');
-    assert.equal(status.episodes[0].nextCommand, 'plan-generations -e 1');
+    assert.equal(status.episodes[0].nextCommand, `plan-generations -p "${dir}" -e 1`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('generate-videos refuses, before the key, while renders queued under another packaging are in flight', async () => {
+  const { dir, series, script, episodeDir, qaCleared } = project();
+  try {
+    // An approved plan that packages shot 3 alone; the rules planner keeps 1-3 together.
+    await savePlanProposal(episodeDir, await approvedProposal(series, script, SPLIT), '# x\n');
+    const rules = buildGenerationPlan(script, series);
+    assert.equal(rules.units[0].outputFile, 'montage-s01-001-003.mp4');
+    const now = new Date().toISOString();
+    const queued = (file, fields = {}) => ({
+      kind: 'video', model: MODEL, queueId: 'q-rules-1', outputPath: join(episodeDir, 'scene-001', file), project: dir,
+      createdAt: now, updatedAt: now, pid: 1, ...fields,
+    });
+    const pending = [queued('montage-s01-001-003.mp4')];
+
+    const blocked = await run(['generate-videos', '-p', dir, '-e', '1', '--skip-qa'], { pending });
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stdout, /Using the approved generation plan/);
+    assert.match(blocked.stderr, /Blocked: 1 render\(s\) for this episode are still in flight under another packaging of the shots, and the plan this run renders would never collect them \(rule 43\)/);
+    assert.match(blocked.stderr, /montage-s01-001-003\.mp4 \(seedance-2-5-reference-to-video, queue id q-rules-1, queued [^)]+\); collect it with generate-videos -p \S+ -e 1 --ignore-plan \(the rules planner's packaging\)/);
+    assert.match(blocked.stderr, /venice-video queue/);
+    assert.match(blocked.stderr, /--ignore-in-flight renders anyway; it does not collect them/);
+    assert.doesNotMatch(blocked.stderr, /API key/, 'refused before the key is read');
+
+    // The packaging that queued it collects it: nothing to refuse.
+    const collect = await run(['generate-videos', '-p', dir, '-e', '1', '--skip-qa', '--ignore-plan'], { pending });
+    assert.doesNotMatch(collect.stderr, /in flight/);
+    assert.match(collect.stderr, /Venice API key is required/);
+
+    // Rendering anyway is a decision someone states.
+    const anyway = await run(['generate-videos', '-p', dir, '-e', '1', '--skip-qa', '--ignore-in-flight'], { pending });
+    assert.match(anyway.stderr, /--ignore-in-flight: 1 render\(s\) queued under another packaging stay uncollected/);
+    assert.match(anyway.stderr, /Venice API key is required/);
+
+    // A job past the queue's lifetime is gone: nothing to collect, nothing to refuse.
+    const old = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString();
+    const expired = await run(['generate-videos', '-p', dir, '-e', '1', '--skip-qa'], { pending: [queued('montage-s01-001-003.mp4', { createdAt: old, updatedAt: old })] });
+    assert.doesNotMatch(expired.stderr, /in flight/);
+    assert.match(expired.stderr, /Venice API key is required/);
+
+    // status says the same (rule 45), from the same registry.
+    qaCleared();
+    const config = mkdtempSync(join(tmpdir(), 'plan-generations-status-'));
+    const before = process.env.VENICE_VIDEO_CONFIG_DIR;
+    process.env.VENICE_VIDEO_CONFIG_DIR = config;
+    try {
+      writeFileSync(join(config, 'pending-jobs.json'), JSON.stringify({ version: 1, jobs: pending }));
+      const status = await collectProjectStatus(dir);
+      assert.equal(status.episodes[0].stage, '1 render(s) in flight under another packaging');
+      assert.equal(status.episodes[0].nextCommand, `generate-videos -p "${dir}" -e 1 --ignore-plan`);
+      // Queued under a packaging neither planner makes now: look at them.
+      writeFileSync(join(config, 'pending-jobs.json'), JSON.stringify({ version: 1, jobs: [queued('montage-s09-002-004.mp4')] }));
+      const unknown = await collectProjectStatus(dir);
+      assert.equal(unknown.episodes[0].nextCommand, 'queue');
+      assert.equal(qualifyCommand('queue', dir), 'queue', 'queue takes no project');
+    } finally {
+      if (before === undefined) delete process.env.VENICE_VIDEO_CONFIG_DIR;
+      else process.env.VENICE_VIDEO_CONFIG_DIR = before;
+      rmSync(config, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('stage-ref --clear says when it makes the approved plan stale, or valid again', async () => {
+  const { dir, script, writeScript } = project(s => withShot(s, 3, { stagingRef: staged('plate'), mustStaySingle: true }));
+  try {
+    assert.equal((await run(['plan-generations', '-p', dir, '-e', '1', '--no-agent'])).status, 0);
+    assert.equal((await run(['plan-generations', '-p', dir, '-e', '1', '--approve', 'Tester'])).status, 0);
+    const cleared = await run(['stage-ref', '-p', dir, '-e', '1', '--shot', '3', '--clear']);
+    assert.equal(cleared.status, 0, cleared.stderr);
+    assert.match(cleared.stdout, /Cleared shot 3's staging ref/);
+    assert.match(cleared.stdout, /This makes the generation plan approved by Tester out of date \(shot 3: staging ref cleared\)/);
+    assert.match(cleared.stdout, /Next:\n {2}venice-video plan-generations -p "[^"]+" -e 1\n/);
+
+    // Planned and approved without the pick, then picked again (by hand): the clear restores the plan.
+    assert.equal((await run(['plan-generations', '-p', dir, '-e', '1', '--no-agent'])).status, 0);
+    assert.equal((await run(['plan-generations', '-p', dir, '-e', '1', '--approve', 'Tester'])).status, 0);
+    writeScript(withShot(script, 3, { stagingRef: staged('plate'), mustStaySingle: true }));
+    const restored = await run(['stage-ref', '-p', dir, '-e', '1', '--shot', '3', '--clear']);
+    assert.equal(restored.status, 0, restored.stderr);
+    assert.match(restored.stdout, /The generation plan approved by Tester applies again: generate-videos renders it\./);
+    assert.match(restored.stdout, /Next:\n {2}venice-video generate-videos -p "[^"]+" -e 1\n/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('generate-videos --retake takes shot ids, refuses ones the script does not have, and refuses a staged shot before the key', async () => {
+  const { dir } = project();
+  const pickedProject = project(s => withShot(s, 3, { stagingRef: staged('plate'), mustStaySingle: true }));
+  try {
+    const unknown = await run(['generate-videos', '-p', dir, '-e', '1', '--skip-qa', '--retake', '2b,x,3']);
+    assert.equal(unknown.status, 1);
+    assert.match(unknown.stderr, /--retake 2b,x,3: shot\(s\) x, 2b are not in episode 1\. Nothing was rendered or archived\./);
+    const known = await run(['generate-videos', '-p', dir, '-e', '1', '--skip-qa', '--retake', '003']);
+    assert.match(known.stderr, /Venice API key is required/);
+
+    // The picked image is gone: nothing is archived, and no key is needed to say so.
+    const refused = await run(['generate-videos', '-p', pickedProject.dir, '-e', '1', '--skip-qa', '--retake', '3']);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /--retake 3: 1 staged shot\(s\) cannot render from their staging ref\. Nothing was archived or rendered\./);
+    assert.match(refused.stderr, /shot 3: the staging ref image \S+ is not on disk/);
+    assert.doesNotMatch(refused.stderr, /API key/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(pickedProject.dir, { recursive: true, force: true });
   }
 });
 
@@ -569,6 +966,10 @@ test('the pipeline and the agent guide name plan-generations, and approving it i
   assert.ok(branch, 'PIPELINE_BRANCHES lists plan-generations');
   assert.equal(branch.command, 'plan-generations -p <project> -e <n>');
   assert.match(branch.note, /human decision/);
+  const render = PIPELINE_STAGES.find(stage => stage.id === 'render');
+  assert.match(render.gate, /plan-generations -p <project> -e <n> --approve "<name>"/);
+  assert.match(render.gate, /--ignore-plan renders by rules for one run; it does not approve or update the plan/);
+  assert.match(render.gate, /--ignore-in-flight does not collect them/);
   assert.match(formatGuide(), /plan-generations --approve/);
 });
 

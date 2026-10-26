@@ -452,22 +452,37 @@ function planLocations(series: Pick<SeriesState, 'locations'>, draft: WorkshopDr
   return [...(draft.locations ?? []), ...(series.locations ?? []).filter(location => !drafted.has(location.slug))];
 }
 
+/**
+ * Locations as the plan check reads them: their words, whether their plates
+ * are fixed, the set they adjoin, and what each plate image shows when a
+ * caller has read it (`plateInventory`). The workshop review and the
+ * generation plan's audit (`plan-generations`) read the same.
+ */
+export function planCheckLocations(locations: Location[], options: WorkshopOptions): PlanLocation[] {
+  return locations.map(location => {
+    const inventory = options.plateInventory?.(location);
+    return {
+      slug: String(location.slug ?? ''),
+      name: String(location.name ?? ''),
+      description: String(location.description ?? ''),
+      spatialAnchors: location.spatialAnchors,
+      fixed: options.fixedLocation?.(location) ?? false,
+      near: location.near,
+      ...(inventory ? { inventory } : {}),
+    };
+  });
+}
+
+/** The cast as the plan check reads it: object cast members are props. */
+export function planCheckCast(characters: Character[]): PlanCast[] {
+  return characters.map(character => ({ name: character.name, prop: isObjectCast(character), description: character.description }));
+}
+
 function planInputs(series: Pick<SeriesState, 'locations'>, draft: WorkshopDraft, options: WorkshopOptions): { shots: PlanShot[]; locations: PlanLocation[]; cast: PlanCast[] } {
   return {
     shots: draft.script.shots,
-    locations: planLocations(series, draft).map(location => {
-      const inventory = options.plateInventory?.(location);
-      return {
-        slug: String(location.slug ?? ''),
-        name: String(location.name ?? ''),
-        description: String(location.description ?? ''),
-        spatialAnchors: location.spatialAnchors,
-        fixed: options.fixedLocation?.(location) ?? false,
-        near: location.near,
-        ...(inventory ? { inventory } : {}),
-      };
-    }),
-    cast: (draft.characters ?? []).map(character => ({ name: character.name, prop: isObjectCast(character), description: character.description })),
+    locations: planCheckLocations(planLocations(series, draft), options),
+    cast: planCheckCast(draft.characters ?? []),
   };
 }
 
