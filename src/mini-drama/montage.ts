@@ -207,12 +207,13 @@ function placesOf(shots: ShotScript[]): string[] {
 }
 
 /** Why a shot renders as its own single instead of riding a montage run. */
-export type MontageBlockReason = 'forced' | 'insert' | 'title-card' | 'lip-sync';
+export type MontageBlockReason = 'staged' | 'forced' | 'insert' | 'title-card' | 'lip-sync';
 
 /**
- * A shot the montage lane must NOT swallow, and why: title cards / inserts
- * render as their own singles (they need exact framing, not montage energy),
- * and exact-lip-sync dialogue shots keep their dedicated pipeline. Everything
+ * A shot the montage lane must NOT swallow, and why: a staged shot sends its
+ * picked image alone, title cards / inserts render as their own singles (they
+ * need exact framing, not montage energy), and exact-lip-sync dialogue shots
+ * keep their dedicated pipeline. Everything
  * else — establishing, action, dialogue-on-native, reaction, close-up —
  * rides the montage. With the shot-list grammar, an insert that continues
  * the action (`continuity.from: 'continuous'`: the hands, the umbrella in
@@ -221,6 +222,9 @@ export type MontageBlockReason = 'forced' | 'insert' | 'title-card' | 'lip-sync'
  */
 export function montageBlockReason(shot: ShotScript, videoDefaults: VideoModelDefaults | undefined): MontageBlockReason | null {
   const readContinuity = resolveMontageGrammar(videoDefaults) === 'shots';
+  // A staging ref (stage-ref) belongs to its shot alone: only a single sends
+  // it, even when the shot's mustStaySingle was edited away after the pick.
+  if (shot.stagingRef) return 'staged';
   if (shot.mustStaySingle) return 'forced';
   if (shot.type === 'insert' && !(readContinuity && shot.continuity?.from === 'continuous')) return 'insert';
   if (/title card/i.test(shot.description ?? '')) return 'title-card';

@@ -30,6 +30,11 @@ export interface PendingJob {
   episode?: number;
   /** Truncated prompt, purely so `queue` output is recognisable. */
   prompt?: string;
+  /**
+   * What the request was made from beyond its output path (a staging ref's
+   * hash), so a re-attached job queued from other inputs is told apart.
+   */
+  tag?: string;
   createdAt: string;
   /** Bumped on each successful poll so stale entries are identifiable. */
   updatedAt: string;

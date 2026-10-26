@@ -242,6 +242,105 @@
 
 ### Added
 
+- **`stage-ref`: edit the reference first, then generate from it (rule 65).**
+  The video model copies a reference's whole composition, not just the thing
+  it is bound to: a plate's moored boats come back where the shot needs another
+  vessel, a lowered gangway re-stages a departure, and an object painted out of
+  moving footage flickers. The fix that works is the same move each time, so it
+  is now a command.
+  - `venice-video stage-ref -p <project> -e <n> --shot <id>` takes one source:
+    `--from-plate <view>` (a view of the shot's location), `--from-shot <id>
+    [--at <s>]` (a frame of a rendered clip: its first frame; one frame in
+    for a montage cut that landed on a detected scene cut, as its media-library
+    manifest records; 0.5 s in for any other clip cut from a longer render,
+    whose first frames can belong to the shot before), or `--from
+    <image|video>`. `--crop`, up to two `--ref` images and a `--prompt`
+    complete it. `--from-shot 13b` reads the insert's own clip
+    (`shot-013b.mp4`).
+  - It edits on gpt-image-2-edit and nano-banana-2-edit at once (`--models`).
+    The two differ in useful ways: on one frame both removed the object, one
+    rewrote lettering beside it and the other kept it. Each result keeps the
+    source's aspect and gets provenance and recipe sidecars (rule 39), in
+    `episodes/episode-NNN/staging/shot-NNN/<session>/` with a side-by-side
+    `pick.html`. A model that fails is recorded and the other result still
+    lands, and each edit that lands is in the session file at once, so a later
+    failure never loses a paid candidate. `hasFace` is false only when the
+    source and every `--ref` are recorded face-free (or with `--no-face`), so a
+    character sheet used as a ref keeps the face checks (anti-pattern 31, rule
+    62) on.
+  - A person picks (`--pick <n|model|file>`, or the terminal prompt; `--use`
+    can change the role). A hand-made pick is stored as PNG with its
+    provenance, and a candidate named by its file is that candidate. The pick
+    becomes the shot's `stagingRef` (core type `ShotStagingRef`). A `plate`
+    leads the shot's R2V references (on Kling O3 R2V, its scene image), the
+    view it was edited from and the storyboard blocking plate are not sent, and
+    the prompt says the image is right where the location's words differ. A
+    `start-frame` re-generates the shot i2v, with no reference stack and
+    without the location's words. `--clear` and `--list` complete it.
+  - A start-frame re-take stays in the lane's privacy tier (rule 46): the
+    family's image-to-video lane (`imageToVideoTwin` in core, for reference-
+    and text-to-video ids, and only within the tier), else the i2v lane of the
+    project's atmosphere or action model in that tier (`stagedFrameLane`).
+    With none the shot is refused; so is an exact lip-sync shot whose i2v lane
+    takes no dialogue audio.
+  - A staged shot renders on its own: the pick sets `mustStaySingle`, and the
+    planner keeps a staged shot out of every group (`buildMontagePrompt`
+    refuses a montage unit that holds one). Its clip's `.video.json`
+    records the pick's hash; a clip not made from the current pick is rendered
+    again, and archived only when the new one lands.
+  - `generate-videos` first collects a render already queued for a staged shot
+    (rule 43): one queued from the pick is the clip, one queued before it is
+    kept until the pick's render lands. Then it refuses, before anything is
+    billed or moved, a staged shot it cannot render from its pick: the picked
+    image is gone, no i2v lane in the tier, a MiniMax i2v lane with a frame
+    that may show a face, or a plate pick on a lane that sends no location
+    reference. A unit that starts from a refused shot's last frame waits too,
+    instead of starting from an older clip. It lists each shot and why, with
+    full commands, exits non-zero and does not mark the episode produced;
+    `produce-episode` stops there. A `--retake` asks the first three
+    (`stagedShotRefusal`) before it archives anything; the last is found once
+    the shot's references resolve. `stage-ref` warns about
+    such lanes when the pick is made, and prints the generation units a pick
+    (or a clear) changes: a pick inside a montage run splits it, and the units
+    around it get new names. They keep their clips: `generate-videos` skips a
+    unit whose clips are all on disk, so only the staged shot renders.
+  - A stale staged clip gets no further (rule 45): `staleStagedShots` feeds
+    `generate-videos` (read once more at the end, so a staged shot a
+    `--retake` leaves alone still fails the run), `status` (back to
+    `generate-videos -p <project> -e <n>`), `qa-videos` (the unit is not
+    checked and the cuts beside the clip are unchecked, so the report does not
+    pass; with `--cut-list`, an edit that uses footage from before a pick does
+    not pass) and `assemble-episode` (refused; `--force` assembles with a
+    warning). The montage cuts in `media-library/` stay as the archive;
+    nothing reads them as current.
+  - A staged shot's pending jobs, the clip and the keyframe pass of the
+    lip-sync keyframe pipeline, carry the pick's hash (`PendingJob.tag`); a
+    keyframe render queued from other inputs is collected and rendered again,
+    and the recipe of a render queued from other inputs says so instead of
+    recording the current ones.
+  - Loop mode renders a shot as it was before a start-frame pick: it picks its
+    own lanes, and routed through the pick a character shot would go i2v off
+    its face panel, which MiniMax fails after billing.
+  - Tests: `tests/stage-ref.test.mjs`, `tests/stage-ref-render.test.mjs`,
+    `tests/stage-ref-gates.test.mjs`, `tests/loop-engine.test.mjs`.
+
+- **The plan check reads what a plate image shows, when a caller has read it.**
+  `PlanLocation.inventory` (per view: vehicles, the places an action can use,
+  loose objects, each near / mid / far) joins the location's words as evidence;
+  `WorkshopOptions.plateInventory` supplies it to the workshop review. It can
+  show a thing close that the words leave out. A far mention in it never makes
+  a thing look far off, and the parts of a boat it lists are checked against
+  the words only (a barge's bow is not the ferry's).
+  - New `competing-vehicle` finding: the staged view shows a vehicle close to
+    the camera that is not the shot's own. It blocks for another class of
+    vehicle the action uses (gondolas where the shot boards the ferry, a bus at
+    a train platform) and warns for the same class (a "motor launch" where the
+    shot says "the ferry", which only a vision pass tells apart) or a vehicle
+    the shot only names. It points to `stage-ref --from-plate`.
+  - A shot whose staging ref replaced its view, or that renders from a staged
+    first frame, is not checked against the old plate.
+  - Test: `tests/plan-check-inventory.test.mjs`.
+
 - **`plan-generations`: three passes of thinking about consistency before any
   spend, and an approval `generate-videos` honours or refuses (rule 66).**
   Packaging shots into generations is a judgement per run: one generation keeps

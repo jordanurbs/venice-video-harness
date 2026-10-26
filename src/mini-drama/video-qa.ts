@@ -97,6 +97,13 @@ export interface VideoQaReport {
   continuity?: PairContinuityResult[];
   /** Clips whose on-camera line is still sounding at the cut (warnings). */
   speechTails?: SpeechTailFinding[];
+  /**
+   * Units not checked because a staged shot in them (stage-ref) has no clip
+   * from its pick: checking the clip on disk would pass the defect the pick
+   * removes. They count as unchecked, so the report does not pass (rule 46);
+   * the cuts beside such a clip are unchecked too.
+   */
+  notChecked?: Array<{ unitId: string; shots: string[]; reason: string }>;
   summary: {
     units: number;
     criticals: number;

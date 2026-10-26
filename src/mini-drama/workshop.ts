@@ -417,6 +417,13 @@ export interface WorkshopOptions {
   fixedLocation?: (location: Location) => boolean;
   /** A vision pass over the real plates of the fixed locations. Without one, only the words are checked. */
   readPlates?: PlateReader;
+  /**
+   * What each plate image of a location shows, when the caller has read it
+   * (`PlanLocation.inventory`). The word check adds it to the words: it can
+   * show a thing close that the words leave out, and a vehicle close to the
+   * camera that is not the shot's own is a `competing-vehicle` finding.
+   */
+  plateInventory?: (location: Location) => PlanLocation['inventory'] | undefined;
   /** The re-plan instruction for blocking shots (how a library makes new places, for example). */
   replanAdvice?: string;
 }
@@ -427,8 +434,8 @@ let planProvider: WorkshopPlanProvider | null = null;
 /**
  * A downstream layer (a shared library of location sets, for example)
  * supplies its plan-check options here: which locations' plates are fixed, a
- * plate reader, re-plan advice. It is asked with the project at every review;
- * options passed to a call win over it.
+ * plate reader, what each plate image shows, re-plan advice. It is asked with
+ * the project at every review; options passed to a call win over it.
  */
 export function setWorkshopPlanProvider(provider: WorkshopPlanProvider | null): void {
   planProvider = provider;
@@ -448,14 +455,18 @@ function planLocations(series: Pick<SeriesState, 'locations'>, draft: WorkshopDr
 function planInputs(series: Pick<SeriesState, 'locations'>, draft: WorkshopDraft, options: WorkshopOptions): { shots: PlanShot[]; locations: PlanLocation[]; cast: PlanCast[] } {
   return {
     shots: draft.script.shots,
-    locations: planLocations(series, draft).map(location => ({
-      slug: String(location.slug ?? ''),
-      name: String(location.name ?? ''),
-      description: String(location.description ?? ''),
-      spatialAnchors: location.spatialAnchors,
-      fixed: options.fixedLocation?.(location) ?? false,
-      near: location.near,
-    })),
+    locations: planLocations(series, draft).map(location => {
+      const inventory = options.plateInventory?.(location);
+      return {
+        slug: String(location.slug ?? ''),
+        name: String(location.name ?? ''),
+        description: String(location.description ?? ''),
+        spatialAnchors: location.spatialAnchors,
+        fixed: options.fixedLocation?.(location) ?? false,
+        near: location.near,
+        ...(inventory ? { inventory } : {}),
+      };
+    }),
     cast: (draft.characters ?? []).map(character => ({ name: character.name, prop: isObjectCast(character), description: character.description })),
   };
 }

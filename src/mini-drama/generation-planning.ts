@@ -188,6 +188,7 @@ export function buildContinuityLedger(series: SeriesState, shots: ShotScript[]):
 export const SHOT_NOTE_MAX_CHARS = 300;
 
 const ALONE: Record<MontageBlockReason, string> = {
+  staged: 'a picked staging ref (stage-ref) that only its own render sends',
   forced: 'forced single in the script (mustStaySingle)',
   insert: 'an insert that does not continue the action',
   'title-card': 'a title card',

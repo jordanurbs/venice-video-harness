@@ -159,6 +159,51 @@ export function faceCapableTwinId(modelId: string): string {
   return isFacesOffModel(modelId) ? modelId.replace(/-basic$/i, '') : modelId;
 }
 
+/**
+ * The image-to-video lane of a model's family: the model that animates a
+ * supplied first frame (`image_url`), in the same privacy tier. An i2v id is
+ * returned as it is; a reference- or text-to-video id maps to its family's
+ * i2v id (`seedance-2-5-reference-to-video` -> `seedance-2-5-image-to-video`,
+ * `wan-3-0-enhanced-reference-to-video` -> `wan-3-0-image-to-video`,
+ * `minimax-h3-max-text-to-video` -> `minimax-h3-max-image-to-video`), keeping
+ * a `-basic` or `-private` suffix. Undefined when the id is not in the
+ * registry, or its family has no online i2v lane in its tier: a private lane
+ * never maps to an anonymized one (rule 46).
+ */
+export function imageToVideoTwin(modelId: string): string | undefined {
+  const spec = getVideoModel(modelId);
+  if (!spec) return undefined;
+  if (spec.type === 'image-to-video' && !modelId.includes('reference-to-video')) return modelId;
+  const candidates = modelId.includes('reference-to-video')
+    ? [modelId.replace('reference-to-video', 'image-to-video'), modelId.replace(/-enhanced-reference-to-video/, '-image-to-video')]
+    : modelId.includes('text-to-video')
+      ? [modelId.replace('text-to-video', 'image-to-video'), modelId.replace(/-enhanced-text-to-video/, '-image-to-video')]
+      : [];
+  return candidates.find(id => {
+    const twin = getVideoModel(id);
+    return id !== modelId && twin?.type === 'image-to-video' && !twin.offline && twin.privacy === spec.privacy;
+  });
+}
+
+/**
+ * The lane a shot is re-generated on from a staged first frame (stage-ref)
+ * in place of `laneId`: its family's image-to-video lane, else the i2v lane
+ * of the first of `fallbacks` (a project's own lanes) in the same privacy
+ * tier as `laneId`. Undefined when none qualifies, or when `laneId` is not in
+ * the registry and its tier is unknown: the caller refuses the shot rather
+ * than move it to another tier (rule 46).
+ */
+export function stagedFrameLane(laneId: string, fallbacks: Array<string | undefined> = []): string | undefined {
+  const tier = getVideoModel(laneId)?.privacy;
+  if (!tier) return undefined;
+  for (const candidate of [laneId, ...fallbacks]) {
+    if (!candidate) continue;
+    const twin = imageToVideoTwin(candidate);
+    if (twin && getVideoModel(twin)?.privacy === tier) return twin;
+  }
+  return undefined;
+}
+
 // ---- Image generation prompt-length budgets () -----------------------
 
 /**

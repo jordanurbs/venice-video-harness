@@ -211,6 +211,13 @@ function durationSeconds(duration: string): number {
   return Number.isFinite(n) && n > 0 ? n : 6;
 }
 
+/** The shot without a staged start frame (a plate staging ref stays: the R2V slot plan sends it). */
+function withoutStagedStartFrame(shot: ShotScript): ShotScript {
+  if (shot.stagingRef?.use !== 'start-frame') return shot;
+  const { stagingRef: _staged, ...rest } = shot;
+  return rest as ShotScript;
+}
+
 /**
  * Continuous, in-process render worker for one project/episode. One take in
  * flight at a time (serial): Turbo is fast enough that a serial loop still
@@ -594,7 +601,7 @@ export class LoopEngine {
 
   /** The render spec for one take: prompt, chosen lane, and any reference bytes. */
   private async resolveTake(
-    shot: ShotScript,
+    scriptShot: ShotScript,
     durationLabel: string,
     chainFromClip: string | undefined,
     outputPath: string,
@@ -607,6 +614,11 @@ export class LoopEngine {
     voiceReferencePaths?: string[];
     elements?: VideoElement[];
   }> {
+    // The loop picks its own lanes. A staged start frame (stage-ref, rule 65)
+    // is for generate-videos: routed through it here, a character shot would
+    // leave R2V for i2v off its face panel, which MiniMax fails after billing
+    // (anti-pattern 31). The loop renders the shot as it was before the pick.
+    const shot = withoutStagedStartFrame(scriptShot);
     const panelPath = join(this.sceneDir, `shot-${shotKey(shot)}.png`);
     const panelExists = existsSync(panelPath);
 

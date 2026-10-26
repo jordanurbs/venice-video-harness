@@ -186,6 +186,7 @@ Report back to the user with:
 - Never auto-trim filler words without user approval — "you know" can be content-bearing for some speakers.
 - Never render without running step 3 first. Rendering before confirming a strategy is how sessions go sideways.
 - Never ship a cut with unresolved `fail`-severity cut-qa findings without explicit user consent.
+- Never paint an object out of moving footage with a tracked patch (it flickers as the subject moves under it). Re-generate the shot from an edited first frame instead: `stage-ref --from-shot <n>` (`AGENTS.md` rule 65). Patches are for locked-off plates with nothing moving through them.
 
 ## See Also
 

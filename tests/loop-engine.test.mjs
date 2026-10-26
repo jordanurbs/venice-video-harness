@@ -412,6 +412,25 @@ test('create mode degrades a reference-less character shot to t2v, not a face-ki
   assert.ok(!calls[0].anchor, 'no face start frame is handed to the face-rejecting i2v model');
 });
 
+test('create mode renders a shot with a staged start frame (stage-ref) as before the pick, never i2v off its face panel', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loop-create-staged-'));
+  const sceneDir = join(dir, 'episodes', 'episode-001', 'scene-001');
+  await mkdir(sceneDir, { recursive: true });
+  writeFileSync(join(sceneDir, 'shot-001.png'), 'panel');
+  const script = makeScript(1);
+  script.shots[0].characters = ['Bob'];
+  script.shots[0].videoModel = 'character';
+  script.shots[0].stagingRef = { path: 'staged.png', use: 'start-frame', source: 'frame.png', model: 'gpt-image-2-edit', prompt: 'p', sha256: 'x', session: 's', pickedAt: '' };
+  const { engine, calls } = makeEngine(dir, script, { mode: 'create', once: true, chain: false });
+  await engine.init();
+  await engine.start();
+  await waitForStop(engine);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].model, CREATE_MODEL_T2V);
+  assert.ok(!calls[0].anchor, 'no face start frame is handed to the face-rejecting i2v model');
+});
+
 // ---- Face-continuity prompting (end on the character's face) ----
 
 test('i2vRejectsFaceStartFrame flags MiniMax i2v but not seedance i2v or any t2v', () => {

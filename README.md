@@ -829,9 +829,9 @@ command that triggered it: an undecodable panel or a half-written QA report
 just leaves that cell blank.
 
 Commands that refresh the page: `approve-script`, `storyboard-episode`,
-`fix-panel`, `insert-shot`, `qa-storyboard`, `qa-approve`, `plan-generations`,
-`generate-videos`, `generate-music`, `override-audio`, `assemble-episode`, and
-`finish`.
+`fix-panel`, `insert-shot`, `stage-ref` (a pick or a clear), `qa-storyboard`,
+`qa-approve`, `plan-generations`, `generate-videos`, `generate-music`,
+`override-audio`, `assemble-episode`, and `finish`.
 
 The workshop also asks for the final delivery target. Choose **4K master** to
 keep generation/drafts economical and upscale only the approved assembled cut:
