@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **Grok Imagine private renders were reported as failed after billing.**
+  VPS-backed models return a `download_url` from `/video/queue`, and
+  `/video/retrieve` then answers with JSON status only. The renderer treated
+  that `COMPLETED` body without bytes as a terminal failure, so every Grok
+  Imagine private render was paid for and lost. `renderVideoFile` now fetches
+  the file from the `download_url` once the status is `COMPLETED` (three
+  attempts, as Venice's docs allow). The URL is stored on the pending-job
+  record so a re-attached render can still collect. Grok Imagine 1.5 R2V's
+  reference budget is also set to 7: a 2026-10-26 queue probe returned 400
+  "reference_image_urls must have at most 7 images" for more, where the
+  harness had been using the default of 4. Test:
+  `tests/video-download-url.test.mjs`.
+
 - **`generate-location-references --prompt` was ignored on south, east and
   west.** The option docs say the prompt becomes the view clause for a
   derived plate, but canonical plates always used their built-in view, so a

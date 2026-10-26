@@ -1707,6 +1707,9 @@ export const MAX_REFERENCE_IMAGES_BY_MODEL: Record<string, number> = {
   'minimax-h3-max-reference-to-video': 9,
   'wan-3-0-reference-to-video': 9,
   'wan-3-0-enhanced-reference-to-video': 9,
+  // Queue probe 2026-10-26: 8+ images is a 400 ("reference_image_urls must
+  // have at most 7 images"); 7 queues.
+  'grok-imagine-1-5-reference-to-video-private': 7,
 };
 
 export const DEFAULT_MAX_REFERENCE_IMAGES = 4;

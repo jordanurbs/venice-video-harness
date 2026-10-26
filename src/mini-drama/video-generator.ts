@@ -126,6 +126,33 @@ function runCommand(command: string, args: string[]): string {
 interface QueueResponse {
   model: string;
   queue_id: string;
+  /**
+   * Pre-signed delivery URL, returned by VPS-backed models (the private Grok
+   * Imagine lanes). When present, /video/retrieve only ever answers with JSON
+   * status and the finished file has to be fetched from here.
+   */
+  download_url?: string;
+}
+
+/**
+ * Fetch a finished video from its `download_url`. The link is short-lived and
+ * Venice documents that a dropped download may be retried, so three attempts.
+ */
+async function downloadFinishedVideo(url: string): Promise<Buffer> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length === 0) throw new Error('empty body');
+      return buf;
+    } catch (err) {
+      lastError = err;
+      if (attempt < 3) await sleep(2000 * attempt);
+    }
+  }
+  throw new Error(`Could not download the finished video from its download_url: ${(lastError as Error)?.message ?? lastError}`);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1188,13 +1215,14 @@ export async function renderVideoFile(
       effectiveModel,
       body,
       resumed: true,
+      downloadUrl: recordedJob.downloadUrl,
       resumedTag: recordedJob.tag,
     });
   }
 
   const queueResponse = await submitVideoQueue(client, effectiveModel, body, outputPath);
 
-  const { queue_id, model } = queueResponse;
+  const { queue_id, model, download_url } = queueResponse;
   console.log(`  Queue ID: ${queue_id}`);
   await recordPendingJob({
     kind: 'video',
@@ -1205,6 +1233,7 @@ export async function renderVideoFile(
     episode: options.episode,
     prompt: prompt.prompt,
     ...(options.jobTag ? { tag: options.jobTag } : {}),
+    ...(download_url ? { downloadUrl: download_url } : {}),
   });
 
   return pollRenderedVideo(client, {
@@ -1215,6 +1244,7 @@ export async function renderVideoFile(
     body,
     resumed: false,
     resumedTag: undefined,
+    downloadUrl: download_url,
   });
 }
 
@@ -1230,6 +1260,8 @@ interface PollRenderedVideoOptions extends RenderVideoOptions {
   resumed: boolean;
   /** The tag the re-attached job was recorded with. */
   resumedTag?: string;
+  /** The queue response's `download_url`, when the model delivers that way. */
+  downloadUrl?: string;
   /**
    * Collect the recorded job and nothing else: its request is not known here,
    * so a job Venice no longer has is dropped (RecordedJobGoneError), never
@@ -1288,8 +1320,16 @@ async function pollRenderedVideo(
       );
       consecutiveErrors = 0;
 
-      if (Buffer.isBuffer(result.value)) {
-        const videoBuffer = result.value;
+      // VPS-backed models answer retrieve with JSON status only; once it says
+      // COMPLETED the file is at the queue response's download_url.
+      let delivered: Buffer | undefined = Buffer.isBuffer(result.value) ? result.value : undefined;
+      if (!delivered && options.downloadUrl
+        && String((result.value as { status?: unknown })?.status ?? '').toUpperCase() === 'COMPLETED') {
+        delivered = await downloadFinishedVideo(options.downloadUrl);
+      }
+
+      if (delivered) {
+        const videoBuffer = delivered;
 
         archiveExisting(outputPath);
 
@@ -1834,6 +1874,7 @@ async function collectRecordedRender(client: VeniceClient, outputPath: string): 
       effectiveModel: job.model,
       body: {},
       resumed: true,
+      downloadUrl: job.downloadUrl,
       resumedTag: job.tag,
       collectOnly: true,
     });
