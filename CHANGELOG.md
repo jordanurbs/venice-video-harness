@@ -242,6 +242,54 @@
 
 ### Added
 
+- **`plan-generations`: three passes of thinking about consistency before any
+  spend, and an approval `generate-videos` honours or refuses (rule 66).**
+  Packaging shots into generations is a judgement per run: one generation keeps
+  the vehicle and the facing across its cuts, but carries the first plate's
+  state into a departure.
+  - The continuity ledger (deterministic, free) lists what each cut carries,
+    where a shot's words change a state, and which vehicles lack a reference.
+  - The packaging sub-agent (the project's intelligence model through
+    `chatJson`, 32k-token budget) proposes units, a reason for every split, and
+    `shotNotes` that write a state change into a shot's prompt line.
+    `validatePackaging` reads the answer by shot id (an insert "13b" is not
+    shot 13), checks every field's shape, and never throws; a bad answer or a
+    failed call plans by rules with the problems recorded. Notes are one line,
+    at most 300 characters, never an `@Image` tag, and shrink with their
+    shot's description under the montage prompt's guard and the model's hard
+    cap (`fitMontageProse`); a note no prompt reads (a shot that renders alone,
+    the `sequence` grammar) is recorded. On the standard route or the
+    `sequence` grammar the agent is not asked.
+  - The reference audit, per unit: the model, references against the budget,
+    plan-check findings, a free `/video/quote` quote (skipped without a key or
+    network; the first network failure stops the rest), carries that cross a
+    cut between generations, and each shot's clip already on disk, with the
+    `--retake` command for a unit the skip rule would keep.
+  - The ledger reads a cast object's vehicle kind with `objectVehicle`
+    (`plan-check.ts`, now behind `objectVehicleKind`): a CAR KEY is not a
+    vehicle.
+  - Writes `generation-plan.proposed.json` and `.md` (the previous proposal is
+    archived as `-vN`); `generation-plan.json` stays the record of what
+    rendered. `--approve "<name>"` approves the proposal while it still
+    applies. The approval is bound to what decides the packaging
+    (`packagingInputs`): shot ids, order, durations, types, locations,
+    `plateView`, cast, `continuity.from`, `mustStaySingle`/`allowMultiShot`,
+    title cards and exact lip-sync, plus montage mode, grammar, model, ceiling
+    and floor. Dialogue, blocking, `stagedOn` and `endState` edits keep it.
+  - `generate-videos` renders an approved proposal rebuilt from its packaging
+    with the run's settings; refuses one that no longer applies (including
+    `--no-montage` and a switch to lip-sync) before reading the API key,
+    listing what changed (`--ignore-plan` renders by rules for one run); and
+    says so when a proposal is waiting for approval. `status` reports a stale
+    approved plan, `pipeline` lists `plan-generations` as an optional branch,
+    and the web runner allows `plan-generations` and `--ignore-plan`.
+  - `buildGenerationPlanFromGroups` keeps to the route: no montage units on
+    the standard route, exact lip-sync shots render alone.
+  - Core types: `GenerationPlanning`, `GenerationPackagingInputs`,
+    `GenerationPlan.planning`, `GenerationUnit.shotNotes`.
+  - On a 33-shot film, one chat call packed 13 units against 17 by rules.
+  - Test: `tests/plan-generations.test.mjs`.
+
 - **Object cast members get object reference clauses (`Character.prop`,
   `isObjectCastMember`).** An object cast member (a red umbrella, a ledger, a
   recurring tram with a locked design) used to get the person clause in the reference

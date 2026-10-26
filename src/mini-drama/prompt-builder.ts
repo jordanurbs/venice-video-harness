@@ -32,6 +32,7 @@ import { faceCapableTwinId, getMaxPositivePromptChars, modelWantsSimplePrompt } 
 import { getLocation } from '../series/manager.js';
 import { buildMontageSlotPlan, buildReferenceSlotPlan, type ReferenceSlot } from './reference-slots.js';
 import { objectVehicleKind } from './plan-check.js';
+import { shotIdOf } from './shot-paths.js';
 
 export interface MiniDramaImagePrompt {
   prompt: string;
@@ -1114,18 +1115,22 @@ function shrinkProse(text: string, ratio: number): string {
  * Fit a montage prompt's per-shot prose to its budget. Past `guard`, every
  * line's blocking shrinks first (to nothing if it must), then every
  * description by one ratio, never below 40% of itself. Past the hard `cap`,
- * descriptions go below that floor. The rest (header, references, dialogue,
- * sound, STYLE, negative) stays whole: nothing is cut off the end. A prompt
- * still over the cap with no prose left is refused before anything is queued.
+ * descriptions go below that floor. A planner's shot note (`plan-generations`)
+ * is action prose: it shrinks with its description, by the same ratio. The
+ * rest (header, references, dialogue, sound, STYLE, negative) stays whole:
+ * nothing is cut off the end. A prompt still over the cap with no prose left
+ * is refused before anything is queued.
  */
-function fitMontageProse<L extends { index: number; desc: string; blocking: string }>(
+function fitMontageProse<L extends { index: number; desc: string; blocking: string; note?: string }>(
   parts: string[],
   lines: L[],
-  render: (line: L, desc: string, blocking: string) => string,
+  render: (line: L, desc: string, blocking: string, note: string) => string,
   limits: { guard: number; cap: number; unitId: string },
 ): string {
   const build = (descRatio: number, blockingRatio: number): string => {
-    for (const line of lines) parts[line.index] = render(line, shrinkProse(line.desc, descRatio), shrinkProse(line.blocking, blockingRatio));
+    for (const line of lines) {
+      parts[line.index] = render(line, shrinkProse(line.desc, descRatio), shrinkProse(line.blocking, blockingRatio), shrinkProse(line.note ?? '', descRatio));
+    }
     return parts.join('\n').trim();
   };
   // The largest ratio in [low, 1] whose prompt fits `target`; `low` when none does.
@@ -1276,12 +1281,12 @@ function buildShotListMontagePrompt(
     }
   }
 
-  // The shots. Each keeps its trimmable prose (action, blocking) apart from
-  // what must survive verbatim (label, dialogue, sound), so an over-long unit
-  // shrinks the prose instead of losing its STYLE tail.
+  // The shots. Each keeps its trimmable prose (action, the planner's note,
+  // blocking) apart from what must survive verbatim (label, dialogue, sound),
+  // so an over-long unit shrinks the prose instead of losing its STYLE tail.
   const improviseDialogue = shouldImproviseDialogue(modelId, series);
   let anyDialogue = false;
-  const shotLines: Array<{ index: number; head: string; desc: string; blocking: string; rest: string[] }> = [];
+  const shotLines: Array<{ index: number; head: string; desc: string; note: string; blocking: string; rest: string[] }> = [];
   shots.forEach((shot, i) => {
     const beat = beats[i];
     const place = placeName(shot);
@@ -1301,18 +1306,23 @@ function buildShotListMontagePrompt(
       rest.push(formatDialogueLine(`[${slot ? `@Image${slot.elementIndex}` : shot.dialogue.character}${voiceParts ? `, ${voiceParts}` : ''}]`, shot.dialogue.line, improviseDialogue));
     }
     if (shot.sfx) rest.push(`Sound: ${shot.sfx}.`);
+    // A planner's note (plan-generations) continues the shot's action: one
+    // line of plain action, such as a state change the first plate would
+    // otherwise carry forward.
+    const note = (unit.shotNotes?.[shotIdOf(shot)] ?? '').replace(/\s+/g, ' ').trim();
     shotLines.push({
       index: parts.length,
       head: `${i ? 'Cut to ' : ''}Shot ${i + 1} | ${formatBeatSeconds(beat.startSec)}-${formatBeatSeconds(beat.endSec)}s | ${label}:${camera && !simplePrompt ? ` ${camera.replace(/\.$/, '')}.` : ''}`,
       desc: substituteTags(shot.description),
+      note: note ? substituteTags(/[.!?…]$/.test(note) ? note : `${note}.`) : '',
       blocking: shot.blocking && !simplePrompt ? substituteTags(shot.blocking) : '',
       rest,
     });
     parts.push('');
   });
-  const renderShot = (line: typeof shotLines[number], desc: string, blocking: string) =>
-    [line.head, desc, blocking ? `Blocking: ${blocking}` : '', ...line.rest].filter(Boolean).join(' ');
-  for (const line of shotLines) parts[line.index] = renderShot(line, line.desc, line.blocking);
+  const renderShot = (line: typeof shotLines[number], desc: string, blocking: string, note: string) =>
+    [line.head, desc, note, blocking ? `Blocking: ${blocking}` : '', ...line.rest].filter(Boolean).join(' ');
+  for (const line of shotLines) parts[line.index] = renderShot(line, line.desc, line.blocking, line.note);
   if (improviseDialogue && anyDialogue) parts.push(IMPROV_DIALOGUE_NOTE);
 
   // The cutter slices this render at the planned cuts, so the hard-cut line is
@@ -1336,7 +1346,8 @@ function buildShotListMontagePrompt(
   // Seedance 2.5 takes long prompts (12k characters quote fine); a run across
   // places carries a line per place image, so the guard is 8000, under the
   // model's hard cap (montagePromptCap). Past it, the shot prose shrinks
-  // (fitMontageProse), and the STYLE tail is never cut off.
+  // (fitMontageProse: a planner's shot note with its description), and the
+  // STYLE tail is never cut off.
   const cap = montagePromptCap(modelId);
   const prompt = fitMontageProse(parts, shotLines, renderShot, { guard: Math.min(8000, cap), cap, unitId: unit.unitId });
 

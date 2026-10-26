@@ -1045,12 +1045,88 @@ export interface GenerationUnit {
    * land in the media library under `media-library/scene-NN/`.
    */
   sceneNumber?: number;
+  /**
+   * Shot-list montage units only: notes the generation planner
+   * (`plan-generations`) writes into a shot's line of the prompt, by shot id
+   * (`shotNumber` + `shotIdSuffix`, e.g. "13b"), without changing the script.
+   * Typically a state change the shot must show ("the doors close, the lines
+   * are cast off"), because one generation carries the first plate's state
+   * forward.
+   */
+  shotNotes?: Record<string, string>;
+}
+
+/**
+ * What decides how an episode's shots are packaged into generations. An
+ * approved generation plan applies only while this is unchanged. A shot's
+ * dialogue, blocking, `stagedOn` and `endState` change its prompt line, not
+ * its packaging, so they are not part of it.
+ */
+export interface GenerationPackagingInputs {
+  settings: {
+    /** `resolveMontageMode`: false on the standard route (`--no-montage`). */
+    montage: boolean;
+    grammar: 'shots' | 'sequence';
+    montageModel: string;
+    /** The montage window ceiling and floor, in seconds. */
+    maxSec: number;
+    minSec: number;
+  };
+  shots: Array<{
+    /** Shot id: `shotNumber` + `shotIdSuffix` ("13b"). */
+    id: string;
+    seconds: number;
+    type: string;
+    location: string | null;
+    plateView: string | null;
+    /** Cast names, upper case, in script order. */
+    characters: string[];
+    /** `continuity.from`. */
+    from: string | null;
+    mustStaySingle: boolean;
+    allowMultiShot: boolean;
+    /** The description names a title card (the shot renders alone). */
+    titleCard: boolean;
+    /** The shot renders as an exact lip-sync clip (audioStrategy, dialogue, motion, faceVisible). */
+    lipSync: boolean;
+  }>;
+}
+
+/** How a generation plan was made (`plan-generations`), and whether a person approved it. */
+export interface GenerationPlanning {
+  /** `agent`: the packaging sub-agent's units, validated. `rules`: the deterministic planner. */
+  by: 'agent' | 'rules';
+  /** The intelligence model that planned (agent plans). */
+  model?: string;
+  /** sha256 (first 16 hex characters) of `inputs`. */
+  packagingHash: string;
+  inputs: GenerationPackagingInputs;
+  /**
+   * Agent plans: the units as shot ids, in script order. The plan that renders
+   * is rebuilt from them with the settings of the run, so its models and frame
+   * strategies are current while the packaging stays the approved one.
+   */
+  groups?: Array<{ shots: string[]; reason: string }>;
+  /** Agent plans: every validated shot note, by shot id. Units carry the ones a prompt reads. */
+  shotNotes?: Record<string, string>;
+  createdAt: string;
+  approved?: boolean;
+  approvedBy?: string;
+  approvedAt?: string;
+  /** Why each split was made (after shot id N). */
+  splits?: Array<{ after: string; reason: string }>;
+  /** What the planner wants a person to know: risks, state changes, notes a prompt cannot use. */
+  notes?: string[];
+  /** Problems the validator found in the agent's answer (the plan was then made by rules). */
+  problems?: string[];
 }
 
 export interface GenerationPlan {
   episode: number;
   generatedAt: string;
   units: GenerationUnit[];
+  /** Set on plans made by `plan-generations` (and copied onto the rendered plan when one was used). */
+  planning?: GenerationPlanning;
 }
 
 // ---------------------------------------------------------------------------

@@ -246,7 +246,7 @@ function planReferenceSlots(
 }
 
 /** A cast member's primary reference: a harvested anchor, else the front sheet, else the three-quarter. */
-function primaryReferencePath(series: SeriesState, name: string): string | undefined {
+export function primaryReferencePath(series: SeriesState, name: string): string | undefined {
   const dir = getCharacterDir(series, name);
   return ['anchor.png', 'front.png', 'three-quarter.png'].map(f => join(dir, f)).find(p => existsSync(p));
 }

@@ -31,6 +31,7 @@ import type {
   SeriesState,
   MiniDramaCharacter,
   EpisodeScript,
+  GenerationPlan,
   ShotScript,
   Location,
   VideoFamilyPreference,
@@ -45,6 +46,8 @@ import {
   DEFAULT_IMAGE_EDIT_MODEL,
   DEFAULT_LIP_SYNC_MODEL,
   resolveAutoEdit,
+  resolveMontageGrammar,
+  resolveMontageMode,
   resolveUseStoryboardPlates,
 } from 'venice-video-harness/core/series/types.js';
 import type { AestheticProfile } from '../storyboard/prompt-builder.js';
@@ -3672,6 +3675,99 @@ program
     console.log(`Then re-render the drifting units and re-check: qa-videos -p ${series.outputDir} -e <episode>`);
   });
 
+// ── plan-generations ──────────────────────────────────────────────────
+program
+  .command('plan-generations')
+  .description('Plan how the shots are packaged into generations before any spend: a continuity ledger, a packaging sub-agent (the project\'s intelligence model) checked by a validator, and a reference audit and quote per unit. Writes generation-plan.proposed.json and .md; approve with --approve, and generate-videos renders the approved plan while what decides its packaging is unchanged.')
+  .requiredOption('-p, --project <dir>', 'Series output directory')
+  .requiredOption('-e, --episode <number>', 'Episode number', parseInt)
+  .option('--model <model>', "Override the project's intelligence model for the packaging agent")
+  .option('--no-agent', 'Plan by rules only (no model call)')
+  .option('--no-quote', 'Skip the per-unit cost quotes (POST /video/quote, free)')
+  .option('--approve [who]', 'Approve the saved proposal (records who and when). generate-videos then renders it, and refuses to run once the shots or settings that decide its packaging change.')
+  .action(async (opts: { project: string; episode: number; model?: string; agent: boolean; quote: boolean; approve?: string | boolean }) => {
+    const series = await loadSeries(resolve(opts.project));
+    if (!series) { console.error('Series not found.'); process.exit(1); }
+    const script = await loadEpisodeScript(series, opts.episode);
+    if (!script) { console.error(`Episode ${opts.episode} script not found.`); process.exit(1); }
+    const episodeDir = getEpisodeDir(series, opts.episode);
+    const ref = `-p ${series.outputDir} -e ${opts.episode}`;
+    const approval = await import('./generation-plan-approval.js');
+    const planning = await import('./generation-planning.js');
+
+    if (opts.approve !== undefined) {
+      let saved: GenerationPlan | null;
+      try {
+        saved = await approval.loadPlanProposal(episodeDir);
+      } catch (err) {
+        console.error(`${(err as Error).message}. Plan again: plan-generations ${ref}`);
+        process.exit(1);
+      }
+      if (!saved?.planning) {
+        console.error(`No generation plan proposal to approve. Plan first: plan-generations ${ref}`);
+        process.exit(1);
+      }
+      // Approve only what still applies: the proposal as it would be checked
+      // at render time, before the approval is recorded.
+      const check = approval.checkPlanApproval({ ...saved, planning: { ...saved.planning, approved: false } }, script, series);
+      const changes = check.status === 'unapproved' ? check.changes : ['the proposal has no planning record'];
+      if (changes.length > 0) {
+        console.error('The proposal no longer matches the script and settings that decide its packaging:');
+        for (const change of changes) console.error(`  ${change}`);
+        console.error(`Plan again, then approve the new proposal: plan-generations ${ref}`);
+        process.exit(1);
+      }
+      const who = typeof opts.approve === 'string' && opts.approve.trim() ? opts.approve.trim() : 'operator';
+      saved.planning = { ...saved.planning, approved: true, approvedBy: who, approvedAt: new Date().toISOString() };
+      const lines = planning.describeGenerationPlan({ plan: saved, audits: planning.proposalAudits(saved) }, { project: series.outputDir, episode: opts.episode });
+      await approval.savePlanProposal(episodeDir, saved, planning.planMarkdown(opts.episode, lines));
+      console.log(`Generation plan approved by ${who} (${saved.units.length} unit(s), planned by ${saved.planning.by}).`);
+      console.log('generate-videos renders it while the shots and settings that decide its packaging are unchanged, and refuses to run when they change.');
+      console.log(`Next: generate-videos ${ref}`);
+      await updateTreatment(series, opts.episode);
+      return;
+    }
+
+    let client: VeniceClient | null = null;
+    try {
+      client = new VeniceClient(await getVeniceApiKey());
+    } catch {
+      console.warn(`No Venice API key: planning by rules${opts.quote ? ', without quotes' : ''}.`);
+    }
+    const intelligence = intelligenceFor(series, opts.model);
+    // The agent packages shot-list montages only (the notes say why when it is not asked).
+    if (client && opts.agent && resolveMontageMode(series.videoDefaults) && resolveMontageGrammar(series.videoDefaults) === 'shots') {
+      console.log(`Planning the generations with ${describeIntelligence(intelligence.model)}...`);
+    }
+    const quoter = client && opts.quote ? planning.unitQuoter(client, series) : undefined;
+    const sceneDir = join(episodeDir, 'scene-001');
+    const result = await planning.planGenerations(opts.agent ? client : null, series, script, {
+      model: intelligence.model,
+      agent: opts.agent,
+      quote: quoter?.quote,
+      sceneDir,
+    });
+    if (quoter?.stopped) console.warn(`Quotes stopped: ${quoter.stopped}`);
+
+    let previous: GenerationPlan | null = null;
+    try {
+      previous = await approval.loadPlanProposal(episodeDir);
+    } catch {
+      // An unreadable proposal is archived below like any other.
+    }
+    if (previous?.planning?.approved) {
+      console.log(`Replacing the plan approved by ${previous.planning.approvedBy ?? 'a person'}: approve the new one before rendering.`);
+    }
+    const archived = await approval.archivePlanProposal(episodeDir);
+    const lines = planning.describeGenerationPlan(result, { project: series.outputDir, episode: opts.episode });
+    const saved = await approval.savePlanProposal(episodeDir, planning.toProposal(result), planning.planMarkdown(opts.episode, lines));
+    for (const line of lines) console.log(line);
+    console.log(`\nSaved: ${saved.json} (and ${basename(saved.md)})${archived ? `; the previous proposal is ${basename(archived)}` : ''}.`);
+    console.log('generate-videos does not use it until a person approves it.');
+    console.log(`Approve it: plan-generations ${ref} --approve "<your name>"`);
+    await updateTreatment(series, opts.episode);
+  });
+
 // ── generate-videos ───────────────────────────────────────────────────
 program
   .command('generate-videos')
@@ -3685,7 +3781,8 @@ program
   .option('--no-auto-edit', 'Provide the montage cuts in the media library only; do not auto-assemble.')
   .option('--concurrency <n>', 'Units to render at once. A unit that starts from the previous clip\'s last frame still waits for it; 1 renders one at a time.', String(DEFAULT_RENDER_CONCURRENCY))
   .option('--retake <shots>', 'Re-render the whole generation unit(s) holding these shots (comma/range list, e.g. "4" or "2-6"; a number covers its suffixed inserts), and nothing else. Their current master and cuts are archived first (-vN). A montage unit renders again as one generation and is cut again, so its shots still match each other.')
-  .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean; montage: boolean; autoEdit?: boolean; concurrency: string; retake?: string }) => {
+  .option('--ignore-plan', 'Render by the rules planner for this run, without the generation plan from plan-generations (an approved plan that no longer applies is left as it is). Bypasses the check; it does not update the plan.', false)
+  .action(async (opts: { project: string; episode: number; skipQa: boolean; seedanceKeyframe: boolean; montage: boolean; autoEdit?: boolean; concurrency: string; retake?: string; ignorePlan: boolean }) => {
     const concurrency = Number(opts.concurrency);
     if (!Number.isInteger(concurrency) || concurrency < 1) {
       console.error(`--concurrency must be a whole number of at least 1 (got ${opts.concurrency}).`);
@@ -3760,10 +3857,62 @@ program
       series.videoDefaults = { ...series.videoDefaults, autoEdit: opts.autoEdit };
     }
 
+    // The generation plan from plan-generations: an approved proposal renders
+    // while what decides its packaging is unchanged (checked with this run's
+    // settings, --no-montage included); an approved one that no longer applies
+    // blocks the run before any spend; one no one approved is reported, and the
+    // rules planner decides as before.
+    const planApproval = await import('./generation-plan-approval.js');
+    const proposalPath = planApproval.planProposalNotesPath(episodeDir);
+    let approvedPlan: GenerationPlan | null = null;
+    let planStatus: ReturnType<typeof planApproval.checkPlanApproval>;
+    try {
+      planStatus = planApproval.checkPlanApproval(await planApproval.loadPlanProposal(episodeDir), script, series);
+    } catch (err) {
+      if (!opts.ignorePlan) {
+        console.error(`Blocked: ${(err as Error).message}.`);
+        console.error(`  Plan again:  plan-generations -p ${series.outputDir} -e ${opts.episode}`);
+        console.error('  --ignore-plan renders by the rules planner for this run instead.');
+        process.exit(1);
+      }
+      planStatus = { status: 'none' };
+    }
+    if (planStatus.status === 'stale') {
+      const planning = planStatus.proposal.planning!;
+      if (!opts.ignorePlan) {
+        console.error(`Blocked: the generation plan approved by ${planning.approvedBy ?? 'a person'}${planning.approvedAt ? ` (${planning.approvedAt})` : ''} no longer matches the shots and settings that decide its packaging, so it is not what would render:`);
+        for (const change of planStatus.changes) console.error(`  ${change}`);
+        console.error(`  Plan again:  plan-generations -p ${series.outputDir} -e ${opts.episode}`);
+        console.error(`  then approve the new plan:  plan-generations -p ${series.outputDir} -e ${opts.episode} --approve "<your name>"`);
+        console.error('  --ignore-plan renders by the rules planner for this run instead; it does not update the plan.');
+        process.exit(1);
+      }
+      console.warn(`⚠ --ignore-plan: the approved generation plan no longer applies (${planStatus.changes.length} change(s)); rendering by the rules planner. The plan is left as it is.\n`);
+    } else if (planStatus.status === 'approved') {
+      if (opts.ignorePlan) {
+        console.warn('⚠ --ignore-plan: rendering by the rules planner instead of the approved generation plan.\n');
+      } else {
+        approvedPlan = planStatus.plan;
+        const planning = planStatus.proposal.planning!;
+        console.log(`Using the approved generation plan (${proposalPath}): planned by ${planning.by === 'agent' ? `the packaging agent (${planning.model})` : 'rules'}, approved by ${planning.approvedBy ?? 'a person'}.\n`);
+      }
+    } else if (planStatus.status === 'unapproved' && !opts.ignorePlan) {
+      const planning = planStatus.proposal.planning!;
+      const rules = buildGenerationPlan(script, series);
+      console.warn(`⚠ A generation plan proposal is waiting for approval: ${proposalPath}`);
+      console.warn(`  It packages the shots into ${planStatus.proposal.units.length} unit(s), planned by ${planning.by === 'agent' ? `the packaging agent (${planning.model})` : 'rules'}. This run does not use it: it renders by the rules planner, ${rules.units.length} unit(s).`);
+      if (planStatus.changes.length > 0) {
+        console.warn(`  The proposal is also out of date (${planStatus.changes[0]}${planStatus.changes.length > 1 ? `, and ${planStatus.changes.length - 1} more` : ''}). Plan again: plan-generations -p ${series.outputDir} -e ${opts.episode}`);
+      } else {
+        console.warn(`  To render the proposal, approve it, then run generate-videos: plan-generations -p ${series.outputDir} -e ${opts.episode} --approve "<your name>"`);
+      }
+      console.warn('');
+    }
+
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const sceneDir = join(episodeDir, 'scene-001');
-    const generationPlan = buildGenerationPlan(script, series);
+    const generationPlan = approvedPlan ?? buildGenerationPlan(script, series);
 
     // --retake: render only the units that hold the named shots, whole. The
     // full plan still goes to the renderer (shots are matched to units in
@@ -3848,6 +3997,9 @@ program
       client, series, script.shots, sceneDir, generationPlan, effectiveAudioMix,
       { concurrency, onlyUnits: retakeUnits ? new Set(retakeUnits) : undefined },
     );
+    // The record of what rendered says how it was planned and who approved it.
+    // The proposal itself (generation-plan.proposed.json) is never written here.
+    if (generationPlan.planning) plan.planning = generationPlan.planning;
     await saveGenerationPlan(episodeDir, plan);
 
     const ep = series.episodes.find(e => e.number === opts.episode);

@@ -74,7 +74,7 @@ import {
   resolveMontageModel,
 } from 'venice-video-harness/core/series/types.js';
 import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
-import { shotKey } from './shot-paths.js';
+import { shotIdOf, shotKey } from './shot-paths.js';
 
 // ---------------------------------------------------------------------------
 // Scene grouping
@@ -198,24 +198,36 @@ function padShot(n: number): string {
   return String(n).padStart(3, '0');
 }
 
+/** The location tags a run of shots passes through, in order, repeats collapsed. */
+function placesOf(shots: ShotScript[]): string[] {
+  return shots
+    .map(shot => shot.location)
+    .filter((loc): loc is string => Boolean(loc))
+    .filter((loc, i, all) => all[i - 1] !== loc);
+}
+
+/** Why a shot renders as its own single instead of riding a montage run. */
+export type MontageBlockReason = 'forced' | 'insert' | 'title-card' | 'lip-sync';
+
 /**
- * A shot the montage lane must NOT swallow: title cards / inserts render as
- * their own singles (they need exact framing, not montage energy), and
- * exact-lip-sync dialogue shots keep their dedicated pipeline. Everything
+ * A shot the montage lane must NOT swallow, and why: title cards / inserts
+ * render as their own singles (they need exact framing, not montage energy),
+ * and exact-lip-sync dialogue shots keep their dedicated pipeline. Everything
  * else — establishing, action, dialogue-on-native, reaction, close-up —
  * rides the montage. With the shot-list grammar, an insert that continues
  * the action (`continuity.from: 'continuous'`: the hands, the umbrella in
  * them) rides in its run too, so the prop and the light carry across the
- * cut.
+ * cut. Null when the shot can ride a montage.
  */
-function shotBlocksMontage(shot: ShotScript, videoDefaults: VideoModelDefaults | undefined, readContinuity: boolean): boolean {
-  if (shot.mustStaySingle) return true;
-  if (shot.type === 'insert' && !(readContinuity && shot.continuity?.from === 'continuous')) return true;
-  if (/title card/i.test(shot.description)) return true;
+export function montageBlockReason(shot: ShotScript, videoDefaults: VideoModelDefaults | undefined): MontageBlockReason | null {
+  const readContinuity = resolveMontageGrammar(videoDefaults) === 'shots';
+  if (shot.mustStaySingle) return 'forced';
+  if (shot.type === 'insert' && !(readContinuity && shot.continuity?.from === 'continuous')) return 'insert';
+  if (/title card/i.test(shot.description ?? '')) return 'title-card';
   // Exact-lip-sync dialogue keeps its dedicated single-clip pipeline —
   // bundling it into a montage would drop the lip-sync entirely.
-  if (mustRenderAsExactLipSync(shot, videoDefaults)) return true;
-  return false;
+  if (mustRenderAsExactLipSync(shot, videoDefaults)) return 'lip-sync';
+  return null;
 }
 
 /**
@@ -242,6 +254,20 @@ function splitSceneIntoWindows(shots: ShotScript[], maxSec: number): ShotScript[
   return windows;
 }
 
+export interface MontagePlanOptions {
+  /**
+   * Groups decided elsewhere (the generation planner, `plan-generations`),
+   * used instead of `groupShotsIntoScenes`: each a run of consecutive shots,
+   * in script order, that may share a generation.
+   */
+  groups?: Array<{ shots: ShotScript[]; reason?: string }>;
+  /**
+   * Notes for the shots' prompt lines, by shot id ("13b"). Only the shot-list
+   * grammar reads them, so montage units carry them only under it.
+   */
+  shotNotes?: Record<string, string>;
+}
+
 /**
  * Build a montage-first generation plan: each scene's consecutive
  * montage-eligible beats become ONE `montage` unit (up to the model ceiling,
@@ -253,11 +279,18 @@ function splitSceneIntoWindows(shots: ShotScript[], maxSec: number): ShotScript[
  * The grammar sets the grouping: the shot list (default) reads `continuity`,
  * so a continuous run stays one unit across places; the SEQUENCE fallback
  * splits on every change of location, as it always did.
+ *
+ * With `options.groups` the groups replace that grouping, and the rules still
+ * apply inside each group: blocking shots (inserts, title cards, forced
+ * singles, exact lip-sync) render alone, a group longer than the ceiling
+ * splits into windows, and the SEQUENCE grammar still splits a group on every
+ * change of location.
  */
 export function planMontageUnits(
   script: EpisodeScript,
   series: Pick<SeriesState, 'videoDefaults'>,
   buildSingleFallback: (shot: ShotScript, prev?: ShotScript, next?: ShotScript) => GenerationUnit,
+  options: MontagePlanOptions = {},
 ): GenerationPlan {
   const videoDefaults: VideoModelDefaults | undefined = series.videoDefaults;
   const maxSec = resolveMontageMaxDurationSec(videoDefaults);
@@ -265,9 +298,26 @@ export function planMontageUnits(
   const model = resolveMontageModel(videoDefaults);
   const shotList = resolveMontageGrammar(videoDefaults) === 'shots';
   const units: GenerationUnit[] = [];
-  const scenes = groupShotsIntoScenes(script.shots, { continuity: shotList });
+  const reasons: Array<string | undefined> = [];
+  const scenes: SceneGroup[] = options.groups
+    ? options.groups.flatMap(group => {
+      const parts = shotList
+        ? [{ sceneNumber: 0, location: group.shots.find(shot => shot.location)?.location, locations: placesOf(group.shots), shots: group.shots }]
+        : groupShotsIntoScenes(group.shots, { continuity: false });
+      for (let i = 0; i < parts.length; i++) reasons.push(group.reason);
+      return parts;
+    }).map((scene, index) => ({ ...scene, sceneNumber: index + 1 }))
+    : groupShotsIntoScenes(script.shots, { continuity: shotList });
+  const notesFor = (window: ShotScript[]): Record<string, string> | undefined => {
+    if (!shotList || !options.shotNotes) return undefined;
+    const entries = window
+      .map(shot => [shotIdOf(shot), options.shotNotes![shotIdOf(shot)]] as const)
+      .filter((entry): entry is readonly [string, string] => Boolean(entry[1]));
+    return entries.length ? Object.fromEntries(entries) : undefined;
+  };
 
-  for (const scene of scenes) {
+  for (const [sceneIndex, scene] of scenes.entries()) {
+    const plannerReason = reasons[sceneIndex];
     // Partition the scene into montage runs and blocking singles, keeping
     // script order.
     let run: ShotScript[] = [];
@@ -292,6 +342,7 @@ export function planMontageUnits(
         const places = window
           .map(s => s.location)
           .filter((loc, i, all): loc is string => Boolean(loc) && all[i - 1] !== loc);
+        const shotNotes = notesFor(window);
         units.push({
           unitId: `montage-s${String(scene.sceneNumber).padStart(2, '0')}-${padShot(first.shotNumber)}-${padShot(last.shotNumber)}`,
           unitType: 'montage',
@@ -302,9 +353,10 @@ export function planMontageUnits(
           startFrameStrategy: 'panel',
           endFrameStrategy: 'natural',
           decisionReasons: [
+            ...(plannerReason ? [`planner: ${plannerReason}`] : []),
             `scene ${scene.sceneNumber}${places.length ? ` (${places.join(' → ')})` : ''}: ${window.length}-beat single-pass montage on ${model}`,
             ...(new Set(places).size > 1
-              ? ['one continuous run across places (continuity: continuous): one generation keeps the vehicle, props and facing across the cuts']
+              ? [`one ${options.groups ? 'planned' : 'continuous'} run across places${options.groups ? '' : ' (continuity: continuous)'}: one generation keeps the vehicle, props and facing across the cuts`]
               : []),
             shotList
               ? 'shot-list prompt ("Shot N | a-bs | place"); cut at the detected cuts after render'
@@ -313,13 +365,14 @@ export function planMontageUnits(
           fallbackToSingles: false,
           montageBeats: beats,
           sceneNumber: scene.sceneNumber,
+          ...(shotNotes ? { shotNotes } : {}),
         });
       }
       run = [];
     };
 
     for (const shot of scene.shots) {
-      if (shotBlocksMontage(shot, videoDefaults, shotList)) {
+      if (montageBlockReason(shot, videoDefaults)) {
         flushRun();
         units.push(buildSingleFallback(shot));
         continue;

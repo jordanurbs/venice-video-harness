@@ -157,6 +157,16 @@ export const PIPELINE_BRANCHES: readonly PipelineBranch[] = [
       'Skips the storyboard/QA gates and writes ONLY under episodes/episode-NNN/loop/ — canonical scene-001 renders and series.json are never touched, so it can run alongside production. Only precondition: a shot script with >=1 shot. Money-capped by --budget (default $2); --mode is REQUIRED in a non-interactive run.',
     command: 'loop -p <project> -e <n> --mode <looping|production>',
   },
+  {
+    id: 'plan-generations',
+    name: 'Plan the generations — how the shots are packaged, before any spend',
+    availableAfter: 'script',
+    summary:
+      'A continuity ledger, a packaging sub-agent (the project\'s intelligence model) checked by a validator, and a reference audit and free quote per unit. Writes generation-plan.proposed.json and .md. Optional: without it, generate-videos plans by rules.',
+    note:
+      'Approving the proposal (plan-generations --approve "<name>") is a human decision. generate-videos then renders the approved plan, and refuses to run once the shots or settings that decide its packaging change: plan again, or pass --ignore-plan for one run.',
+    command: 'plan-generations -p <project> -e <n>',
+  },
 ];
 
 export function pipelineAsJson(): {

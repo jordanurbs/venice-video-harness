@@ -354,24 +354,39 @@ function vesselsIn(text: string, how: 'shot' | 'place' = 'shot'): Set<string> {
   return new Set(VEHICLES.filter(t => (how === 'place' ? placePattern(t) : t.pattern).test(text)).map(t => t.key));
 }
 
+/**
+ * Every vehicle a shot's words name, by kind, water or land ("tram",
+ * "barge"). A word that is also a verb counts only as a noun.
+ */
+export function vehiclesIn(text: string): string[] {
+  return [...VEHICLES, ...LAND_VEHICLES].filter(t => hasTerm(text, t)).map(t => t.key);
+}
+
 /** The words before a noun phrase's first qualifier ("a red tram with brass rails" -> "a red tram"). */
 const PHRASE_END = /[,;:.(]|\s(?:with|of|from|for|that|which|whose|in|on|at|by|carrying|bearing|holding|showing)\s/i;
 
 /**
- * Whether a cast object is a vehicle, and which kind: decided by what it is,
- * the head noun of its name and of its description's first phrase, read with
- * the noun-cued vocabulary above. A word in passing does not count: a CAR KEY,
- * "a bus ticket" and "a ship's compass" are not vehicles.
+ * Whether a cast object is a vehicle, which one, and of which kind: decided by
+ * what it is, the head noun of its name and of its description's first
+ * phrase, read with the noun-cued vocabulary above. A word in passing does not
+ * count: a CAR KEY, "a bus ticket" and "a ship's compass" are not vehicles.
  */
-export function objectVehicleKind(name: string, description = ''): 'water' | 'land' | undefined {
+export function objectVehicle(name: string, description = ''): { key: string; kind: 'water' | 'land' } | undefined {
   for (const phrase of [name.replace(/^the\s+/i, ''), description.split(PHRASE_END)[0]]) {
     // A leading article gives a bare head noun ("TRAIN") the cue the vocabulary asks for.
     const text = `the ${phrase.trim()}`;
     const endsWith = (t: Term) => new RegExp(`(?:${t.pattern.source})$`, 'i').test(text);
-    if (VEHICLES.some(endsWith)) return 'water';
-    if (LAND_VEHICLES.some(endsWith)) return 'land';
+    const water = VEHICLES.find(endsWith);
+    if (water) return { key: water.key, kind: 'water' };
+    const land = LAND_VEHICLES.find(endsWith);
+    if (land) return { key: land.key, kind: 'land' };
   }
   return undefined;
+}
+
+/** Whether a cast object is a vehicle, and which kind (`objectVehicle`). */
+export function objectVehicleKind(name: string, description = ''): 'water' | 'land' | undefined {
+  return objectVehicle(name, description)?.kind;
 }
 
 // ---- The check ---------------------------------------------------------------

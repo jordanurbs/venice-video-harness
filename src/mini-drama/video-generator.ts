@@ -732,6 +732,40 @@ async function submitVideoQueue(
   }
 }
 
+/**
+ * The resolution `renderVideoFile` requests for a model when no override
+ * applies, by family. Undefined leaves the field off (the model's default).
+ */
+export function defaultRenderResolution(modelId: string): string | undefined {
+  if (modelId.includes('seedance')) return '720p';
+  // H3 Max / Max Turbo top out at 768P and reject 2K outright. This branch
+  // MUST stay above the `minimax-h3` one — the substring match below would
+  // otherwise pin them to 2K and 400 every render. 480P exists as a draft
+  // tier but is not auto-selected; 768P is the finish resolution.
+  if (modelId.includes('minimax-h3-max')) return '768P';
+  // 2K is H3's only resolution — anything else is a hard 400.
+  if (modelId.includes('minimax-h3')) return '2K';
+  if (modelId.includes('veo')) return '720p';
+  if (modelId.includes('wan-2.6') || modelId.includes('wan-2.5')) return '1080p';
+  if (modelId.includes('ltx-2')) return '1080p';
+  if (modelId.includes('sora-2-pro')) return '1080p';
+  if (modelId.includes('sora-2')) return '720p';
+  return undefined;
+}
+
+/**
+ * Whether `renderVideoFile` sends `aspect_ratio` for a model. Image-to-video
+ * inherits aspect from the start image. Reference-to-video and text-to-video
+ * variants take aspect_ratio explicitly — MiniMax H3 / H3 Max t2v go further
+ * and return HTTP 400 ("aspect_ratio: Required") without it, which made loop
+ * watch mode's opening t2v take unqueueable.
+ */
+export function sendsAspectRatio(modelId: string): boolean {
+  return modelId.includes('reference-to-video')
+    || modelId.includes('text-to-video')
+    || (modelId.includes('seedance') && !modelId.includes('image-to-video'));
+}
+
 export async function renderVideoFile(
   client: VeniceClient,
   options: RenderVideoOptions,
@@ -843,29 +877,9 @@ export async function renderVideoFile(
     console.warn(`  ⚠ Resolution override ${resolutionOverride} not valid for ${effectiveModel}; using the model default.`);
   }
 
-  if (body.resolution !== undefined) {
-    // Already pinned by the override above.
-  } else if (effectiveModel.includes('seedance')) {
-    body.resolution = '720p';
-  } else if (effectiveModel.includes('minimax-h3-max')) {
-    // H3 Max / Max Turbo top out at 768P and reject 2K outright. This branch
-    // MUST stay above the `minimax-h3` one — the substring match below would
-    // otherwise pin them to 2K and 400 every render. 480P exists as a draft
-    // tier but is not auto-selected; 768P is the finish resolution.
-    body.resolution = '768P';
-  } else if (effectiveModel.includes('minimax-h3')) {
-    // 2K is H3's only resolution — anything else is a hard 400.
-    body.resolution = '2K';
-  } else if (effectiveModel.includes('veo')) {
-    body.resolution = '720p';
-  } else if (effectiveModel.includes('wan-2.6') || effectiveModel.includes('wan-2.5')) {
-    body.resolution = '1080p';
-  } else if (effectiveModel.includes('ltx-2')) {
-    body.resolution = '1080p';
-  } else if (effectiveModel.includes('sora-2-pro')) {
-    body.resolution = '1080p';
-  } else if (effectiveModel.includes('sora-2')) {
-    body.resolution = '720p';
+  if (body.resolution === undefined) {
+    const pinned = defaultRenderResolution(effectiveModel);
+    if (pinned) body.resolution = pinned;
   }
 
   // bitrate_mode: Seedance 2.5 encodes at 'high' by default — ~5-6x the
@@ -875,15 +889,7 @@ export async function renderVideoFile(
   const bitrateMode = resolveBitrateMode(effectiveModel, options.bitrateMode);
   if (bitrateMode) body.bitrate_mode = bitrateMode;
 
-  // Image-to-video inherits aspect from the start image. Reference-to-video
-  // and text-to-video variants take aspect_ratio explicitly — MiniMax H3 / H3
-  // Max t2v go further and return HTTP 400 ("aspect_ratio: Required") without
-  // it, which made loop watch mode's opening t2v take unqueueable.
-  if (
-    effectiveModel.includes('reference-to-video')
-    || effectiveModel.includes('text-to-video')
-    || (effectiveModel.includes('seedance') && !effectiveModel.includes('image-to-video'))
-  ) {
+  if (sendsAspectRatio(effectiveModel)) {
     body.aspect_ratio = options.aspectRatio ?? '16:9';
   }
 
@@ -1443,7 +1449,7 @@ function getShotVideoPath(sceneDir: string, shotId: number | string): string {
  * insert riding in its base shot's montage gets its own file. Multi-shot units
  * cut their clips by shot number.
  */
-function unitClipPaths(sceneDir: string, unit: Pick<GenerationUnit, 'unitType'>, shots: ShotScript[]): string[] {
+export function unitClipPaths(sceneDir: string, unit: Pick<GenerationUnit, 'unitType'>, shots: ShotScript[]): string[] {
   const suffixed = unit.unitType === 'single' || unit.unitType === 'montage';
   return shots.map(shot => getShotVideoPath(sceneDir, suffixed ? resolveDialogueShotId(shot) : shot.shotNumber));
 }

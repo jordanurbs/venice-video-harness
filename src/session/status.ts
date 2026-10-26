@@ -13,6 +13,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getEpisodeDir, loadEpisodeScript, loadSeries } from '../series/manager.js';
 import type { EpisodeScript, SeriesState } from 'venice-video-harness/core/series/types.js';
+import { checkPlanApproval, loadPlanProposalSync } from '../mini-drama/generation-plan-approval.js';
 
 export interface EpisodeStatus {
   episode: number;
@@ -66,6 +67,16 @@ function countMatching(dir: string, pattern: RegExp): number {
     return readdirSync(dir).filter(name => pattern.test(name)).length;
   } catch {
     return 0;
+  }
+}
+
+/** The stage when the episode's generation plan blocks `generate-videos`, else null. */
+function generationPlanBlock(series: SeriesState, script: EpisodeScript, episodeDir: string): string | null {
+  try {
+    const check = checkPlanApproval(loadPlanProposalSync(episodeDir), script, series);
+    return check.status === 'stale' ? 'approved generation plan out of date' : null;
+  } catch {
+    return 'generation plan unreadable';
   }
 }
 
@@ -127,10 +138,18 @@ function classifyEpisode(
     status.stage = 'at QA gate';
     status.nextCommand = `qa-approve ${ref}`;
   } else if (status.videoCount < status.shotCount) {
-    status.stage = status.videoCount === 0
-      ? 'ready to render'
-      : `rendering (${status.videoCount}/${status.shotCount} clips)`;
-    status.nextCommand = `generate-videos ${ref}`;
+    // Mirror generate-videos: an approved generation plan that no longer
+    // applies (or cannot be read) blocks the render until it is planned again.
+    const plan = generationPlanBlock(series, script!, episodeDir);
+    if (plan) {
+      status.stage = plan;
+      status.nextCommand = `plan-generations ${ref}`;
+    } else {
+      status.stage = status.videoCount === 0
+        ? 'ready to render'
+        : `rendering (${status.videoCount}/${status.shotCount} clips)`;
+      status.nextCommand = `generate-videos ${ref}`;
+    }
   } else if (!status.videoQaReported && !status.hasFinalCut) {
     status.stage = 'clips complete, unverified';
     status.nextCommand = `qa-videos ${ref}`;
