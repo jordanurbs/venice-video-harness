@@ -200,6 +200,12 @@ export interface VideoQueueRequest {
 export interface VideoQueueResponse {
   model: string;
   queue_id: string;
+  /**
+   * Pre-signed URL for the finished file, returned by VPS-backed models (the
+   * private Grok Imagine lanes). When present, /video/retrieve returns JSON
+   * status only; fetch this URL once the status is COMPLETED.
+   */
+  download_url?: string;
 }
 
 // ---- POST /api/v1/video/retrieve ------------------------------------------

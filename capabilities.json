@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "harnessVersion": "2.26.0",
-  "generatedAt": "2026-10-25T22:34:02-03:00",
+  "generatedAt": "2026-10-26T13:47:10-03:00",
   "videoModels": [
     {
       "id": "wan-2.6-image-to-video",
@@ -5971,7 +5971,8 @@
       "minimax-h3-reference-to-video": 9,
       "minimax-h3-max-reference-to-video": 9,
       "wan-3-0-reference-to-video": 9,
-      "wan-3-0-enhanced-reference-to-video": 9
+      "wan-3-0-enhanced-reference-to-video": 9,
+      "grok-imagine-1-5-reference-to-video-private": 7
     },
     "defaultMaxReferenceImages": 4,
     "maxPositivePromptCharsByImageModel": {

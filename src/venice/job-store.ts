@@ -35,6 +35,8 @@ export interface PendingJob {
    * hash), so a re-attached job queued from other inputs is told apart.
    */
   tag?: string;
+  /** The queue response's `download_url`, for models that deliver the file there (re-attach needs it). */
+  downloadUrl?: string;
   createdAt: string;
   /** Bumped on each successful poll so stale entries are identifiable. */
   updatedAt: string;
