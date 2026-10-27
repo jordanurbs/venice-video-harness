@@ -172,6 +172,7 @@ import {
   reviewWorkshopPlanForApproval,
   saveWorkshop,
   workshopPlanOptions,
+  workshopTokenBudget,
   type WorkshopInputs,
 } from './workshop.js';
 import { locationPlateOrder } from './reference-slots.js';
@@ -728,10 +729,12 @@ program
   .option('--no-plate-check', 'Skip the plan check (shots against their location plates, rule 64) and its automatic re-plan')
   .option('--recheck', 'Re-run the plan check on the current draft without re-drafting it', false)
   .option('--force', 'Approve even when the plan check found shots their plates cannot carry, or could not read their plates', false)
+  .option('--max-tokens <n>', "The draft's output budget, reasoning included (default: scaled from the runtime, up to the model's ceiling)")
   .action(async (opts: {
     project: string; outcome?: string; objective?: string; duration?: string; audience?: string;
     mustInclude?: string; avoid?: string; references?: string; delivery?: string; feedback?: string;
     model: string; approve: boolean; status: boolean; recheck: boolean; plateCheck: boolean; force: boolean;
+    maxTokens?: string;
   }) => {
     const series = await loadSeries(resolve(opts.project));
     if (!series) { console.error('Project not found.'); process.exit(1); }
@@ -895,11 +898,17 @@ program
     const apiKey = await getVeniceApiKey();
     const client = new VeniceClient(apiKey);
     const intelligence = intelligenceFor(series, opts.model);
+    const maxTokensOverride = opts.maxTokens === undefined ? undefined : Number(opts.maxTokens);
+    if (maxTokensOverride !== undefined && (!Number.isInteger(maxTokensOverride) || maxTokensOverride <= 0)) {
+      throw new Error(`--max-tokens must be a positive whole number, not "${opts.maxTokens}".`);
+    }
     console.log(`${existing ? 'Revising' : 'Developing'} the complete ${language.projectNounLower} workshop...`);
     console.log(`Intelligence: ${describeIntelligence(intelligence.model)}`);
+    console.log(`Output budget: ${workshopTokenBudget(inputs.targetDuration, intelligence.model, maxTokensOverride).toLocaleString('en-US')} tokens, reasoning included`);
     const draft = await generateWorkshop(client, series, inputs, intelligence.model, existing, opts.feedback, {
       planCheck: opts.plateCheck,
       visionModel: intelligence.visionModel,
+      maxTokens: maxTokensOverride,
     });
     await saveWorkshop(series, draft);
 

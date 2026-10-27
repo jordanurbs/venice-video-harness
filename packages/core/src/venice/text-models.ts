@@ -50,6 +50,12 @@ export interface TextModelSpec {
   jsonRetryProne?: boolean;
   /** Kept resolvable for existing projects, but not offered in the wizard. */
   legacy?: boolean;
+  /**
+   * The largest `max_tokens` the model takes (GET /models `maxCompletionTokens`,
+   * 2026-10-27). Reasoning tokens count against it. A long film's workshop
+   * scales its budget up to this (`workshopTokenBudget`).
+   */
+  maxOutputTokens?: number;
 }
 
 export const TEXT_MODELS: ReadonlyArray<TextModelSpec> = [
@@ -62,6 +68,7 @@ export const TEXT_MODELS: ReadonlyArray<TextModelSpec> = [
     inputUsdPerMTok: 3.75,
     outputUsdPerMTok: 18.75,
     note: 'Reads panels as well as it writes, so one model covers the whole pipeline',
+    maxOutputTokens: 131_072,
   },
   {
     id: 'zai-org-glm-5-2',
@@ -72,6 +79,7 @@ export const TEXT_MODELS: ReadonlyArray<TextModelSpec> = [
     outputUsdPerMTok: 4.4,
     note: 'Cheapest of the reasoning models, and text only. Needs a second attempt at JSON about one time in three',
     jsonRetryProne: true,
+    maxOutputTokens: 131_072,
   },
   {
     id: 'grok-4-5',
@@ -81,6 +89,7 @@ export const TEXT_MODELS: ReadonlyArray<TextModelSpec> = [
     inputUsdPerMTok: 2.27,
     outputUsdPerMTok: 6.8,
     note: 'Reads panels, and the cheapest output of the private vision models',
+    maxOutputTokens: 32_000,
   },
 
   // ---- Anonymized: routed off Venice with metadata stripped ---------------
@@ -92,6 +101,7 @@ export const TEXT_MODELS: ReadonlyArray<TextModelSpec> = [
     inputUsdPerMTok: 12,
     outputUsdPerMTok: 60,
     note: 'Tuned for narrative. The most expensive option by a wide margin',
+    maxOutputTokens: 128_000,
   },
   {
     id: 'claude-opus-5',
@@ -101,6 +111,7 @@ export const TEXT_MODELS: ReadonlyArray<TextModelSpec> = [
     inputUsdPerMTok: 6,
     outputUsdPerMTok: 30,
     note: 'Holds long structure across a full treatment',
+    maxOutputTokens: 128_000,
   },
   {
     id: 'openai-gpt-56-sol',
@@ -110,6 +121,7 @@ export const TEXT_MODELS: ReadonlyArray<TextModelSpec> = [
     inputUsdPerMTok: 6.25,
     outputUsdPerMTok: 37.5,
     note: 'Follows an exact output schema closely',
+    maxOutputTokens: 128_000,
   },
   {
     id: 'qwen-3-8-max',
@@ -119,6 +131,7 @@ export const TEXT_MODELS: ReadonlyArray<TextModelSpec> = [
     inputUsdPerMTok: 2.5,
     outputUsdPerMTok: 7.5,
     note: 'Cheapest of the anonymized models, and reads panels',
+    maxOutputTokens: 131_072,
   },
 
   // ---- Legacy -------------------------------------------------------------
@@ -131,6 +144,7 @@ export const TEXT_MODELS: ReadonlyArray<TextModelSpec> = [
     outputUsdPerMTok: 2.8,
     note: 'The pre-2.9.0 default. Cheapest overall, but neither reasons nor sees',
     legacy: true,
+    maxOutputTokens: 4_096,
   },
 ];
 

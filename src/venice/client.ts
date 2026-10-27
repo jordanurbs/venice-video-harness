@@ -13,6 +13,13 @@ const DEFAULT_BASE_URL = "https://api.venice.ai";
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 1_000; // 1 s
 const RATE_LIMIT_DELAY_MS = 250; // 250 ms between requests
+/**
+ * Chat calls with a larger budget than this stream their answer. Node's fetch
+ * gives up when no response headers arrive within 300 s, and a long
+ * non-streamed generation (a five-minute film's workshop) sends none until it
+ * is finished: three attempts, 15 minutes, then "fetch failed".
+ */
+export const STREAM_CHAT_ABOVE_TOKENS = 16_000;
 
 // ---- Custom error ---------------------------------------------------------
 
@@ -97,6 +104,39 @@ export function extractJsonBlock(raw: string): string {
 
   const end = Math.max(unfenced.lastIndexOf('}'), unfenced.lastIndexOf(']'));
   return end > start ? unfenced.slice(start, end + 1) : unfenced;
+}
+
+/**
+ * The answer text of a streamed chat completion: the `content` deltas of its
+ * server-sent events, joined. Reasoning deltas are skipped, and an `error`
+ * event throws.
+ */
+export async function readChatStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  const take = (line: string): boolean => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) return false;
+    const data = trimmed.slice(5).trim();
+    if (data === '[DONE]') return true;
+    let event: { error?: unknown; choices?: Array<{ delta?: { content?: string | null } }> };
+    try { event = JSON.parse(data); } catch { return false; }
+    if (event.error) throw new Error(describeApiError(event, 0));
+    content += event.choices?.[0]?.delta?.content ?? '';
+    return false;
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split('\n');
+    buffer = done ? '' : lines.pop() ?? '';
+    for (const line of lines) {
+      if (take(line)) { await reader.cancel().catch(() => undefined); return content; }
+    }
+    if (done) return content;
+  }
 }
 
 // ---- Deprecation header surfacing -----------------------------------------
@@ -590,14 +630,15 @@ export class VeniceClient {
 
     let lastError: Error | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const response = await this.post<{
-        choices: Array<{ message: { content: string | null } }>;
-      }>('/api/v1/chat/completions', {
+      const request = {
         model, messages, max_tokens: maxTokens, temperature,
         ...(veniceParameters ? { venice_parameters: veniceParameters } : {}),
-      });
-
-      const raw = response.choices?.[0]?.message?.content ?? '';
+      };
+      const raw = maxTokens > STREAM_CHAT_ABOVE_TOKENS
+        ? await this.postChatStream(request)
+        : (await this.post<{
+          choices: Array<{ message: { content: string | null } }>;
+        }>('/api/v1/chat/completions', request)).choices?.[0]?.message?.content ?? '';
       if (!raw.trim()) {
         lastError = new Error(
           images.length > 0
@@ -625,6 +666,58 @@ export class VeniceClient {
     }
 
     throw new Error(`${model} did not return valid JSON for the ${label} after a retry: ${lastError?.message}`);
+  }
+
+  /**
+   * A chat completion streamed back as server-sent events, returned as the
+   * answer text (the `content` deltas; reasoning deltas only keep the
+   * connection alive). Headers arrive at once and every chunk resets Node's
+   * body timeout, so a generation of any length gets through. Failures before
+   * the answer starts streaming are retried like `post`; a stream that breaks
+   * part-way throws, so a long paid generation is never re-run without the
+   * caller knowing.
+   */
+  async postChatStream(body: Record<string, unknown>): Promise<string> {
+    const path = '/api/v1/chat/completions';
+    const request = { ...body, stream: true };
+    await this.applyRateLimit();
+    const url = `${this.baseUrl}${path}`;
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      if (attempt > 0) await abortableSleep(INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1));
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
+          body: JSON.stringify(request),
+          signal: currentSignal(),
+        });
+      } catch (err) {
+        if (isAbortError(err)) throw err;
+        lastError = err instanceof Error ? err : new Error(String(err));
+        continue;
+      }
+      this.lastRequestAt = Date.now();
+      reportVeniceDeprecation(response.headers, path);
+      if (!response.ok) {
+        let errorBody: unknown;
+        try { errorBody = await response.json(); } catch { errorBody = { raw: await response.text().catch(() => '') }; }
+        const error = new VeniceRequestError(describeApiError(errorBody, response.status), response.status, errorBody);
+        if (response.status === 429 || response.status >= 500) { lastError = error; continue; }
+        throw error;
+      }
+      if (!response.body) throw new Error(`${path} returned no stream.`);
+      try {
+        return await readChatStream(response.body);
+      } catch (err) {
+        if (isAbortError(err)) throw err;
+        throw new Error(`The answer stream from ${path} broke part-way: ${(err as Error).message}`);
+      } finally {
+        this.lastRequestAt = Date.now();
+      }
+    }
+    throw lastError ?? new Error('Venice API request failed after all retries.');
   }
 
   // ---- Internals ----------------------------------------------------------

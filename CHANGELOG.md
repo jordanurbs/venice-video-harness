@@ -4,6 +4,32 @@
 
 ### Fixed
 
+- **The workshop can plan a five-minute film.** Its output budget was a fixed
+  16,000 tokens, reasoning included. kimi-k3 reasons at `max` by default, and
+  on a 4:55 film it spent the whole budget thinking and returned nothing, on
+  both attempts. The budget now scales with the target runtime (400 tokens a
+  second, never below 16,000), up to the model's own ceiling, now recorded in
+  the text-model registry (`maxOutputTokens`, from GET /models). A model the
+  registry has no ceiling for keeps 16,000. `workshop --max-tokens <n>` sets it
+  by hand, and the command prints the budget before it calls the model.
+  The same run read only the first 20,000 characters of its 46,000-character
+  treatment, so the beat sheet stopped at scene 3 of 11. A text reference is
+  now read up to 60,000 characters. With the larger budget the next run hit
+  Node's fetch limit instead: a generation that is not streamed sends no
+  response headers until it is finished, and Node gives up after 300 seconds
+  without them (three attempts, 15 minutes, then "fetch failed"). `chatJson`
+  now streams any call with a budget above 16,000 tokens
+  (`postChatStream`, `readChatStream`): headers come back at once, and each
+  chunk, reasoning included, resets the body timeout. A stream that fails
+  before it starts is retried like any request; one that breaks part-way
+  throws instead of re-running the paid generation. Venice ends a streamed
+  request after 900 seconds, and kimi-k3 writes about 70 tokens a second
+  (measured 2026-10-27), so a five-minute film's full budget doesn't fit in one
+  call. Its twin `kimi-k3-fast` is the same model, private and the same price,
+  at about 170 tokens a second. It isn't in the wizard's list, so name it and
+  its budget: `workshop --model kimi-k3-fast --max-tokens 118000`. Tests:
+  `tests/workshop-budget.test.mjs`, `tests/chat-stream.test.mjs`.
+
 - **`generate-location-references --prompt` was ignored on south, east and
   west.** The option docs say the prompt becomes the view clause for a
   derived plate, but canonical plates always used their built-in view, so a
