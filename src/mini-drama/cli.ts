@@ -3112,7 +3112,7 @@ program
   .option('--models <list>', 'Edit models, comma separated', DEFAULT_STAGE_REF_MODELS.join(','))
   .option('--face', 'The image shows a person\'s face (provenance hasFace: true)')
   .option('--no-face', 'The image shows no face (provenance hasFace: false)')
-  .option('--pick <n|model|file>', 'Make a candidate of the latest session the shot\'s staging ref (its number, its model, or an image file)')
+  .option('--pick <n|model|file>', 'Make a candidate of the latest session the shot\'s staging ref (its number, its model, or an image file). A shot with no session can pick an image file: one from another shot\'s session shares that pick (same source and view), anything else needs --use')
   .option('--session <id>', 'With --pick: a session other than the latest')
   .option('--clear', 'Remove the shot\'s staging ref (restores its mustStaySingle)')
   .option('--list', 'List the episode\'s staging refs and stage-ref sessions')

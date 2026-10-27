@@ -623,3 +623,37 @@ test('the pick says when its lane will refuse it: a face start frame on MiniMax 
   const onSeedance = await project();
   assert.deepEqual(await stageRef.stagingLaneNotes(onSeedance.series, onSeedance.shot(8, { stagingRef: plateRef }), 1), []);
 });
+
+test('one picked plate can be shared: a shot with no session picks another shot\'s candidate by file', async () => {
+  const { dir, series, script, shot } = await project();
+  script.shots.push(shot(10, { location: 'somewhere-else' }));
+  const client = { async postBinary() { return edited(320, 180); } };
+  await stageRef.runStageRef(client, series, script, { episode: 1, shot: '7', fromPlate: 'north', prompt: 'Frost the window.' });
+  const first = await stageRef.pickStagingRef(series, script, '7', '1');
+  const file = join(dir, first.ref.path);
+
+  // Shot 9 has no session of its own: the file's session gives source, use, view and prompt, at no cost.
+  await assert.rejects(stageRef.pickStagingRef(series, script, '9', '1'), /no stage-ref session yet/);
+  const shared = await stageRef.pickStagingRef(series, script, '9', file);
+  assert.equal(shared.ref.use, 'plate');
+  assert.equal(shared.ref.replacesView, 'north');
+  assert.equal(shared.ref.model, 'gpt-image-2-edit', 'keeps the model that made it');
+  assert.equal(shared.ref.prompt, 'Frost the window.');
+  assert.equal(shared.ref.sha256, first.ref.sha256, 'the same image');
+  assert.notEqual(shared.ref.path, first.ref.path, 'copied into shot 9\'s own session');
+  assert.match(shared.session.sourceNote, /shared with shot 7/);
+  assert.equal(stageRef.findShot(script, '9').mustStaySingle, true);
+  const provenance = JSON.parse(readFileSync(join(dir, shared.ref.path.replace(/\.png$/, '.provenance.json')), 'utf-8'));
+  assert.equal(provenance.hasFace, false);
+
+  // A plate of another location is refused unless the view is named.
+  await assert.rejects(stageRef.pickStagingRef(series, script, '10', file), /not shot 10's/);
+  // A file from outside any session needs its use.
+  const hand = join(dir, 'outside.png');
+  writeFileSync(hand, await png(320, 180, '#101010'));
+  await assert.rejects(stageRef.pickStagingRef(series, script, '8', hand), /say how it is used/);
+  await assert.rejects(stageRef.pickStagingRef(series, script, '8', hand, { use: 'plate' }), /needs the view it replaces/);
+  const free = await stageRef.pickStagingRef(series, script, '8', hand, { use: 'plate', replacesView: 'south' });
+  assert.equal(free.ref.replacesView, 'south');
+  assert.equal(free.ref.model, 'manual');
+});
