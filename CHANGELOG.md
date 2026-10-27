@@ -14,7 +14,16 @@
   by hand, and the command prints the budget before it calls the model.
   The same run read only the first 20,000 characters of its 46,000-character
   treatment, so the beat sheet stopped at scene 3 of 11. A text reference is
-  now read up to 60,000 characters. Test: `tests/workshop-budget.test.mjs`.
+  now read up to 60,000 characters. With the larger budget the next run hit
+  Node's fetch limit instead: a generation that is not streamed sends no
+  response headers until it is finished, and Node gives up after 300 seconds
+  without them (three attempts, 15 minutes, then "fetch failed"). `chatJson`
+  now streams any call with a budget above 16,000 tokens
+  (`postChatStream`, `readChatStream`): headers come back at once, and each
+  chunk, reasoning included, resets the body timeout. A stream that fails
+  before it starts is retried like any request; one that breaks part-way
+  throws instead of re-running the paid generation. Tests:
+  `tests/workshop-budget.test.mjs`, `tests/chat-stream.test.mjs`.
 
 - **`generate-location-references --prompt` was ignored on south, east and
   west.** The option docs say the prompt becomes the view clause for a
