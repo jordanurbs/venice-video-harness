@@ -600,13 +600,17 @@ export async function pickStagingRef(
   if (options.use && options.use !== 'plate' && options.use !== 'start-frame') throw new Error('--use is plate or start-frame.');
   if (options.replacesView && !VIEWS.includes(options.replacesView)) throw new Error(`--replaces is north, east, south or west (got "${options.replacesView}").`);
   const sessions = listStageSessions(series, script.episode, idOf(shot));
-  const entry = options.session
+  let entry = options.session
     ? sessions.find(item => item.session.id === options.session)
     : sessions[sessions.length - 1];
+  if (!entry && !options.session) {
+    const file = [resolve(pick), projectPath(series, pick)].find(path => existsSync(path) && statSync(path).isFile());
+    if (file) entry = await sessionForSharedPick(series, script, shot, file, options);
+  }
   if (!entry) {
     throw new Error(options.session
       ? `No stage-ref session ${options.session} for shot ${idOf(shot)}.`
-      : `Shot ${idOf(shot)} has no stage-ref session yet. Run stage-ref with a source and a prompt first.`);
+      : `Shot ${idOf(shot)} has no stage-ref session yet. Run stage-ref with a source and a prompt first, or pick an image file.`);
   }
   const { session, dir } = entry;
 
@@ -651,6 +655,54 @@ export async function pickStagingRef(
 }
 
 /**
+ * A session for a shot that picks an image file without editing one of its
+ * own: the same picked plate on several shots (six tray shots that share one
+ * frosted window), or an image made outside the harness. A file from another
+ * shot's session takes that session's source, use, view and prompt, so the
+ * pick reads like the other shot's; it must stand on the same location to be
+ * a plate for that view. Any other file needs `use` (and `replacesView` for a
+ * plate). Nothing is generated or billed.
+ */
+async function sessionForSharedPick(
+  series: SeriesState,
+  script: EpisodeScript,
+  shot: ShotScript,
+  file: string,
+  options: { use?: StagingUse; replacesView?: PlateView },
+): Promise<{ dir: string; session: StageSession }> {
+  const origin = readStageSession(join(file, '..'));
+  const originShot = origin ? findShot(script, origin.shot) : undefined;
+  const use = options.use ?? origin?.use;
+  if (!use) throw new Error(`Shot ${idOf(shot)} has no stage-ref session yet. To pick an image made elsewhere, say how it is used: --use plate --replaces <view>, or --use start-frame.`);
+  const replacesView = use === 'plate' ? (options.replacesView ?? origin?.replacesView) : undefined;
+  if (use === 'plate' && !replacesView) throw new Error(`A plate picked from a file needs the view it replaces: --replaces north|east|south|west.`);
+  if (use === 'plate' && origin && originShot && originShot.location !== shot.location && !options.replacesView) {
+    throw new Error(`${basename(file)} is a plate of shot ${origin.shot}'s location (${originShot.location ?? 'none'}), not shot ${idOf(shot)}'s (${shot.location ?? 'none'}). Pass --replaces to use it here anyway.`);
+  }
+  let id = sessionId();
+  const root = stagingDir(series, script.episode, idOf(shot));
+  for (let n = 2; existsSync(join(root, id)); n++) id = `${sessionId()}-${n}`;
+  const dir = join(root, id);
+  await mkdir(dir, { recursive: true });
+  const session: StageSession = {
+    id,
+    episode: script.episode,
+    shot: idOf(shot),
+    use,
+    source: origin ? origin.source : projectRelative(series, file),
+    sourceNote: origin ? `${origin.sourceNote} (shared with shot ${origin.shot})` : `an image picked by hand (${basename(file)})`,
+    ...(replacesView ? { replacesView } : {}),
+    refs: origin?.refs ?? [],
+    prompt: origin?.prompt ?? '',
+    ...(origin?.hasFace === undefined ? {} : { hasFace: origin.hasFace }),
+    candidates: [],
+    createdAt: new Date().toISOString(),
+  };
+  await writeSession(series, dir, session);
+  return { dir, session };
+}
+
+/**
  * Add an image a person made some other way to the session, as a PNG: a PNG
  * is copied, anything else is converted (its sidecars, `.recipe.json` and
  * `.provenance.json`, are named after png/jpg/jpeg/webp files only, and a
@@ -678,7 +730,9 @@ async function addHandPick(series: SeriesState, session: StageSession, dir: stri
     label: `stage-ref: picked by hand for shot ${shotId} (from ${basename(file)})`,
     extra: { stageRef: { session: projectRelative(series, dir), shot: shotId, use: session.use, from: file } },
   });
-  const candidate: StageCandidate = { index, model: 'manual', path: projectRelative(series, out), sha256: sha256Of(out) };
+  // A candidate from another shot's session keeps the model that made it.
+  const origin = readStageSession(join(file, '..'))?.candidates.find(item => item.path && sameFile(projectPath(series, item.path), file));
+  const candidate: StageCandidate = { index, model: origin?.model ?? 'manual', path: projectRelative(series, out), sha256: sha256Of(out) };
   session.candidates.push(candidate);
   return candidate;
 }

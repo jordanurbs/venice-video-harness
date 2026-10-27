@@ -270,6 +270,14 @@
 
 ### Added
 
+- **One staging pick on several shots (`stage-ref --pick <file>`).** A pick had to come from the
+  shot's own stage-ref session, so six shots on one plate (a counter whose window is frosted by one
+  edit) needed six paid edits, each a little different. A shot with no session can now pick an image
+  file. A candidate from another shot's session shares that pick: the same image, source, view, prompt
+  and model, copied into the shot's own session, and nothing billed. It's refused when the other shot
+  stands on another location, unless `--replaces` names the view. Any other file needs `--use` (and
+  `--replaces` for a plate). Test: `tests/stage-ref.test.mjs`.
+
 - **Seedance 2.5 R2V Enhanced (`seedance-2-5-enhanced-reference-to-video`).**
   Like 2.0 Enhanced, it is missing from `GET /models` but works on quote and
   queue. The 2026-10-25 quote probe showed the same 4-30s ladder as 2.5 R2V,
