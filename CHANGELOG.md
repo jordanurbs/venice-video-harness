@@ -22,7 +22,12 @@
   (`postChatStream`, `readChatStream`): headers come back at once, and each
   chunk, reasoning included, resets the body timeout. A stream that fails
   before it starts is retried like any request; one that breaks part-way
-  throws instead of re-running the paid generation. Tests:
+  throws instead of re-running the paid generation. Venice ends a streamed
+  request after 900 seconds, and kimi-k3 writes about 70 tokens a second
+  (measured 2026-10-27), so a five-minute film's full budget doesn't fit in one
+  call. Its twin `kimi-k3-fast` is the same model, private and the same price,
+  at about 170 tokens a second. It isn't in the wizard's list, so name it and
+  its budget: `workshop --model kimi-k3-fast --max-tokens 118000`. Tests:
   `tests/workshop-budget.test.mjs`, `tests/chat-stream.test.mjs`.
 
 - **`generate-location-references --prompt` was ignored on south, east and
