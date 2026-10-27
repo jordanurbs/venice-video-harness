@@ -4338,7 +4338,7 @@ program
         const unit = generationPlan.units[index];
         return `${unit.unitId} (shots ${unitShots[index].map(shotIdOf).join(', ')}, ${unit.duration})`;
       }).join('; ')}`);
-      archiveRetakeUnits(sceneDir, script.shots, generationPlan, retakeUnits);
+      archiveRetakeUnits(sceneDir, script.shots, generationPlan, retakeUnits, series);
       console.log('');
     }
 

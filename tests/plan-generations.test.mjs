@@ -21,6 +21,7 @@ import {
   buildGenerationPlan, buildGenerationPlanFromGroups, resolveUnitShots, retakeTokensForUnit, unitIndicesForShotIds,
 } from '../dist/mini-drama/generation-planner.js';
 import { montageBlockReason } from '../dist/mini-drama/montage.js';
+import { assertShotDurationsValid } from '../dist/mini-drama/video-generator.js';
 import { vehicleKinds } from '../dist/mini-drama/plan-check.js';
 import { buildMontagePrompt } from '../dist/mini-drama/prompt-builder.js';
 import { inFlightOutsidePlan } from '../dist/mini-drama/in-flight.js';
@@ -496,6 +497,33 @@ test('the audit flags a carry across a cut between generations, quotes each unit
     const text = describeGenerationPlan({ plan, audits }, { project: dir, episode: 1 }).join('\n');
     assert.match(text, /on disk: every clip, but no montage-s03-004-005\.mp4: generate-videos keeps the cuts and bills nothing, and qa-videos checks the unit from its clips\. To render shots 4, 5 again as one generation: generate-videos -p .* -e 1 --retake 4,5/);
     assert.match(text, /Quoted: \$\d+\.\d\d for the units that would render \(\$2\.90 more for units already on disk, if re-taken\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a single shorter than its model renders is found before any spend: in the audit and the duration preflight, through the lane hint', async () => {
+  const { dir, series, script } = fixture();
+  try {
+    // Shot 3 renders alone (a staged plate pick) at 3 s; Seedance 2.5 renders 4-30 s. Its unit's model is the
+    // shot's lane hint ("action"), which the registry does not know: the preflight used to skip it, and the 400
+    // came back from the queue in the middle of a paid run.
+    const shots = script.shots.map(s => (s.shotNumber === 3 ? { ...s, duration: '3s', stagingRef: staged('plate') } : s));
+    const plan = buildGenerationPlan({ ...script, shots }, series);
+    const single = plan.units.find(u => u.shotNumbers.includes(3));
+    assert.equal(single.unitType, 'single');
+    assert.equal(single.model, 'action');
+
+    const audits = await auditPlan(series, shots, plan, buildContinuityLedger(series, shots), { quote: async () => undefined });
+    assert.match(audits.find(a => a.shots.includes('3')).findings[0], /^cannot render: Duration 3s is not supported by seedance-2-5-reference-to-video .*; try 4s$/);
+    assert.ok(audits.filter(a => !a.shots.includes('3')).every(a => !a.findings.some(f => f.startsWith('cannot render'))));
+
+    assert.throws(() => assertShotDurationsValid(shots, plan, series),
+      /shot 3: duration "3s" \(3s\) is shorter than model "seedance-2-5-reference-to-video" renders \(4s at least\)\. Make it 4s, or render it inside a unit with its neighbours\./);
+    // Without the project there is nothing to resolve the hint with: the old behaviour, no throw.
+    assert.doesNotThrow(() => assertShotDurationsValid(shots, plan));
+    const fixed = shots.map(s => (s.shotNumber === 3 ? { ...s, duration: '4s' } : s));
+    assert.doesNotThrow(() => assertShotDurationsValid(fixed, buildGenerationPlan({ ...script, shots: fixed }, series), series));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

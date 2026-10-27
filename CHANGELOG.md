@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- **A single shot shorter than its model renders is caught before any spend.**
+  A single's unit carries the shot's lane hint (`seedance`, `action`) as its
+  model, which the registry doesn't know, so the duration preflight skipped
+  it. A 3 s staged single then reached Seedance 2.5 (4-30 s) as a queue 400 in
+  the middle of a paid run, and the error stopped the run with ten units
+  still to render. The preflight now resolves a single's model the way the
+  renderer does, and says how to fix a shot that is too short ("Make it 4s,
+  or render it inside a unit with its neighbours"). `plan-generations` lists
+  such a unit as "cannot render" instead of leaving its quote blank. Test:
+  `tests/plan-generations.test.mjs`.
+
 - **`generate-location-references --prompt` was ignored on south, east and
   west.** The option docs say the prompt becomes the view clause for a
   derived plate, but canonical plates always used their built-in view, so a
