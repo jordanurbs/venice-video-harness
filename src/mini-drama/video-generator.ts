@@ -1620,8 +1620,8 @@ export function archiveUnitOutputs(
  * duration preflight runs first, so a run that would stop before rendering
  * leaves every clip where it was. Returns the archived paths.
  */
-export function archiveRetakeUnits(sceneDir: string, shots: ShotScript[], plan: GenerationPlan, indices: number[]): string[] {
-  assertShotDurationsValid(shots, plan);
+export function archiveRetakeUnits(sceneDir: string, shots: ShotScript[], plan: GenerationPlan, indices: number[], series?: SeriesState): string[] {
+  assertShotDurationsValid(shots, plan, series);
   const unitShots = resolveUnitShots(plan, shots);
   return indices.flatMap(index => archiveUnitOutputs(sceneDir, plan.units[index], unitShots[index]));
 }
@@ -2560,6 +2560,7 @@ export interface GenerateEpisodeVideosResult {
 export function assertShotDurationsValid(
   shots: ShotScript[],
   plan: GenerationPlan,
+  series?: SeriesState,
 ): void {
   type Violation = {
     shotNumber: number;
@@ -2573,17 +2574,15 @@ export function assertShotDurationsValid(
 
   const shotById = new Map(shots.map(s => [s.shotNumber, s]));
   for (const unit of plan.units) {
-    const model = unit.model;
-    const modelSpec = getVideoModel(model);
-    if (!modelSpec) {
-      // Unknown model — registry may be stale. Don't block; the API will
-      // surface the real error if the model is actually missing.
-      continue;
-    }
     // Montage units render as ONE generation: per-shot durations are beat
     // windows inside it, not renderable clips, so only the unit's total
     // duration is validated against the model ladder.
     if (unit.unitType === 'montage') {
+      const model = unit.model;
+      const modelSpec = getVideoModel(model);
+      // Unknown model — registry may be stale. Don't block; the API will
+      // surface the real error if the model is actually missing.
+      if (!modelSpec) continue;
       const unitSec = parseShotDuration(unit.duration);
       if (unitSec > modelSpec.maxDurationSec || !modelSpec.durations.includes(unit.duration)) {
         violations.push({
@@ -2600,6 +2599,13 @@ export function assertShotDurationsValid(
     for (const shotNum of unit.shotNumbers) {
       const shot = shotById.get(shotNum);
       if (!shot) continue;
+      // A single renders on the model resolveVideoModel picks for its shot.
+      // Its unit.model is the shot's lane hint ("seedance", "atmosphere"),
+      // which the registry does not know, so checking that skipped the shot
+      // and a 3 s single reached Seedance 2.5 (4-30 s) as a queue 400.
+      const model = series && unit.unitType === 'single' ? resolveVideoModel(shot, series).modelId : unit.model;
+      const modelSpec = getVideoModel(model);
+      if (!modelSpec) continue;
       const requestedSec = parseShotDuration(shot.duration);
       if (!Number.isFinite(requestedSec) || requestedSec <= 0) continue;
       if (requestedSec > modelSpec.maxDurationSec) {
@@ -2635,9 +2641,17 @@ export function assertShotDurationsValid(
   }
 
   if (violations.length === 0) return;
-  const lines = violations.map(v =>
-    `  shot ${v.shotNumber}: duration "${v.duration}" (${v.durationSec}s) exceeds model "${v.model}" ceiling ${v.maxSec}s (allowed: ${v.allowed.join(', ') || '<none>'})`,
-  );
+  const lines = violations.map(v => {
+    const allowed = v.allowed.join(', ') || '<none>';
+    if (v.durationSec > v.maxSec) {
+      return `  shot ${v.shotNumber}: duration "${v.duration}" (${v.durationSec}s) exceeds model "${v.model}" ceiling ${v.maxSec}s (allowed: ${allowed})`;
+    }
+    const shortest = v.allowed.map(d => parseInt(d, 10)).filter(Number.isFinite).sort((a, b) => a - b)[0];
+    if (shortest !== undefined && v.durationSec < shortest) {
+      return `  shot ${v.shotNumber}: duration "${v.duration}" (${v.durationSec}s) is shorter than model "${v.model}" renders (${shortest}s at least). Make it ${shortest}s, or render it inside a unit with its neighbours.`;
+    }
+    return `  shot ${v.shotNumber}: duration "${v.duration}" (${v.durationSec}s) is not one model "${v.model}" renders (allowed: ${allowed})`;
+  });
   throw new Error(
     `Shot duration preflight failed for ${violations.length} shot(s):\n${lines.join('\n')}\n` +
     `Edit script.json and re-run, or update the model registry in packages/core/src/venice/models.ts if the ceiling has changed.`,
@@ -2691,7 +2705,7 @@ export async function generateEpisodeVideos(
   options: GenerateEpisodeVideosOptions = {},
 ): Promise<GenerateEpisodeVideosResult> {
   // Fail fast on duration / model mismatches before any Venice queue call.
-  assertShotDurationsValid(shots, plan);
+  assertShotDurationsValid(shots, plan, series);
 
   const requested = options.concurrency ?? DEFAULT_RENDER_CONCURRENCY;
   if (!Number.isInteger(requested) || requested < 1) {

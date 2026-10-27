@@ -46,7 +46,7 @@ import {
   resolveMontageModel,
   resolveMontageReferenceViews,
 } from 'venice-video-harness/core/series/types.js';
-import { faceCapableTwinId, getVideoModel } from 'venice-video-harness/core/venice/models.js';
+import { faceCapableTwinId, getVideoModel, validateVideoRequest } from 'venice-video-harness/core/venice/models.js';
 import type { VideoQuoteRequest } from 'venice-video-harness/core/venice/types.js';
 import { VeniceRequestError, type VeniceClient } from '../venice/client.js';
 import { isAbortError } from '../venice/operation-context.js';
@@ -626,6 +626,10 @@ export async function auditPlan(
     try {
       ({ model, slots } = unitModelAndSlots(series, unit, members));
       findings = describePlanFindings(checkShotPlan({ shots: members, locations, cast }).filter(finding => finding.kind !== 'no-plate-view'));
+      // A unit its model cannot render (a 3 s single on a 4-30 s model) gets
+      // no quote, so say why instead of leaving the price blank.
+      const duration = validateVideoRequest(model, { duration: unit.duration }).find(issue => issue.field === 'duration');
+      if (duration) findings.unshift(`cannot render: ${duration.message}`);
     } catch (err) {
       findings = [`the audit could not read this unit: ${firstLine(err)}`];
     }
