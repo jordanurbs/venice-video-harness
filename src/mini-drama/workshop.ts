@@ -10,7 +10,7 @@ import type { Character, EpisodeScript, Location, SeriesState } from 'venice-vid
 import { isObjectCastMember } from 'venice-video-harness/core/series/types.js';
 import { addEpisode, getCharacterDir, getLocationDir, saveEpisodeScript, saveSeries } from '../series/manager.js';
 import { getProjectLanguage } from 'venice-video-harness/core/series/project-language.js';
-import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence, resolveIntelligence } from 'venice-video-harness/core/venice/text-models.js';
+import { DEFAULT_INTELLIGENCE_MODEL, describeIntelligence, getTextModel, resolveIntelligence } from 'venice-video-harness/core/venice/text-models.js';
 import { checkShotPlan, describePlanFindings, type PlanCast, type PlanFinding, type PlanLocation, type PlanShot } from './plan-check.js';
 import { plateMisfitMessage, plateUncheckedMessage, type PlateReader, type PlateReadReport } from './plate-read.js';
 
@@ -39,7 +39,54 @@ const IMAGE_REFERENCE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.
 const VIDEO_REFERENCE_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv']);
 const AUDIO_REFERENCE_EXTENSIONS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg']);
 const MAX_REFERENCE_FILES = 100;
-const MAX_TEXT_CHARS_PER_FILE = 20_000;
+// A full treatment runs 40-50k characters; at 20k its beat sheet was cut off
+// mid-scene, and the workshop planned a film from its first act.
+export const MAX_TEXT_CHARS_PER_FILE = 60_000;
+
+/** The workshop's output budget before it scales with the runtime (the old fixed budget). */
+export const WORKSHOP_MIN_TOKENS = 16_000;
+/** Output tokens per second of planned runtime: the shot script, plus the reasoning that writes it. */
+const WORKSHOP_TOKENS_PER_SECOND = 400;
+
+/**
+ * Seconds in a target runtime as people write it: "4 minutes 55 seconds",
+ * "90 seconds", "8 min", "4:55", "2m30s", "1.5 minutes", "300s". Null when no
+ * length can be read.
+ */
+export function parseRuntimeSeconds(text: string | undefined): number | null {
+  if (!text) return null;
+  const value = text.toLowerCase();
+  const clock = value.match(/(?:^|[^\d])(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)/);
+  if (clock) {
+    const [a, b, c] = [Number(clock[1]), Number(clock[2]), clock[3] ? Number(clock[3]) : null];
+    return c === null ? a * 60 + b : a * 3600 + b * 60 + c;
+  }
+  let seconds = 0;
+  let found = false;
+  for (const match of value.matchAll(/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])/g)) {
+    const amount = Number(match[1]);
+    const unit = match[2];
+    seconds += unit.startsWith('h') ? amount * 3600 : unit.startsWith('m') ? amount * 60 : amount;
+    found = true;
+  }
+  return found ? Math.round(seconds) : null;
+}
+
+/**
+ * The workshop's `max_tokens`. A reasoning model spends part of the budget
+ * thinking, and the shot script grows with the runtime: a five-minute film at
+ * the old fixed 16k came back empty (kimi-k3, 2026-10-27). The budget scales
+ * with the target runtime up to the model's own ceiling, never below the old
+ * 16k, and stays at 16k for a model the registry has no ceiling for.
+ * `override` (workshop --max-tokens) wins.
+ */
+export function workshopTokenBudget(targetDuration: string | undefined, model: string, override?: number): number {
+  if (override && override > 0) return Math.round(override);
+  const ceiling = getTextModel(model)?.maxOutputTokens;
+  const seconds = parseRuntimeSeconds(targetDuration);
+  if (!ceiling || !seconds) return WORKSHOP_MIN_TOKENS;
+  return Math.max(WORKSHOP_MIN_TOKENS, Math.min(seconds * WORKSHOP_TOKENS_PER_SECOND, ceiling));
+}
 
 export function normalizeDroppedPath(value: string): string {
   let normalized = value.trim();
@@ -426,6 +473,8 @@ export interface WorkshopOptions {
   plateInventory?: (location: Location) => PlanLocation['inventory'] | undefined;
   /** The re-plan instruction for blocking shots (how a library makes new places, for example). */
   replanAdvice?: string;
+  /** The draft's `max_tokens`, in place of the budget scaled from the runtime (`workshopTokenBudget`). */
+  maxTokens?: number;
 }
 
 type WorkshopPlanProvider = (series: SeriesState) => WorkshopOptions;
@@ -624,12 +673,13 @@ export async function generateWorkshop(
   const options = workshopPlanOptions(series, callerOptions);
   const revision = (previous?.revision ?? 0) + 1;
   const history = [...(previous?.feedbackHistory ?? []), ...(feedback ? [feedback] : [])];
+  const maxTokens = workshopTokenBudget(inputs.targetDuration, model, options.maxTokens);
   const develop = async (base: WorkshopDraft | null | undefined, note: string | undefined): Promise<WorkshopDraft> => {
     const parsed = await client.chatJson<WorkshopDraft>({
       model,
       systemPrompt: buildWorkshopSystemPrompt(series),
       userPrompt: buildWorkshopUserPrompt(series, inputs, base, note),
-      maxTokens: 16_000,
+      maxTokens,
       temperature: 0.65,
       label: 'workshop',
     });
