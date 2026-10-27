@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- **`plan-generations` no longer splits off every short shot.** The packaging
+  agent's brief said "a single shot shorter than 4 s renders alone", meant for
+  a unit of one shot. The agent read it as every shot under 4 s, and planned a
+  3 s shot in the middle of a continuous scene as a generation of its own, so
+  the people around it were drawn three times. The brief now says a short shot
+  is no reason to split and sits inside a longer unit like any other. Found on
+  a 48-shot film (a café-table insert between two wellhead shots). Test:
+  `tests/plan-generations.test.mjs`.
+
 - **`generate-location-references --prompt` was ignored on south, east and
   west.** The option docs say the prompt becomes the view clause for a
   derived plate, but canonical plates always used their built-in view, so a
