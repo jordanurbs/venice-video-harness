@@ -1184,6 +1184,7 @@ program
   .option('--wardrobe <wardrobe>', 'Default wardrobe', 'stylish contextual attire')
   .option('--voice-desc <voiceDesc>', 'Voice description (pitch, timbre, accent, cadence)')
   .option('--base-traits <traits>', 'Custom base traits override (e.g. "tabby cat, feline, four legs")')
+  .option('--face-hidden', "The face is never shown (an unseen figure): sheets from behind and in shadow, and every prompt keeps the face out of frame", false)
   .option('--skip-images', 'Skip reference image generation', false)
   // Override-prompt path: read positive / negative prompts (and optionally
   // model / cfg / aspect) from a JSON file and use them verbatim, bypassing
@@ -1207,7 +1208,7 @@ program
   .option('--prompt <text>', 'Inline positive-prompt override applied verbatim to every angle in this run (per-angle control: --override-prompt). Pair with --angles to retake one angle with a custom prompt.')
   .action(async (opts: {
     project: string; name: string; gender: string; age: string;
-    description?: string; wardrobe: string; voiceDesc?: string; baseTraits?: string; skipImages: boolean;
+    description?: string; wardrobe: string; voiceDesc?: string; baseTraits?: string; faceHidden: boolean; skipImages: boolean;
     overridePrompt?: string; angles?: string; prompt?: string;
   }) => {
     const series = await loadSeries(resolve(opts.project));
@@ -1232,6 +1233,7 @@ program
       wardrobe: opts.wardrobe,
       voiceDescription,
       ...(opts.baseTraits ? { baseTraits: opts.baseTraits } : {}),
+      ...(opts.faceHidden ? { faceHidden: true } : {}),
       locked: false,
       seed,
     };
