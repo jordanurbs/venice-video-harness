@@ -352,6 +352,10 @@ test('the agent\'s plan is used when valid: units, reasons, splits and a shot no
     assert.match(calls[0].systemPrompt, /3 of 3 takes, against 0 of 4/);
     assert.match(calls[0].systemPrompt, /Never write commentary about plates, references, units or this plan in a shotNote/);
     assert.match(calls[0].systemPrompt, /"13b" is a shot inserted after 13/);
+    // A short shot is no reason to split: "a single shot shorter than 4 s renders alone" read as "every short shot
+    // renders alone", and a 3 s shot in a continuous scene was planned as its own generation (off-the-record shot 25).
+    assert.match(calls[0].systemPrompt, /shorter than \d+ s is no reason to split: it sits inside a longer unit/);
+    assert.doesNotMatch(calls[0].systemPrompt, /shorter than \d+ s renders alone/);
     assert.match(calls[0].userPrompt, /"stateChange": "pulls away"/);
     const planning = result.plan.planning;
     assert.equal(planning.by, 'agent');
