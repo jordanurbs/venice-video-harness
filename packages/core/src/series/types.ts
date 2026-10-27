@@ -558,8 +558,27 @@ export interface Character {
    * set this for one whose traits say otherwise. See `isObjectCastMember`.
    */
   prop?: boolean;
+  /**
+   * The person's face is never shown (a figure who is only ever a back, a
+   * reflection or a shape). Their reference sheets are drawn from behind and
+   * in shadow, with the face in the negative prompt, and their reference slot
+   * asks the video model for build, hair and wardrobe and to keep the face out
+   * of frame. A sheet with a face on it would hand the model that face. The
+   * sheet file names stay the same, so reference slots work unchanged.
+   */
+  faceHidden?: boolean;
   locked: boolean;
   seed: number;
+}
+
+/** A person whose face is never shown (`faceHidden`). Object cast members don't count: they have no face. */
+export function isFaceHidden(character: Pick<Character, 'faceHidden' | 'prop' | 'baseTraits'>): boolean {
+  return character.faceHidden === true && !isObjectCastMember(character);
+}
+
+/** The direction every panel and video prompt carries for a face-hidden person. */
+export function faceHiddenDirection(name: string): string {
+  return `${name}'s face is never shown: keep ${name} turned away from the camera, backlit, reflected, out of focus or cropped at the jaw; never a frontal view of the face`;
 }
 
 /**

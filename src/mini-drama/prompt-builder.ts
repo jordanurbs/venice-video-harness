@@ -21,7 +21,9 @@ import {
   MODELS_LIP_SYNC_VIA_REFERENCE_AUDIO,
   MODELS_USING_IMAGE_TAGS,
   DEFAULT_CHARACTER_CONSISTENCY_MODEL,
+  faceHiddenDirection,
   getMaxReferenceImages,
+  isFaceHidden,
   isObjectCastMember,
   resolveMontageGrammar,
   resolveMontageReferenceViews,
@@ -145,7 +147,7 @@ const CAMERA_TERMS: Record<string, string> = {
 
 function getCharacterPromptText(char: MiniDramaCharacter): string {
   const baseTraits = char.baseTraits ?? (char.gender === 'female' ? FEMALE_BASE_TRAITS : MALE_BASE_TRAITS);
-  return `${char.name} (${baseTraits}): ${char.fullDescription}`;
+  return `${char.name} (${baseTraits}): ${char.fullDescription}${isFaceHidden(char) ? `; ${faceHiddenDirection(char.name)}` : ''}`;
 }
 
 function buildAestheticString(aesthetic: AestheticProfile): string {
@@ -457,7 +459,7 @@ function buildCharacterAnchorText(characters: MiniDramaCharacter[]): string {
 
   const anchors = characters.map(char => {
     const baseTraits = char.baseTraits ?? (char.gender === 'female' ? FEMALE_BASE_TRAITS : MALE_BASE_TRAITS);
-    return `${char.name}: ${baseTraits}, ${char.fullDescription}, wearing ${char.wardrobe}`;
+    return `${char.name}: ${baseTraits}, ${char.fullDescription}, wearing ${char.wardrobe}${isFaceHidden(char) ? `; ${faceHiddenDirection(char.name)}` : ''}`;
   });
 
   return `Core subjects: ${anchors.join('; ')}.`;
@@ -1007,7 +1009,7 @@ export function buildMontagePrompt(
       continue;
     }
     const wardrobe = wardrobeByChar.get(char.name.toUpperCase()) ?? char.wardrobe;
-    parts.push(`@Image${slot.elementIndex} is ${char.name} — wearing ${wardrobe}. Wardrobe locked, identical in every beat.`);
+    parts.push(`@Image${slot.elementIndex} is ${char.name} — wearing ${wardrobe}. Wardrobe locked, identical in every beat.${isFaceHidden(char) ? ` ${faceHiddenDirection(char.name)}.` : ''}`);
   }
   for (const slot of plan.slots) {
     if (slot.kind === 'character-primary') continue;
@@ -1333,7 +1335,7 @@ function buildShotListMontagePrompt(
       continue;
     }
     const wardrobe = (wardrobeByChar.get(char.name.toUpperCase()) ?? char.wardrobe ?? '').trim().replace(/\.+$/, '');
-    references.push(`@Image${slot.imageIndex} is ${char.name} — wearing ${wardrobe}. Wardrobe locked, identical in every shot.`);
+    references.push(`@Image${slot.imageIndex} is ${char.name} — wearing ${wardrobe}. Wardrobe locked, identical in every shot.${isFaceHidden(char) ? ` ${faceHiddenDirection(char.name)}.` : ''}`);
   }
   if (references.length > 0) parts.push('References, in the order they first appear:', ...references);
 
@@ -1906,7 +1908,18 @@ export function buildCharacterReferencePromptParts(
     'profile': 'product photograph of a single object, side view at 90 degrees, studio lighting, plain neutral background, nothing else in frame',
     'full-body': 'product photograph of a single object, full view showing the entire object, studio lighting, plain neutral background, nothing else in frame',
   };
-  const anglePrompts = isObject ? objectAnglePrompts : personAnglePrompts;
+  // A face-hidden person (an unseen figure) is drawn from behind and in
+  // shadow: a sheet with a face on it hands the video model that face. The
+  // file names stay front/three-quarter/profile/full-body so every reference
+  // slot reads them unchanged.
+  const faceHidden = isFaceHidden(char);
+  const faceHiddenAnglePrompts: Record<string, string> = {
+    'front': 'seen from directly behind, back to the camera, the back of the head, neck and shoulders, face not visible, centered, studio lighting, neutral background',
+    'three-quarter': 'three-quarter rear view, 45 degrees from behind, head turned away from the camera, face not visible, studio lighting, neutral background',
+    'profile': 'side profile in deep shadow, the face an unlit dark silhouette with no readable features, rim light on the shoulders, neutral background',
+    'full-body': 'full body from behind, head to toe, standing, back to the camera, face not visible, studio lighting, neutral background',
+  };
+  const anglePrompts = isObject ? objectAnglePrompts : faceHidden ? faceHiddenAnglePrompts : personAnglePrompts;
 
   // IDENTITY OUTRANKS STYLE (2026-08-11). The old order put the style cue
   // first and greedily appended until the cap; a long authored aesthetic
@@ -1969,8 +1982,10 @@ export function buildCharacterReferencePromptParts(
       ? false
       : !isPhotorealAesthetic(aesthetic);
 
+  // The face guard holds whatever the strategy: it is about who the sheet shows, not the rendering family.
+  const faceGuard = faceHidden ? ['face', 'eyes', 'looking at camera', 'frontal portrait', 'visible facial features'] : [];
   if (strategy === 'none') {
-    return { positive, negativeAdditions: [] };
+    return { positive, negativeAdditions: faceGuard };
   }
 
   const antiPhotorealParts = wantsAntiPhotoreal
@@ -1988,6 +2003,7 @@ export function buildCharacterReferencePromptParts(
     // Object plates must never contain people — the aesthetic's human
     // imagery ("detective", "celebration") otherwise leaks a person in.
     ...(isObject ? ['person', 'people', 'human', 'man', 'woman', 'face', 'hands', 'portrait'] : []),
+    ...faceGuard,
     'no text',
     'no labels',
     'no annotations',

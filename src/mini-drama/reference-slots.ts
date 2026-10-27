@@ -27,7 +27,7 @@ import { basename, join } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
 import { pickedPlate } from './staging.js';
 import type { SeriesState, ShotScript } from 'venice-video-harness/core/series/types.js';
-import { getMaxReferenceImages, isObjectCastMember } from 'venice-video-harness/core/series/types.js';
+import { faceHiddenDirection, getMaxReferenceImages, isFaceHidden, isObjectCastMember } from 'venice-video-harness/core/series/types.js';
 import {
   getCharacterDir,
   getLocationDir,
@@ -123,15 +123,15 @@ function objectName(name: string): string {
 
 /** The person clause for a cast member's primary reference, or the object clause for an object cast member. */
 function primaryRoleClause(char: SeriesState['characters'][number]): string {
-  return isObjectCastMember(char)
-    ? `is ${objectName(char.name)} — an object, not a person; match its exact shape, materials, colours and marks`
-    : `is ${char.name} — use this reference for ${char.name}'s face, hair, and wardrobe`;
+  if (isObjectCastMember(char)) return `is ${objectName(char.name)} — an object, not a person; match its exact shape, materials, colours and marks`;
+  if (isFaceHidden(char)) return `is ${char.name} — use this reference for ${char.name}'s build, hair, and wardrobe; ${faceHiddenDirection(char.name)}`;
+  return `is ${char.name} — use this reference for ${char.name}'s face, hair, and wardrobe`;
 }
 
 function secondAngleRoleClause(char: SeriesState['characters'][number]): string {
-  return isObjectCastMember(char)
-    ? `is a second view of ${objectName(char.name)} — the same object as its primary reference`
-    : `is a second angle of ${char.name} — same person as ${char.name}'s primary reference`;
+  if (isObjectCastMember(char)) return `is a second view of ${objectName(char.name)} — the same object as its primary reference`;
+  if (isFaceHidden(char)) return `is a second angle of ${char.name} — same person as ${char.name}'s primary reference, face never shown`;
+  return `is a second angle of ${char.name} — same person as ${char.name}'s primary reference`;
 }
 
 /**

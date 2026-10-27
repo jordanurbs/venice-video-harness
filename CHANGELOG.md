@@ -270,6 +270,21 @@
 
 ### Added
 
+- **Face-hidden characters (`Character.faceHidden`).** A figure the audience
+  never sees in the face (an unseen antagonist, only ever a back, a
+  reflection or a shape) used to get the same four sheets as everyone else,
+  including a front portrait looking at the camera, and that face went to the
+  video model as a reference. With `faceHidden: true`, the four sheets are
+  drawn from behind, three-quarter rear, in profile in deep shadow, and full
+  body from behind, with the face in the negative prompt (even when negative
+  additions are off). The file names stay `front` / `three-quarter` /
+  `profile` / `full-body`, so every reference slot reads them unchanged. The
+  primary reference asks for build, hair and wardrobe, not the face. The
+  reference slots, the montage identity lines (both grammars) and the panel
+  character text all say the face is never shown. Set it with
+  `add-character --face-hidden`, or in the workshop draft's `characters`. An
+  object cast member is never face-hidden. Test: `tests/face-hidden.test.mjs`.
+
 - **Seedance 2.5 R2V Enhanced (`seedance-2-5-enhanced-reference-to-video`).**
   Like 2.0 Enhanced, it is missing from `GET /models` but works on quote and
   queue. The 2026-10-25 quote probe showed the same 4-30s ladder as 2.5 R2V,
