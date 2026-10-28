@@ -30,8 +30,8 @@ import {
 } from 'venice-video-harness/core/series/types.js';
 import { padAudioForModel, probeAudioDurationSec } from '../venice/audio-preflight.js';
 import { generateSpeech } from '../venice/audio.js';
-import { getCharacterDir, getLocationDir, getLocation } from '../series/manager.js';
-import { locationPlateOrder } from './reference-slots.js';
+import { getCharacterDir, getLocation } from '../series/manager.js';
+import { locationPlateOrder, plateDirFor } from './reference-slots.js';
 import {
   buildMontagePrompt,
   buildMultiShotPrompt,
@@ -410,7 +410,7 @@ function getLocationRefPath(series: SeriesState, shot: ShotScript): string | und
   if (!shot.location) return undefined;
   const loc = getLocation(series, shot.location);
   if (!loc) return undefined;
-  const dir = getLocationDir(series, loc.slug);
+  const dir = plateDirFor(series, shot, loc.slug);
   // The shot's own view first (plateView), else north (hero plate), then the
   // derived plates, then legacy names for pre-2026-10-05 projects.
   for (const f of locationPlateOrder(shot)) {
@@ -1555,7 +1555,7 @@ export function resolveShotReferenceInputs(
       } else if (plate) {
         const loc = shot.location ? getLocation(series, shot.location) : undefined;
         const replaced = loc && plate.ref.replacesView
-          ? resolvePath(join(getLocationDir(series, loc.slug), `${plate.ref.replacesView}.png`))
+          ? resolvePath(join(plateDirFor(series, shot, loc.slug), `${plate.ref.replacesView}.png`))
           : undefined;
         sceneImagePaths = [plate.path, ...sceneImagePaths.filter(p => resolvePath(p) !== resolvePath(plate.path) && resolvePath(p) !== replaced)].slice(0, 4);
         console.log('  Staging ref -> scene_image_urls (leads the hand-set scene images)');

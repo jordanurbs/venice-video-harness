@@ -616,6 +616,14 @@ export interface Location {
    * variant selection; the base `description` is used when unset.
    */
   timeVariants?: Record<string, string>;
+  /**
+   * The place in other light (a relight): the same views, image-to-image edits
+   * of the master plates so the geometry never moves, at
+   * `<location dir>/light/<key>/<view>.png`, with the words for that light.
+   * A shot picks one with `ShotScript.lightState`. The video model draws the
+   * plate's light over the prompt's, so a night shot needs a night plate.
+   */
+  lightStates?: Record<string, LocationLightState>;
   /** Deterministic seed so the reference angles stay reproducible. */
   seed: number;
   /** Image-generation model used for the reference angles (default nano-banana-pro). */
@@ -629,6 +637,19 @@ export interface Location {
    * vehicles and the two sets read as one place.
    */
   near?: string;
+}
+
+/** A location in one other light: see `Location.lightStates`. */
+export interface LocationLightState {
+  /** Display name, e.g. "Night nocturne". */
+  name?: string;
+  /** Replaces the location's `lightingNotes` in every prompt of a shot in this light. */
+  lightingNotes: string;
+}
+
+/** Where a location keeps its plates in a light state, relative to the location dir. */
+export function lightStateDir(state: string): string {
+  return `light/${state}`;
 }
 
 /** A location reference view, by compass direction (the plate set's four views, rule 61). */
@@ -931,6 +952,12 @@ export interface ShotScript {
   stagedOn?: string;
   /** How this shot joins the previous one, and the state it ends in. */
   continuity?: ShotContinuity;
+  /**
+   * The light the shot plays in, by key of its location's `lightStates`
+   * ("night", "dusk-caligo"). Its plates and lighting words replace the
+   * location's own for this shot; unset plays in the location's master light.
+   */
+  lightState?: string;
   /** An edited plate or first frame a person picked for this shot (`stage-ref`, rule 65). */
   stagingRef?: ShotStagingRef;
   dialogue: { character: string; line: string; delivery?: string } | null;
