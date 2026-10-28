@@ -26,8 +26,8 @@
 import { basename, join } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
 import { pickedPlate } from './staging.js';
-import type { SeriesState, ShotScript } from 'venice-video-harness/core/series/types.js';
-import { getMaxReferenceImages, isObjectCastMember } from 'venice-video-harness/core/series/types.js';
+import type { LocationLightState, SeriesState, ShotScript } from 'venice-video-harness/core/series/types.js';
+import { getMaxReferenceImages, isObjectCastMember, lightStateDir } from 'venice-video-harness/core/series/types.js';
 import {
   getCharacterDir,
   getLocationDir,
@@ -100,6 +100,68 @@ export function locationPlateOrder(shot?: Pick<ShotScript, 'plateView' | 'type'>
   return lead && base.includes(lead) ? [lead, ...base.filter(file => file !== lead)] : [...base];
 }
 
+export interface ShotLight {
+  key: string;
+  name: string;
+  state: LocationLightState;
+}
+
+type LitShot = Pick<ShotScript, 'shotNumber' | 'location' | 'lightState'> & { shotIdSuffix?: string };
+
+/**
+ * The light a shot plays a location in: its `lightState`, when the shot
+ * stands at that location. A light the location does not have is an error,
+ * never the master light, because the model draws the plate's light.
+ */
+export function shotLight(series: SeriesState, shot: LitShot, slug?: string): ShotLight | null {
+  if (!shot.lightState || !shot.location) return null;
+  const loc = getLocation(series, shot.location);
+  if (!loc || (slug && loc.slug !== slug)) return null;
+  const state = loc.lightStates?.[shot.lightState];
+  if (!state) {
+    throw new Error(`Shot ${shot.shotNumber}${shot.shotIdSuffix ?? ''} plays in "${shot.lightState}" light, and ${loc.name} has no such light state `
+      + `(it has ${Object.keys(loc.lightStates ?? {}).join(', ') || 'none'}). Relight the place first: its master plates would bring back their own light.`);
+  }
+  return { key: shot.lightState, name: state.name ?? shot.lightState, state };
+}
+
+/** The folder a shot's plates of a location come from: its light state's, else the location's own. */
+export function plateDirFor(series: SeriesState, shot: LitShot, slug: string): string {
+  const dir = getLocationDir(series, slug);
+  const light = shotLight(series, shot, slug);
+  return light ? join(dir, lightStateDir(light.key)) : dir;
+}
+
+/**
+ * What stops a shot in a light state from rendering, found before anything is
+ * billed: a light its location does not have, or no plate in that light for
+ * the view it is staged on. A plate or first frame picked with stage-ref
+ * stands in for the view, so it needs none.
+ */
+export function lightStateProblems(series: SeriesState, shots: ShotScript[]): string[] {
+  const problems: string[] = [];
+  for (const shot of shots) {
+    if (!shot.lightState) continue;
+    const id = `${shot.shotNumber}${shot.shotIdSuffix ?? ''}`;
+    if (!shot.location || !getLocation(series, shot.location)) {
+      problems.push(`Shot ${id} plays in "${shot.lightState}" light but has no location in the project.`);
+      continue;
+    }
+    let light: ShotLight | null;
+    try {
+      light = shotLight(series, shot);
+    } catch (error) {
+      problems.push((error as Error).message);
+      continue;
+    }
+    if (!light || shot.stagingRef) continue;
+    const view = `${shot.plateView ?? 'north'}.png`;
+    const path = join(plateDirFor(series, shot, getLocation(series, shot.location)!.slug), view);
+    if (!existsSync(path)) problems.push(`Shot ${id}: no ${view.replace('.png', '')} plate in "${light.key}" light at ${path}.`);
+  }
+  return problems;
+}
+
 /**
  * Build the ordered reference slot plan for a shot on an @Image-tag model.
  *
@@ -144,6 +206,8 @@ function planReferenceSlots(
   modelId: string,
   charNames: string[],
   locationSlugs: string[],
+  /** The shot whose light and plate order each place's plates follow, when not `shot` (a montage's first shot there). */
+  shotByPlace?: Map<string, ShotScript>,
 ): ReferenceSlotPlan {
   const budget = getMaxReferenceImages(modelId);
   const dropped: string[] = [];
@@ -199,7 +263,7 @@ function planReferenceSlots(
   // --- Tier 3: location angles ---
   // A picked plate leads its location's plates (locationCandidates); a shot
   // whose location is not in the project sends it on its own.
-  const location: CandidateSlot[] = locationSlugs.flatMap(slug => locationCandidates(series, shot, slug));
+  const location: CandidateSlot[] = locationSlugs.flatMap(slug => locationCandidates(series, shotByPlace?.get(slug) ?? shot, slug));
   if (picked && !location.some(slot => slot.path === picked.path)) {
     const loc = shot.location ? getLocation(series, shot.location) : undefined;
     location.unshift(pickedPlateCandidate(picked, loc));
@@ -294,7 +358,9 @@ function pickedPlateCandidate(picked: NonNullable<ReturnType<typeof pickedPlate>
 function locationCandidates(series: SeriesState, shot: ShotScript, slug: string): CandidateSlot[] {
   const loc = getLocation(series, slug);
   if (!loc) return [];
-  const dir = getLocationDir(series, loc.slug);
+  const dir = plateDirFor(series, shot, loc.slug);
+  const light = shotLight(series, shot, loc.slug);
+  const inLight = light ? `, in its ${light.name} light` : '';
   const order = locationPlateOrder(shot);
   const picked = shot.location && getLocation(series, shot.location)?.slug === loc.slug ? pickedPlate(series, shot) : null;
   const replaced = picked?.ref.replacesView ? `${picked.ref.replacesView}.png` : null;
@@ -336,12 +402,12 @@ function locationCandidates(series: SeriesState, shot: ShotScript, slug: string)
     const customName = CANONICAL_PLATES.has(f) ? null : f.replace(/\.png$/i, '').replace(/-/g, ' ');
     const stagedView = angleCount === 1 && shot.plateView && f === `${shot.plateView}.png`;
     const anglePhrase = stagedView
-      ? `is the view this shot is staged on (${loc.name}, ${shot.plateView} view) — the camera looks along this frame: match its background, architecture, and lighting; it is not a character`
+      ? `is the view this shot is staged on (${loc.name}, ${shot.plateView} view${inLight}) — the camera looks along this frame: match its background, architecture, and lighting; it is not a character`
       : angleCount === 1
-      ? `is the location environment reference (${loc.name}) — match its setting, architecture, and lighting; it is not a character`
+      ? `is the location environment reference (${loc.name}${inLight}) — match its setting, architecture, and lighting; it is not a character`
       : customName
-        ? `is another angle of the same location (${loc.name}: ${customName}) — same place, different angle; keep the environment consistent with it`
-        : `is ${angleRole[f] ?? 'another angle of the same location'} (${loc.name}) — same place, different angle; keep the environment consistent with it`;
+        ? `is another angle of the same location (${loc.name}: ${customName}${inLight}) — same place, different angle; keep the environment consistent with it`
+        : `is ${angleRole[f] ?? 'another angle of the same location'} (${loc.name}${inLight}) — same place, different angle; keep the environment consistent with it`;
     location.push({
       kind: 'location',
       path: p,
@@ -378,19 +444,26 @@ export interface StagedPlate {
   path: string;
   /** The compass view, when the file is one ("north"); undefined for legacy or custom plates. */
   view?: string;
+  /** The light state the plate shows, when the shot plays in one. */
+  light?: { key: string; name: string };
 }
 
-/** The location plate a shot is staged on: its plateView, else the first plate on disk in reference order. */
+/** The location plate a shot is staged on: its plateView, else the first plate on disk in reference order, in the shot's light. */
 export function stagedPlateFor(series: SeriesState, shot: ShotScript): StagedPlate | null {
   if (!shot.location) return null;
   const loc = getLocation(series, shot.location);
   if (!loc) return null;
-  const dir = getLocationDir(series, loc.slug);
+  const dir = plateDirFor(series, shot, loc.slug);
+  const light = shotLight(series, shot, loc.slug);
   for (const file of locationPlateOrder(shot)) {
     const path = join(dir, file);
     if (!existsSync(path)) continue;
     const view = file.replace(/\.png$/, '');
-    return { slug: loc.slug, name: loc.name, file, path, ...(COMPASS_VIEWS.has(view) ? { view } : {}) };
+    return {
+      slug: loc.slug, name: loc.name, file, path,
+      ...(COMPASS_VIEWS.has(view) ? { view } : {}),
+      ...(light ? { light: { key: light.key, name: light.name } } : {}),
+    };
   }
   return null;
 }
@@ -406,6 +479,8 @@ interface MontageCandidate extends CandidateSlot {
   essential: boolean;
   /** Shot numbers a place image serves. */
   shots?: number[];
+  /** The light state a place image shows (its display name). */
+  light?: string;
 }
 
 /** The leading clauses of a text, up to about `max` characters, cut at a clause boundary (or a word, with an ellipsis). */
@@ -436,7 +511,8 @@ function placeRoleClause(series: SeriesState, shots: ShotScript[], candidate: Mo
     || (viewText ? firstClauses(viewText, 140) : '')
     || firstClauses((loc?.description ?? '').split(/(?<=\.)\s/)[0], 140);
   const only = shots.length > 1 ? ' only' : '';
-  return `is ${name}${compass ? ` (the ${compass} view)` : ''}, for ${listShots(served)}${only}${what ? `: ${what.replace(/\.$/, '')}` : ''}. `
+  const light = candidate.light ? `${compass ? ', ' : ' ('}in its ${candidate.light} light${compass ? '' : ')'}` : '';
+  return `is ${name}${compass ? ` (the ${compass} view${light})` : light}, for ${listShots(served)}${only}${what ? `: ${what.replace(/\.$/, '')}` : ''}. `
     + 'It does not set where people, vehicles or props are in any other shot';
 }
 
@@ -505,18 +581,23 @@ export function buildMontageSlotPlan(
     }
     const staged = stagedPlateFor(series, shot);
     if (!staged) continue;
-    const key = `place:${staged.slug}:${staged.file}`;
-    add({ key, essential: true, kind: 'location', path: staged.path, label: staged.slug, roleClause: '', shots: [shot.shotNumber] });
+    const lightKey = staged.light ? `@${staged.light.key}` : '';
+    const key = `place:${staged.slug}${lightKey}:${staged.file}`;
+    add({
+      key, essential: true, kind: 'location', path: staged.path, label: staged.slug, roleClause: '', shots: [shot.shotNumber],
+      ...(staged.light ? { light: staged.light.name } : {}),
+    });
     placeKeyByShot.set(shot.shotNumber, key);
     if (views === 'all') {
-      const dir = getLocationDir(series, staged.slug);
+      const dir = plateDirFor(series, shot, staged.slug);
+      const inLight = staged.light ? `, in its ${staged.light.name} light` : '';
       for (const file of locationPlateOrder(shot)) {
         if (file === staged.file) continue;
         const path = join(dir, file);
         if (!existsSync(path)) continue;
         add({
-          key: `place:${staged.slug}:${file}`, essential: false, kind: 'location', path, label: staged.slug,
-          roleClause: `is another view of ${staged.name} (${file.replace(/\.png$/, '')}) — geography only; keep the place consistent with it`,
+          key: `place:${staged.slug}${lightKey}:${file}`, essential: false, kind: 'location', path, label: staged.slug,
+          roleClause: `is another view of ${staged.name} (${file.replace(/\.png$/, '')}${inLight}) — geography only; keep the place consistent with it`,
         });
       }
     }
@@ -600,7 +681,12 @@ function buildUnstagedMontageSlotPlan(series: SeriesState, shots: ShotScript[], 
   const slugOf = (shot: ShotScript) => (shot.location ? getLocation(series, shot.location)?.slug : undefined);
   const places = Array.from(new Set(shots.map(slugOf).filter((slug): slug is string => Boolean(slug))));
   const planShot: ShotScript = { ...shots[0], characters: characterNames, location: places[0] };
-  const plan = planReferenceSlots(series, planShot, modelId, characterNames, places);
+  const shotByPlace = new Map<string, ShotScript>();
+  for (const shot of shots) {
+    const slug = slugOf(shot);
+    if (slug && slug !== places[0] && !shotByPlace.has(slug)) shotByPlace.set(slug, { ...shot, stagingRef: undefined });
+  }
+  const plan = planReferenceSlots(series, planShot, modelId, characterNames, places, shotByPlace);
   const placeByShot = new Map<number, number>();
   for (const shot of shots) {
     const slug = slugOf(shot);

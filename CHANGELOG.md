@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added
+
+- **Location light states: a shot plays in a relit place (`Location.lightStates`, `ShotScript.lightState`).**
+  - The video model draws the plate's light over the prompt's. On Off the Record, "fog at dusk" and "night" came
+    back as morning on five sets, because three things asked for morning: the plates, the location's locked
+    `lightingNotes`, and the look's own lighting line.
+  - A location names its other lights (`lightStates: { night: { name, lightingNotes } }`), with the same views
+    relit at `<location dir>/light/<key>/<view>.png` (image-to-image edits of the master plates, so the geometry
+    never moves). A shot sets `lightState: "night"`.
+  - That shot's references come from the light's folder in every lane: the slot plan, the montage plan (one place
+    in two lights is two images, and each clause names its light), the legacy single-reference fold, and
+    `stage-ref --from-plate` (a pick made from the relit view keeps its light). The location's lighting words
+    become the light's. When every shot of a generation plays in the same light, its words replace the look's
+    lighting line too; a generation that mixes lights keeps the look's.
+  - A light the location does not have, or no relit plate for the staged view, is refused before anything is
+    archived or billed (`lightStateProblems`, in `generate-videos`). A staging ref stands in for the view.
+  - `tests/light-states.test.mjs`.
+
 ### Fixed
 
 - **`generate-location-references --prompt` was ignored on south, east and

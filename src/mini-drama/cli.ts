@@ -174,7 +174,7 @@ import {
   workshopPlanOptions,
   type WorkshopInputs,
 } from './workshop.js';
-import { locationPlateOrder } from './reference-slots.js';
+import { lightStateProblems, locationPlateOrder } from './reference-slots.js';
 import { hasTreatment, refreshTreatment } from './treatment.js';
 import {
   PACKAGE_NAME,
@@ -4243,6 +4243,15 @@ program
         for (const line of refused) console.error(line);
         process.exit(1);
       }
+    }
+
+    // A shot in a light state renders from that light's plates or not at all:
+    // the master plates would bring back their own light.
+    const lightProblems = lightStateProblems(series, retakeUnits ? retakeUnits.flatMap(index => unitShots[index]) : script.shots);
+    if (lightProblems.length > 0) {
+      console.error(`Blocked: ${lightProblems.length} shot(s) cannot render in their light state. Nothing was archived or rendered.`);
+      for (const line of lightProblems) console.error(`  ${line}`);
+      process.exit(1);
     }
 
     // Rule 43: a render queued under another packaging of these shots (the

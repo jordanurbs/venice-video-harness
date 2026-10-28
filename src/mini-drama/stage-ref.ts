@@ -47,11 +47,12 @@ import { multiEditImage } from '../venice/multi-edit.js';
 import { appendRecipePass } from '../venice/recipe.js';
 import { readImageProvenance, writeImageProvenance } from '../venice/provenance.js';
 import { sniffImageFormat } from '../venice/image-bytes.js';
-import { getEpisodeDir, getLocation, getLocationDir } from '../series/manager.js';
+import { getEpisodeDir, getLocation } from '../series/manager.js';
 import { resolveVideoModel } from './prompt-builder.js';
 import { shouldUseSeedanceKeyframe } from './generation-planner.js';
 import { shotKey } from './shot-paths.js';
 import { repickArgs, stageRefCommand, stagingRefPath } from './staging.js';
+import { plateDirFor, shotLight } from './reference-slots.js';
 
 export type StagingUse = ShotStagingRef['use'];
 
@@ -279,7 +280,7 @@ export interface StageSource {
 function plateViewOf(series: SeriesState, shot: ShotScript, image: string): PlateView | undefined {
   const loc = shot.location ? getLocation(series, shot.location) : undefined;
   if (!loc) return undefined;
-  const dir = getLocationDir(series, loc.slug);
+  const dir = plateDirFor(series, shot, loc.slug);
   return VIEWS.find(view => existsSync(join(dir, `${view}.png`)) && sameFile(join(dir, `${view}.png`), image));
 }
 
@@ -305,9 +306,15 @@ export async function prepareStageSource(
     if (!VIEWS.includes(input.fromPlate)) throw new Error(`--from-plate is north, east, south or west (got "${input.fromPlate}").`);
     const loc = shot.location ? getLocation(series, shot.location) : undefined;
     if (!loc) throw new Error(`Shot ${idOf(shot)} has no location${shot.location ? ` "${shot.location}" in the project` : ''}, so it has no plates.`);
-    const path = join(getLocationDir(series, loc.slug), `${input.fromPlate}.png`);
-    if (!existsSync(path)) throw new Error(`No ${input.fromPlate} plate for ${loc.slug} at ${path} (generate-location-references makes the plates).`);
-    source = { path, lineagePath: path, note: `the ${input.fromPlate} view of ${loc.name}`, use: 'plate', replacesView: input.fromPlate };
+    // A shot in a light state edits that light's plate, so the pick keeps its light.
+    const light = shotLight(series, shot, loc.slug);
+    const path = join(plateDirFor(series, shot, loc.slug), `${input.fromPlate}.png`);
+    if (!existsSync(path)) {
+      throw new Error(light
+        ? `No ${input.fromPlate} plate for ${loc.slug} in "${light.key}" light at ${path} (relight that view first).`
+        : `No ${input.fromPlate} plate for ${loc.slug} at ${path} (generate-location-references makes the plates).`);
+    }
+    source = { path, lineagePath: path, note: `the ${input.fromPlate} view of ${loc.name}${light ? `, in its ${light.name} light` : ''}`, use: 'plate', replacesView: input.fromPlate };
   } else if (input.fromShot) {
     const target = findShot(script, input.fromShot);
     if (!target) throw new Error(`Shot ${input.fromShot} is not in episode ${input.episode}.`);

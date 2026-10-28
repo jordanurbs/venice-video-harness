@@ -31,7 +31,7 @@ import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
 import { faceCapableTwinId, getMaxPositivePromptChars, getVideoModel, modelWantsSimplePrompt, stagedFrameLane } from 'venice-video-harness/core/venice/models.js';
 import { getLocation } from '../series/manager.js';
-import { buildMontageSlotPlan, buildReferenceSlotPlan, type ReferenceSlot } from './reference-slots.js';
+import { buildMontageSlotPlan, buildReferenceSlotPlan, shotLight, type ReferenceSlot } from './reference-slots.js';
 import { objectVehicleKind } from './plan-check.js';
 import { shotIdOf } from './shot-paths.js';
 import { pickedPlate } from './staging.js';
@@ -463,6 +463,20 @@ function buildCharacterAnchorText(characters: MiniDramaCharacter[]): string {
   return `Core subjects: ${anchors.join('; ')}.`;
 }
 
+/**
+ * The video look for one generation. When every shot in it plays in the same
+ * light state, that light's words replace the look's own lighting line: the
+ * locked look names the master light, and a night generation that also asks
+ * for it gets day.
+ */
+function lookFor(series: SeriesState, shots: ShotScript[]): AestheticProfile {
+  const look = series.aesthetic!;
+  const lights = shots.map(shot => shotLight(series, shot));
+  const first = lights[0];
+  if (!first || lights.some(light => light?.key !== first.key)) return look;
+  return { ...look, lighting: first.state.lightingNotes };
+}
+
 function buildCompactAestheticString(aesthetic: AestheticProfile): string {
   return [
     aesthetic.style,
@@ -748,9 +762,10 @@ export function buildVideoPrompt(
   if (shot.location && !simplePrompt && !fromStagedFrame) {
     const loc = getLocation(series, shot.location);
     if (loc) {
+      const lighting = shotLight(series, shot)?.state.lightingNotes ?? loc.lightingNotes;
       const envNote = [
         loc.description,
-        loc.lightingNotes ? `Lighting: ${loc.lightingNotes}.` : '',
+        lighting ? `Lighting: ${lighting}.` : '',
         // Locked geography: the named landmarks and their fixed positions.
         // Restated per shot so placement language ("at the counter", "by the
         // door") resolves to the same physical layout in every generation.
@@ -809,8 +824,8 @@ export function buildVideoPrompt(
   // prompt by volume and reads as a style pile-on, so those get the compact
   // one-line version (medium, palette, lighting) instead.
   let aestheticStr = simplePrompt
-    ? buildCompactAestheticString(series.aesthetic)
-    : buildAestheticString(series.aesthetic);
+    ? buildCompactAestheticString(lookFor(series, [shot]))
+    : buildAestheticString(lookFor(series, [shot]));
   if (isDaytimeShot(shot)) {
     aestheticStr = stripDarkAesthetic(aestheticStr);
     parts.push('Bright daytime scene, natural light, no rain.');
@@ -1123,7 +1138,7 @@ export function buildMontagePrompt(
   // STYLE token — one look string (compact aesthetic), plus the vault pack's
   // non-negotiables: face stability, diegetic-only sound, no on-screen text.
   const anyDaytime = shots.some(s => isDaytimeShot(s));
-  let compactAesthetic = buildCompactAestheticString(series.aesthetic);
+  let compactAesthetic = buildCompactAestheticString(lookFor(series, shots));
   if (anyDaytime) {
     compactAesthetic = stripDarkAesthetic(compactAesthetic);
     parts.push('Bright daytime scene, natural light, no rain.');
@@ -1410,7 +1425,7 @@ function buildShotListMontagePrompt(
   }
 
   const anyDaytime = shots.some(s => isDaytimeShot(s));
-  let compactAesthetic = buildCompactAestheticString(series.aesthetic!);
+  let compactAesthetic = buildCompactAestheticString(lookFor(series, shots));
   if (anyDaytime) {
     compactAesthetic = stripDarkAesthetic(compactAesthetic);
     parts.push('Bright daytime scene, natural light, no rain.');
@@ -1633,7 +1648,7 @@ function buildSeedanceMultiShotPrompt(
   }
 
   const anyDaytime = shots.some(s => isDaytimeShot(s));
-  let compactAesthetic = buildCompactAestheticString(series.aesthetic);
+  let compactAesthetic = buildCompactAestheticString(lookFor(series, shots));
   if (anyDaytime) {
     compactAesthetic = stripDarkAesthetic(compactAesthetic);
     parts.push('Bright daytime scene, natural light, no rain.');
@@ -1648,7 +1663,7 @@ function buildSeedanceMultiShotPrompt(
   if (prompt.length > VENICE_VIDEO_PROMPT_LIMIT) {
     console.warn(`  Multi-shot prompt is ${prompt.length} chars (limit: ${VENICE_VIDEO_PROMPT_LIMIT}). Trimming the aesthetic to fit.`);
     const overBy = prompt.length - VENICE_VIDEO_PROMPT_LIMIT + 20;
-    const aestheticPart = buildCompactAestheticString(series.aesthetic);
+    const aestheticPart = buildCompactAestheticString(lookFor(series, shots));
     const truncatedAesthetic = aestheticPart.slice(0, Math.max(40, aestheticPart.length - overBy));
     const idx = parts.findIndex(p => p.startsWith('Visual style: '));
     if (idx >= 0) parts[idx] = `Visual style: ${truncatedAesthetic}.`;
@@ -1803,7 +1818,7 @@ export function buildKlingMultiShotPrompt(
   }
 
   const anyDaytime = shots.some(s => isDaytimeShot(s));
-  let compactAesthetic = buildCompactAestheticString(series.aesthetic);
+  let compactAesthetic = buildCompactAestheticString(lookFor(series, shots));
   if (anyDaytime) {
     compactAesthetic = stripDarkAesthetic(compactAesthetic);
     parts.push('Bright daytime scene, natural light, no rain.');
@@ -1817,7 +1832,7 @@ export function buildKlingMultiShotPrompt(
   if (prompt.length > VENICE_PROMPT_LIMIT) {
     console.warn(`  Multi-shot prompt is ${prompt.length} chars (limit: ${VENICE_PROMPT_LIMIT}). Truncating aesthetic to fit.`);
     const overBy = prompt.length - VENICE_PROMPT_LIMIT + 20;
-    const aestheticPart = buildCompactAestheticString(series.aesthetic);
+    const aestheticPart = buildCompactAestheticString(lookFor(series, shots));
     const truncatedAesthetic = aestheticPart.slice(0, Math.max(40, aestheticPart.length - overBy));
     parts[parts.length - 2] = `Visual style: ${truncatedAesthetic}.`;
     prompt = parts.join(' ').trim();
