@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added
+
+- **A dialogue line can carry its approved recording (`dialogue.referenceAudio`).**
+  The path (relative to the project) names the line's segment of the one
+  voiceover take a person approved, padded to the shot's length. On a
+  reference-audio model it goes as the speaker's `@Audio` clip, bound as the
+  line to re-perform ("@Audio1 is @Image1's line in shot 2, already
+  recorded: ... the mouth in sync with every word"), in place of the
+  voice-donor clip, which carries voice identity only. Singles and every
+  montage grammar take it; the line is quoted exactly, never improvised.
+  `generate-videos` stops before queueing when the file is missing, runs
+  outside 2-15 s, or a unit's clips pass 15 s together, since the generator
+  would otherwise drop the clip and the model would improvise the read.
+  Shots without it are unchanged. Found on a presenter film whose on-camera
+  lines had an approved take that nothing sent. Test:
+  `tests/dialogue-reference-audio.test.mjs`.
+
 ### Fixed
 
 - **`generate-location-references --prompt` was ignored on south, east and

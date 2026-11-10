@@ -871,6 +871,22 @@ export const INTERIOR_ENVIRONMENTS = new Set<ShotEnvironment>(['DAY_INTERIOR', '
 // Shot Script
 // ---------------------------------------------------------------------------
 
+export interface ShotDialogue {
+  character: string;
+  line: string;
+  delivery?: string;
+  /**
+   * The line's approved recording for this shot, relative to the project (or
+   * absolute): the segment of the one voiceover take a person approved,
+   * padded with silence to the shot's length (2-15 s, PCM WAV). On a
+   * reference-audio model it goes as the speaker's @Audio clip, the words,
+   * voice and timing to re-perform, in place of the character's voice-donor
+   * clip. The render stops before queueing when the file is missing or out
+   * of range, since without it the model improvises the read.
+   */
+  referenceAudio?: string;
+}
+
 export interface ShotScript {
   shotNumber: number;
   type: 'establishing' | 'dialogue' | 'action' | 'reaction' | 'insert' | 'close-up';
@@ -933,7 +949,7 @@ export interface ShotScript {
   continuity?: ShotContinuity;
   /** An edited plate or first frame a person picked for this shot (`stage-ref`, rule 65). */
   stagingRef?: ShotStagingRef;
-  dialogue: { character: string; line: string; delivery?: string } | null;
+  dialogue: ShotDialogue | null;
   sfx: string | null;
   cameraMovement: string;
   transition: string;

@@ -1,5 +1,5 @@
 import { writeFile, mkdir, appendFile } from 'node:fs/promises';
-import { join, dirname, basename, resolve as resolvePath } from 'node:path';
+import { join, dirname, basename, isAbsolute, resolve as resolvePath } from 'node:path';
 import { existsSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { measureLipSyncFidelity, type LipSyncFidelity } from './lip-sync-fidelity.js';
@@ -484,6 +484,8 @@ export async function ensureVoiceReferenceForShot(
 ): Promise<void> {
   if (series.videoDefaults.voiceReferenceForDialogue === false) return;
   if (!shot.dialogue) return;
+  // A recorded line goes as the speaker's clip, so no voice donor is needed.
+  if (shot.dialogue.referenceAudio) return;
   const speaker = shot.dialogue.character.toUpperCase();
   if (speaker === 'NARRATOR' || speaker === 'V.O.' || speaker === 'VO') return;
 
@@ -516,21 +518,43 @@ export async function ensureVoiceReferenceForShot(
   return generation;
 }
 
-function resolveVoiceReferencePaths(
+/**
+ * The files behind a prompt's @AudioN slots, in slot order. A voice-donor
+ * clip that is missing is skipped. A recorded line (`dialogue.referenceAudio`)
+ * is not optional: when it is missing, outside 2-15 s, or the unit's clips
+ * run past 15 s together, this throws before anything is queued, because
+ * renderVideoFile would drop the clip and the model would improvise the read.
+ */
+export function resolveVoiceReferencePaths(
   series: SeriesState,
   prompt: MiniDramaVideoPrompt,
 ): string[] {
   if (!prompt.voiceReferenceSlots || prompt.voiceReferenceSlots.length === 0) return [];
-  return [...prompt.voiceReferenceSlots]
-    .sort((a, b) => a.audioIndex - b.audioIndex)
-    .map(slot => {
-      const char = series.characters.find(
-        c => c.name.toUpperCase() === slot.characterName.toUpperCase(),
-      );
-      const abs = char ? resolveVoiceReferenceAbsPath(series, char) : undefined;
-      return abs && existsSync(abs) ? abs : undefined;
-    })
-    .filter((p): p is string => Boolean(p));
+  const slots = [...prompt.voiceReferenceSlots].sort((a, b) => a.audioIndex - b.audioIndex);
+  const paths = slots.map(slot => {
+    if (slot.referenceAudio) {
+      const abs = isAbsolute(slot.referenceAudio) ? slot.referenceAudio : join(series.outputDir, slot.referenceAudio);
+      const what = `The recorded line for ${slot.characterName}${slot.shotLabel ? ` in ${slot.shotLabel}` : ''}`;
+      if (!existsSync(abs)) {
+        throw new Error(`${what} is missing: ${abs}. Build it from the approved take (seedance-dialogue, build_refs.py refs) or clear dialogue.referenceAudio.`);
+      }
+      const sec = getVideoDuration(abs);
+      if (!(sec >= VOICE_REF_MIN_SEC && sec <= VOICE_REF_MAX_SEC)) {
+        throw new Error(`${what} is ${sec.toFixed(2)} s (${abs}); reference audio runs ${VOICE_REF_MIN_SEC}-${VOICE_REF_MAX_SEC} s per clip.`);
+      }
+      return abs;
+    }
+    const char = series.characters.find(c => c.name.toUpperCase() === slot.characterName.toUpperCase());
+    const abs = char ? resolveVoiceReferenceAbsPath(series, char) : undefined;
+    return abs && existsSync(abs) ? abs : undefined;
+  });
+  if (slots.some(slot => slot.referenceAudio)) {
+    const total = paths.reduce((sum, p) => sum + (p ? getVideoDuration(p) : 0), 0);
+    if (total > VOICE_REF_MAX_SEC) {
+      throw new Error(`This generation's reference audio runs ${total.toFixed(2)} s, over the ${VOICE_REF_MAX_SEC} s per render: split the unit so each recorded line fits.`);
+    }
+  }
+  return paths.filter((p): p is string => Boolean(p));
 }
 
 function getVideoDuration(path: string): number {
