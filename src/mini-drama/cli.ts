@@ -124,6 +124,7 @@ import {
 } from './panel-approval.js';
 import { normalizeShotId, shotKey } from './shot-paths.js';
 import { DEFAULT_RENDER_CONCURRENCY, archiveRetakeUnits, generateEpisodeVideos, stagedShotRefusal } from './video-generator.js';
+import { draftExpired, findDraftTakes, quoteDraftUpgrade, readDraftTake, resolveDraftTakePath, upgradeDraftTake, type DraftTake } from './draft-upgrade.js';
 import { inFlightOutsidePlan, planQueueOutputs } from './in-flight.js';
 import { generateVoiceReference, harvestVoiceReferenceFromClip } from './voice-reference.js';
 import { generateLocationReferences } from './location-generator.js';
@@ -5373,6 +5374,65 @@ program
   .option('--keep-work-dir', 'Keep intermediate chunks', false)
   .option('--yes', 'Confirm estimated spend and start', false)
   .action(runUpscale);
+
+program
+  .command('upgrade-drafts')
+  .description('Render approved Seedance 2.5 drafts at 1080p: the same takes (seed, motion, audio), in place of the 480p drafts')
+  .option('-p, --project <dir>', 'Series output directory (with --episode: every draft in the episode)')
+  .option('-e, --episode <number>', 'Episode number', parseInt)
+  .option('-f, --file <paths...>', 'Approved take(s): a shot clip (a montage or multi-shot clip upgrades its master) or any harness render')
+  .option('--yes', 'Confirm the quoted spend and start', false)
+  .action(async (opts: { project?: string; episode?: number; file?: string[]; yes: boolean }) => {
+    const takes = new Map<string, DraftTake>();
+    if (opts.file?.length) {
+      for (const file of opts.file) {
+        const path = resolveDraftTakePath(resolve(file));
+        const take = await readDraftTake(path);
+        if (!take) {
+          console.error(`${file}: no draft to upgrade (never a draft, or already upgraded).`);
+          process.exit(1);
+        }
+        takes.set(take.path, take);
+      }
+    } else if (opts.project && opts.episode !== undefined) {
+      const series = await loadSeries(resolve(opts.project));
+      if (!series) { console.error('Series not found.'); process.exit(1); }
+      for (const take of await findDraftTakes(getEpisodeDir(series, opts.episode))) takes.set(take.path, take);
+    } else {
+      console.error('Name the approved takes with --file, or a whole episode with -p <project> -e <episode>.');
+      process.exit(1);
+    }
+    if (takes.size === 0) {
+      console.log('No drafts to upgrade.');
+      return;
+    }
+
+    const client = new VeniceClient(await getVeniceApiKey());
+    let total = 0;
+    const live: DraftTake[] = [];
+    for (const take of takes.values()) {
+      if (draftExpired(take)) {
+        console.log(`  expired  ${take.path} (${take.draft.expiresAt}); render it again`);
+        continue;
+      }
+      const quote = await quoteDraftUpgrade(client, take);
+      total += quote;
+      live.push(take);
+      console.log(`  $${quote.toFixed(2)}  ${take.path}  ${take.model} ${take.duration} -> 1080p`);
+    }
+    console.log(`${live.length} draft(s) to upgrade, $${total.toFixed(2)} total.`);
+    if (live.length === 0) return;
+    if (!opts.yes) {
+      console.log('Re-run with --yes to upgrade them.');
+      return;
+    }
+    for (const take of live) {
+      console.log(`\nUpgrading ${take.path}`);
+      const result = await upgradeDraftTake(client, take);
+      console.log(`  1080p: ${result.path}${result.archivedDraft ? ` (draft kept as ${result.archivedDraft})` : ''}`);
+      if (result.recut.length > 0) console.log(`  Cut again: ${result.recut.length} shot clip(s)`);
+    }
+  });
 
 program
   .command('finish')

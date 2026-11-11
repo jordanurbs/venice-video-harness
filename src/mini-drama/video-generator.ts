@@ -48,7 +48,7 @@ import {
 } from './voice-reference.js';
 import { mustRenderAsExactLipSync, parseShotDuration, resolveUnitShots } from './generation-planner.js';
 import { dialogueFileForShot, shotKey } from './shot-paths.js';
-import { getVideoModel, i2vRejectsFaceStartFrame, modelSupportsDuration, resolveBitrateMode, validateCameraTrajectory, type BitrateMode } from 'venice-video-harness/core/venice/models.js';
+import { getVideoModel, i2vRejectsFaceStartFrame, modelSupportsDuration, resolveBitrateMode, resolveSeedanceDraft, SEEDANCE_DRAFT_RESOLUTION, validateCameraTrajectory, type BitrateMode } from 'venice-video-harness/core/venice/models.js';
 import type { CameraKeyframe } from 'venice-video-harness/core/venice/types.js';
 import { assertFacesOffCompatible, FacesOffModelError } from '../venice/seedance-preflight.js';
 import { appendRecipePass, readShotRecipe } from '../venice/recipe.js';
@@ -126,6 +126,9 @@ function runCommand(command: string, args: string[]): string {
 interface QueueResponse {
   model: string;
   queue_id: string;
+  is_draft?: boolean;
+  draft_task_id?: string;
+  draft_expires_at?: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -336,6 +339,8 @@ async function renderSeedanceKeyframe(
     project: series.outputDir,
     jobTag: stagingJobTag(shot),
     onResumed: job => { resumed.seen = true; resumed.tag = job.tag; },
+    // Its first frame is the lip-sync lane's start image; a 480p frame would cap that shot's quality.
+    draft: false,
   };
   await renderVideoFile(client, stageAOptions);
   if (resumed.seen && resumed.tag !== stagingJobTag(shot)) {
@@ -546,8 +551,8 @@ function getVideoDuration(path: string): number {
   return parseFloat(out);
 }
 
-function archiveExisting(outputPath: string): void {
-  if (!existsSync(outputPath)) return;
+export function archiveExisting(outputPath: string): string | undefined {
+  if (!existsSync(outputPath)) return undefined;
 
   let version = 1;
   let archivePath = outputPath.replace(/\.mp4$/, `-v${version}.mp4`);
@@ -558,6 +563,7 @@ function archiveExisting(outputPath: string): void {
 
   renameSync(outputPath, archivePath);
   console.log(`  Archived previous: ${archivePath}`);
+  return archivePath;
 }
 
 function saveJson(path: string, data: unknown): Promise<void> {
@@ -679,6 +685,14 @@ export interface RenderVideoOptions {
    * `buildStartEndTrajectory` from `../venice/models.js`.
    */
   cameraTrajectory?: CameraKeyframe[];
+  /**
+   * Seedance 2.5 draft mode. Unset follows the default (drafts on unless
+   * `VENICE_SEEDANCE_DRAFT=0`); `false` renders at the resolution above now,
+   * for renders nobody reviews before they are used (a keyframe that feeds
+   * another lane, the live loop and stream). A draft renders at 480p and is
+   * upgraded to 1080p with `venice-video upgrade-drafts` (draft-upgrade.ts).
+   */
+  draft?: boolean;
 }
 
 function fileToDataUri(filePath: string, mimeType = 'image/png'): string | undefined {
@@ -731,7 +745,7 @@ export class VideoRefusalError extends VeniceRequestError {
  *
  * The queue call itself is never auto-retried for 5xx (see `PostOptions.retry`).
  */
-async function submitVideoQueue(
+export async function submitVideoQueue(
   client: VeniceClient,
   model: string,
   body: Record<string, unknown>,
@@ -956,6 +970,11 @@ export async function renderVideoFile(
   // and it's left off the body.
   const bitrateMode = resolveBitrateMode(effectiveModel, options.bitrateMode);
   if (bitrateMode) body.bitrate_mode = bitrateMode;
+
+  if (resolveSeedanceDraft(effectiveModel, options.draft, process.env.VENICE_SEEDANCE_DRAFT)) {
+    body.draft = true;
+    body.resolution = SEEDANCE_DRAFT_RESOLUTION;
+  }
 
   if (sendsAspectRatio(effectiveModel)) {
     body.aspect_ratio = options.aspectRatio ?? '16:9';
@@ -1207,6 +1226,10 @@ export async function renderVideoFile(
     ...(options.jobTag ? { tag: options.jobTag } : {}),
   });
 
+  if (queueResponse.is_draft) {
+    console.log(`  480p draft; upgrade to 1080p once approved (venice-video upgrade-drafts), until ${queueResponse.draft_expires_at ?? '7 days from now'}`);
+  }
+
   return pollRenderedVideo(client, {
     ...options,
     queueId: queue_id,
@@ -1215,6 +1238,7 @@ export async function renderVideoFile(
     body,
     resumed: false,
     resumedTag: undefined,
+    draftExpiresAt: queueResponse.draft_expires_at,
   });
 }
 
@@ -1236,6 +1260,8 @@ interface PollRenderedVideoOptions extends RenderVideoOptions {
    * queued again, and the recipe does not claim inputs it cannot vouch for.
    */
   collectOnly?: boolean;
+  /** From the queue response of a draft; unknown for a re-attached job. */
+  draftExpiresAt?: string;
 }
 
 /** A recorded job Venice no longer has, met while only collecting (nothing was saved). */
@@ -1345,6 +1371,8 @@ async function pollRenderedVideo(
           extra: {
             audio: prompt.audio,
             ...(body.bitrate_mode ? { bitrateMode: body.bitrate_mode } : {}),
+            // The upgrade (draft-upgrade.ts) reads this: a draft's task id is its queue id.
+            ...(body.draft ? { draft: { taskId: queue_id, expiresAt: options.draftExpiresAt } } : {}),
             ...(voiceReferencePaths && voiceReferencePaths.length > 0
               ? { voiceReferencePaths: voiceReferencePaths.filter(isPath) } : {}),
             ...(sceneImagePaths && sceneImagePaths.length > 0

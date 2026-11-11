@@ -560,6 +560,8 @@ export class LoopEngine {
         project: this.projectDir,
         episode: this.episode,
         forceRequeue: true,
+        // The loop plays its takes as they land; nothing approves them, so a draft would stay 480p.
+        draft: false,
       });
 
       const take: LoopTake = {

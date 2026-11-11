@@ -200,6 +200,13 @@ export interface VideoQueueRequest {
 export interface VideoQueueResponse {
   model: string;
   queue_id: string;
+  /** Seedance 2.5 draft mode: present on a draft's queue response. */
+  is_draft?: boolean;
+  /** Send as `draft_task_id` to upgrade the draft (equals `queue_id`). */
+  draft_task_id?: string;
+  /** ISO time the draft stops being upgradable (7 days after creation). */
+  draft_expires_at?: string;
+  can_upgrade_to_hd?: boolean;
 }
 
 // ---- POST /api/v1/video/retrieve ------------------------------------------
