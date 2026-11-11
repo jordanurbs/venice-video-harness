@@ -1067,6 +1067,8 @@ export class StreamEngine {
         project: this.projectDir,
         episode: this.episode,
         forceRequeue: true,
+        // Beats play live and each starts from the last one's final frame; nothing approves a beat.
+        draft: false,
       });
     } catch (err) {
       return this.fail(n, 'render', err);

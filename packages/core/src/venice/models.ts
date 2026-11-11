@@ -2098,6 +2098,38 @@ export function resolveBitrateMode(
   return undefined;
 }
 
+// ---- Draft mode (Seedance 2.5) ----------------------------------------------
+
+/** The only resolution a draft renders at, and the only one its upgrade renders at. */
+export const SEEDANCE_DRAFT_RESOLUTION = '480p';
+export const SEEDANCE_DRAFT_UPGRADE_RESOLUTION = '1080p';
+
+/**
+ * Whether a model renders a 480p draft that upgrades to 1080p by its queue id.
+ * Every `seedance-2-5-*` id does (t2v / i2v / r2v / enhanced / edit, `-basic` and
+ * face-capable twins) except the US private lanes; Seedance 2.0 answers 400
+ * "This model does not support draft" (checked live 2026-11-11).
+ */
+export function supportsSeedanceDraft(modelId: string): boolean {
+  return isSeedance25VideoModel(modelId) && !modelId.includes('-us-');
+}
+
+/** Drafts are on unless the `VENICE_SEEDANCE_DRAFT` setting is `0` / `false` / `no` / `off`. */
+export function seedanceDraftsOn(setting?: string): boolean {
+  const v = setting?.trim().toLowerCase();
+  return !v || !['0', 'false', 'no', 'off'].includes(v);
+}
+
+/**
+ * Whether a render goes out as a draft: an explicit request wins, otherwise the
+ * session setting (`process.env.VENICE_SEEDANCE_DRAFT`); never for a model
+ * without draft mode.
+ */
+export function resolveSeedanceDraft(modelId: string, requested?: boolean, setting?: string): boolean {
+  if (!supportsSeedanceDraft(modelId)) return false;
+  return requested ?? seedanceDraftsOn(setting);
+}
+
 // ---- Camera trajectory (MiniMax H3 Max Multi-Angle) -----------------------
 
 /** Min / max keyframes the `camera_trajectory` array accepts (server-enforced). */

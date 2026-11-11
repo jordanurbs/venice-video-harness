@@ -10,6 +10,7 @@ import type { VeniceClient } from './client.js';
 import { VeniceRequestError } from './client.js';
 import { clearPendingJob, findPendingJob, recordPendingJob, touchPendingJob } from './job-store.js';
 import { abortableSleep, reportProgress, throwIfAborted } from './operation-context.js';
+import { appendRecipePass } from './recipe.js';
 import type {
   VideoQueueRequest,
   VideoQueueResponse,
@@ -22,6 +23,8 @@ import {
   getVideoModel,
   buildModelParams,
   resolveBitrateMode,
+  resolveSeedanceDraft,
+  SEEDANCE_DRAFT_RESOLUTION,
   validateVideoRequest,
   type BitrateMode,
   type VideoRequestIssue,
@@ -199,6 +202,13 @@ export interface QueueVideoOptions {
    */
   bitrateMode?: BitrateMode;
   /**
+   * Seedance 2.5 draft mode: a 480p render that `upgradeDraftTake` later turns
+   * into the same take at 1080p. Defaults on for every draft-capable model
+   * (`VENICE_SEEDANCE_DRAFT=0` turns the default off); `false` renders at
+   * `resolution` now. Ignored for models without draft mode.
+   */
+  draft?: boolean;
+  /**
    * Opt in to the old behaviour: an unsupported duration is snapped to the
    * closest valid one and an unsupported resolution falls back to the model
    * default, each with a warning. Off by default -- a mismatch throws
@@ -272,6 +282,11 @@ export async function queueVideo(
   // change); other models don't accept the field, so it's omitted for them.
   const bitrateMode = resolveBitrateMode(options.model, options.bitrateMode);
   if (bitrateMode) body.bitrate_mode = bitrateMode;
+
+  if (resolveSeedanceDraft(options.model, options.draft, process.env.VENICE_SEEDANCE_DRAFT)) {
+    body.draft = true;
+    body.resolution = SEEDANCE_DRAFT_RESOLUTION;
+  }
 
   if (options.elements && options.elements.length > 0) {
     if (!modelSpec || modelSpec.supportsElements) {
@@ -438,7 +453,7 @@ export interface GenerateVideoOptions extends QueueVideoOptions {
 export async function generateVideo(
   client: VeniceClient,
   options: GenerateVideoOptions,
-): Promise<{ path: string; sizeBytes: number; queueId: string; resumed: boolean }> {
+): Promise<{ path: string; sizeBytes: number; queueId: string; resumed: boolean; draft?: { taskId: string; expiresAt?: string } }> {
   const {
     outputPath,
     pollIntervalMs,
@@ -457,6 +472,7 @@ export async function generateVideo(
   let queueId: string;
   let model: string;
   let resumed = false;
+  let draft: { taskId: string; expiresAt?: string } | undefined;
 
   if (existing && existing.kind === 'video') {
     console.log(`  Re-attaching to in-flight job ${existing.queueId} (${existing.model}) — not re-queueing.`);
@@ -464,7 +480,9 @@ export async function generateVideo(
     model = existing.model;
     resumed = true;
   } else {
-    ({ queue_id: queueId, model } = await queueVideo(client, queueOpts));
+    const queued = await queueVideo(client, queueOpts);
+    ({ queue_id: queueId, model } = queued);
+    if (queued.is_draft) draft = { taskId: queued.draft_task_id ?? queueId, expiresAt: queued.draft_expires_at };
     await recordPendingJob({
       kind: 'video',
       model,
@@ -500,5 +518,21 @@ export async function generateVideo(
   await clearPendingJob(jobKey);
   await completeVideo(client, model, queueId);
 
-  return { path: outputPath, sizeBytes: videoBuffer.length, queueId, resumed };
+  // `venice-video upgrade-drafts` finds a draft by its recipe pass.
+  if (draft) {
+    const bitrateMode = resolveBitrateMode(model, options.bitrateMode);
+    await appendRecipePass(outputPath, {
+      kind: 'video-generate',
+      role: 'content',
+      model,
+      label: 'video render (480p draft)',
+      prompt: options.prompt,
+      duration: options.duration,
+      aspectRatio: options.aspectRatio,
+      resolution: SEEDANCE_DRAFT_RESOLUTION,
+      extra: { draft, ...(bitrateMode ? { bitrateMode } : {}) },
+    });
+  }
+
+  return { path: outputPath, sizeBytes: videoBuffer.length, queueId, resumed, draft };
 }
