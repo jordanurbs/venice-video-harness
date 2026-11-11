@@ -26,6 +26,11 @@ from venice_common import (
 DEFAULT_MODEL = "wan-2.6-image-to-video"
 
 
+def draft_capable(model: str) -> bool:
+    """Seedance 2.5 lanes render a 480p draft that upgrades to 1080p by its queue id (not the US private lanes)."""
+    return model.startswith("seedance-2-5-") and "-us-" not in model
+
+
 def resolve_media_url(path_or_url: str) -> str:
     """Convert local path to data URL or return URL as-is."""
     if path_or_url.startswith(("http://", "https://", "data:")):
@@ -45,6 +50,8 @@ def get_video_quote(
     resolution: str,
     aspect_ratio: str | None,
     audio: bool | None,
+    draft: bool = False,
+    draft_task_id: str | None = None,
 ) -> dict:
     """Get a price quote for video generation."""
     url = "https://api.venice.ai/api/v1/video/quote"
@@ -54,6 +61,10 @@ def get_video_quote(
         "duration": duration,
         "resolution": resolution,
     }
+    if draft:
+        payload["draft"] = True
+    if draft_task_id:
+        payload["draft_task_id"] = draft_task_id
     
     if aspect_ratio:
         payload["aspect_ratio"] = aspect_ratio
@@ -91,6 +102,8 @@ def queue_video(
     resolution: str,
     audio: bool | None,
     audio_url: str | None,
+    draft: bool = False,
+    draft_task_id: str | None = None,
 ) -> dict:
     """Queue a video generation request."""
     url = "https://api.venice.ai/api/v1/video/queue"
@@ -101,6 +114,10 @@ def queue_video(
         "duration": duration,
         "resolution": resolution,
     }
+    if draft:
+        payload["draft"] = True
+    if draft_task_id:
+        payload["draft_task_id"] = draft_task_id
     
     # Only include audio param if explicitly set (some models don't support it)
     if audio is not None:
@@ -245,7 +262,17 @@ def main() -> int:
     ap.add_argument("--list-models", action="store_true", help="List available video models and exit")
     ap.add_argument("--quote", action="store_true", help="Show price estimate and exit (no generation)")
     ap.add_argument("--no-validate", action="store_true", help="Skip model validation")
+    ap.add_argument("--final", action="store_true", help="Seedance 2.5: render at --resolution now instead of a 480p draft")
+    ap.add_argument("--upgrade-draft", metavar="QUEUE_ID", help="Render an approved Seedance 2.5 draft (its queue id) at 1080p; pass the draft's --model, --prompt, --duration and --aspect-ratio")
     args = ap.parse_args()
+    # Seedance 2.5 renders a 480p draft by default; the upgrade renders the same take at 1080p (7 days).
+    draft = draft_capable(args.model) and not args.final and not args.upgrade_draft
+    if draft:
+        args.resolution = "480p"
+    if args.upgrade_draft:
+        args.resolution = "1080p"
+        if "image-to-video" in args.model:
+            args.aspect_ratio = None
 
     api_key = require_api_key()
 
@@ -286,6 +313,8 @@ def main() -> int:
                 resolution=args.resolution,
                 aspect_ratio=args.aspect_ratio,
                 audio=audio_param,
+                draft=draft,
+                draft_task_id=args.upgrade_draft,
             )
             price = quote.get("quote", 0)
             print(f"\nVideo Generation Price Quote")
@@ -306,7 +335,7 @@ def main() -> int:
         print("Error: --prompt is required", file=sys.stderr)
         return 2
 
-    if not args.image:
+    if not args.image and not args.upgrade_draft:
         print("Error: --image is required", file=sys.stderr)
         return 2
 
@@ -365,6 +394,8 @@ def main() -> int:
             resolution=args.resolution,
             audio=audio_param,
             audio_url=audio_url,
+            draft=draft,
+            draft_task_id=args.upgrade_draft,
         )
     except RuntimeError as e:
         print(f"\nError queuing video: {e}", file=sys.stderr)
@@ -436,11 +467,20 @@ def main() -> int:
                 "source_image": args.image,
                 "generated_at": dt.datetime.now().isoformat(),
             }
+            if queue_result.get("is_draft"):
+                metadata["draft"] = {"task_id": queue_result.get("draft_task_id") or queue_id,
+                                     "expires_at": queue_result.get("draft_expires_at")}
+            if args.upgrade_draft:
+                metadata["upgraded_from_draft"] = args.upgrade_draft
             (out_dir / "metadata.json").write_text(
                 json.dumps(metadata, indent=2), encoding="utf-8"
             )
 
             print(f"\nVideo saved: {filepath.as_posix()}")
+            if queue_result.get("is_draft"):
+                print(f"480p draft. Once approved, render it at 1080p (until {metadata['draft']['expires_at']}):")
+                print(f"  venice-video.py --model {args.model} --prompt '...' --duration {args.duration}"
+                      f"{f' --aspect-ratio {args.aspect_ratio}' if args.aspect_ratio else ''} --upgrade-draft {queue_id}")
             print(f"Size: {len(video_data) / 1024 / 1024:.1f}MB")
             
             # Print MEDIA: line for Clawdbot auto-attach
