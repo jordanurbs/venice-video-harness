@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Added
+
+- **`upgrade-drafts --resolution 4k`: an approved Seedance 2.5 draft upgrades
+  to 4k as well as 1080p.** The docs and the live catalog list 4k on every
+  Seedance 2.5 lane ("Upgrade the draft to 1080p or 4k"; any other value
+  answers 400). `draftUpgradeBody`, `quoteDraftUpgrade` and `upgradeDraftTake`
+  take the resolution (default 1080p), the recipe pass records it, and core
+  exports `SEEDANCE_DRAFT_UPGRADE_RESOLUTIONS` and
+  `parseDraftUpgradeResolution`. The routing skill's `venice-video.py` takes
+  `--upgrade-to 4k`. Rule 67. Test: `tests/seedance-draft.test.mjs`.
+
+- **Seedance 2.5 renders are 480p drafts by default; `upgrade-drafts` renders
+  the approved ones at 1080p.** Every render on a `seedance-2-5-*` lane (not
+  the US private ones; Seedance 2.0 has no draft mode) goes out with
+  `draft: true` at 480p, the 480p price. `venice-video upgrade-drafts -p
+  <project> -e <n>` (or `--file <clip>...`) quotes each draft, waits for
+  `--yes`, and queues it by `draft_task_id`: the same take at 1080p, written to
+  the draft's path (the draft is archived `-vN`; a montage master is cut
+  again). The stage-A keyframe, the loop and the stream render at full
+  resolution (`draft: false`); `VENICE_SEEDANCE_DRAFT=0` turns the default off.
+  Rule 67. Test: `tests/seedance-draft.test.mjs`.
+
+### Added
+
+- **Seedance 2.5 renders are 480p drafts by default; `upgrade-drafts` renders
+  the approved ones at 1080p.** Every render on a `seedance-2-5-*` lane (not
+  the US private ones; Seedance 2.0 has no draft mode) goes out with
+  `draft: true` at 480p, the 480p price. `venice-video upgrade-drafts -p
+  <project> -e <n>` (or `--file <clip>...`) quotes each draft, waits for
+  `--yes`, and queues it by `draft_task_id`: the same take at 1080p, written to
+  the draft's path (the draft is archived `-vN`; a montage master is cut
+  again). The stage-A keyframe, the loop and the stream render at full
+  resolution (`draft: false`); `VENICE_SEEDANCE_DRAFT=0` turns the default off.
+  Rule 67. Test: `tests/seedance-draft.test.mjs`.
+
 ### Fixed
 
 - **`generate-location-references --prompt` was ignored on south, east and

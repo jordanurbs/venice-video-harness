@@ -835,8 +835,23 @@ Commands that refresh the page: `approve-script`, `storyboard-episode`,
 `qa-approve`, `plan-generations`, `generate-videos`, `generate-music`,
 `override-audio`, `assemble-episode`, and `finish`.
 
+Seedance 2.5 renders come back as **480p drafts** (Venice's draft mode, at the
+480p price). Review them, then upgrade the approved ones: Venice renders the
+same takes (seed, motion, timing and audio) at 1080p, in place of the drafts.
+
+```bash
+venice-video upgrade-drafts -p ~/VeniceVideos/my-film -e 1
+# Prints each draft and its quote first; then:
+venice-video upgrade-drafts -p ~/VeniceVideos/my-film -e 1 --yes
+venice-video upgrade-drafts --file ~/VeniceVideos/my-film/episodes/episode-001/scene-001/shot-004.mp4 --yes
+```
+
+Drafts upgrade for 7 days. `VENICE_SEEDANCE_DRAFT=0` renders full resolution
+from the start. Seedance 2.0 has no draft mode.
+
 The workshop also asks for the final delivery target. Choose **4K master** to
-keep generation/drafts economical and upscale only the approved assembled cut:
+keep generation/drafts economical and upscale only the approved assembled cut
+(after `upgrade-drafts`, so Topaz starts from 1080p):
 
 ```bash
 venice-video finish -p ~/VeniceVideos/my-film
