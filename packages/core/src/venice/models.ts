@@ -2100,12 +2100,20 @@ export function resolveBitrateMode(
 
 // ---- Draft mode (Seedance 2.5) ----------------------------------------------
 
-/** The only resolution a draft renders at, and the only one its upgrade renders at. */
+/** The only resolution a draft renders at. Its upgrade renders at 1080p (the default) or 4k. */
 export const SEEDANCE_DRAFT_RESOLUTION = '480p';
-export const SEEDANCE_DRAFT_UPGRADE_RESOLUTION = '1080p';
+export const SEEDANCE_DRAFT_UPGRADE_RESOLUTIONS = ['1080p', '4k'] as const;
+export type SeedanceDraftUpgradeResolution = typeof SEEDANCE_DRAFT_UPGRADE_RESOLUTIONS[number];
+export const SEEDANCE_DRAFT_UPGRADE_RESOLUTION: SeedanceDraftUpgradeResolution = '1080p';
+
+/** A draft upgrade's resolution, or null for one the queue refuses ("Draft HD upgrade requires resolution 1080p or 4k"). */
+export function parseDraftUpgradeResolution(value: string): SeedanceDraftUpgradeResolution | null {
+  const v = value.trim().toLowerCase();
+  return (SEEDANCE_DRAFT_UPGRADE_RESOLUTIONS as readonly string[]).includes(v) ? v as SeedanceDraftUpgradeResolution : null;
+}
 
 /**
- * Whether a model renders a 480p draft that upgrades to 1080p by its queue id.
+ * Whether a model renders a 480p draft that upgrades to 1080p or 4k by its queue id.
  * Every `seedance-2-5-*` id does (t2v / i2v / r2v / enhanced / edit, `-basic` and
  * face-capable twins) except the US private lanes; Seedance 2.0 answers 400
  * "This model does not support draft" (checked live 2026-11-11).

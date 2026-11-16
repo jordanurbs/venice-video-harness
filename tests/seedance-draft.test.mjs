@@ -1,5 +1,5 @@
 // Seedance 2.5 draft mode: renders go out as 480p drafts by default, and
-// upgrade-drafts turns an approved draft into the same take at 1080p.
+// upgrade-drafts turns an approved draft into the same take at 1080p or 4k.
 //
 // Stubs `globalThis.fetch`; no network calls, no generation budget.
 
@@ -12,7 +12,7 @@ import { join } from 'node:path';
 // Keep the pending-job registry out of the operator's real config.
 process.env.VENICE_VIDEO_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'draft-config-'));
 
-const { supportsSeedanceDraft, resolveSeedanceDraft } = await import('../packages/core/dist/venice/models.js');
+const { supportsSeedanceDraft, resolveSeedanceDraft, parseDraftUpgradeResolution } = await import('../packages/core/dist/venice/models.js');
 const { VeniceClient } = await import('../dist/venice/client.js');
 const { queueVideo } = await import('../dist/venice/video.js');
 const { appendRecipePass, readShotRecipe } = await import('../dist/venice/recipe.js');
@@ -122,4 +122,28 @@ test('upgradeDraftTake puts the 1080p take at the draft\'s path, archives the dr
   assert.equal(recipe.passes.at(-1).resolution, '1080p');
   assert.equal(recipe.passes.at(-1).archivedPrevious, result.archivedDraft);
   assert.equal(await readDraftTake(path), null);
+});
+
+test('a 4k upgrade asks for 4k and records it; any other resolution is refused before a request', async () => {
+  const take = await readDraftTake(await draftOnDisk('seedance-2-5-reference-to-video'));
+  assert.equal(draftUpgradeBody(take, '4k').resolution, '4k');
+  assert.equal(parseDraftUpgradeResolution('4K'), '4k');
+  assert.equal(parseDraftUpgradeResolution('1080p'), '1080p');
+  assert.equal(parseDraftUpgradeResolution('720p'), null);
+
+  const path = await draftOnDisk('seedance-2-5-text-to-video-basic');
+  const { calls, restore } = stubFetch((p) => {
+    if (p === '/api/v1/video/queue') return json({ model: 'seedance-2-5-text-to-video-basic', queue_id: 'up-4k' });
+    if (p === '/api/v1/video/retrieve') return new Response(Buffer.alloc(400_000, 9), { status: 200, headers: { 'content-type': 'video/mp4' } });
+    return json({});
+  });
+  try {
+    await upgradeDraftTake(new VeniceClient('test-key'), await readDraftTake(path), '4k');
+  } finally {
+    restore();
+  }
+  assert.equal(calls.find(c => c.path === '/api/v1/video/queue').body.resolution, '4k');
+  const last = (await readShotRecipe(path)).passes.at(-1);
+  assert.equal(last.resolution, '4k');
+  assert.match(last.label, /upgraded to 4k/);
 });

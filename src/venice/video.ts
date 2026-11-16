@@ -203,7 +203,7 @@ export interface QueueVideoOptions {
   bitrateMode?: BitrateMode;
   /**
    * Seedance 2.5 draft mode: a 480p render that `upgradeDraftTake` later turns
-   * into the same take at 1080p. Defaults on for every draft-capable model
+   * into the same take at 1080p or 4k. Defaults on for every draft-capable model
    * (`VENICE_SEEDANCE_DRAFT=0` turns the default off); `false` renders at
    * `resolution` now. Ignored for models without draft mode.
    */

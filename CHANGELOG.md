@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`upgrade-drafts --resolution 4k`: an approved Seedance 2.5 draft upgrades
+  to 4k as well as 1080p.** The docs and the live catalog list 4k on every
+  Seedance 2.5 lane ("Upgrade the draft to 1080p or 4k"; any other value
+  answers 400). `draftUpgradeBody`, `quoteDraftUpgrade` and `upgradeDraftTake`
+  take the resolution (default 1080p), the recipe pass records it, and core
+  exports `SEEDANCE_DRAFT_UPGRADE_RESOLUTIONS` and
+  `parseDraftUpgradeResolution`. The routing skill's `venice-video.py` takes
+  `--upgrade-to 4k`. Rule 67. Test: `tests/seedance-draft.test.mjs`.
+
 - **Seedance 2.5 renders are 480p drafts by default; `upgrade-drafts` renders
   the approved ones at 1080p.** Every render on a `seedance-2-5-*` lane (not
   the US private ones; Seedance 2.0 has no draft mode) goes out with

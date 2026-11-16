@@ -3,13 +3,13 @@
 //
 // Seedance 2.5 renders go out as 480p drafts by default (resolveSeedanceDraft).
 // Once a person approves a take, the upgrade queues it again by the draft's
-// queue id and Venice renders the same take at 1080p: seed, composition,
-// motion, timing, length and audio carry over; only the fine detail is
-// re-rendered. https://docs.venice.ai/guides/media/seedance-2-0#draft-mode-seedance-2-5
+// queue id and Venice renders the same take at 1080p, or 4k when asked: seed,
+// composition, motion, timing, length and audio carry over; only the fine
+// detail is re-rendered. https://docs.venice.ai/guides/media/seedance-2-0#draft-mode-seedance-2-5
 //
-// The 1080p file takes the draft's path, so assembly, QA and the edit read it
+// The upgraded file takes the draft's path, so assembly, QA and the edit read it
 // with no change. The draft is archived -vN, and a montage or multi-shot
-// master is cut into its shots again from the 1080p file.
+// master is cut into its shots again from the upgraded file.
 //
 // Live behaviour the docs don't state (checked 2026-11-11):
 // - The queue still requires `duration`, and `aspect_ratio` on lanes that take
@@ -26,7 +26,7 @@ import type { VeniceClient } from '../venice/client.js';
 import { completeVideo, pollVideoResult } from '../venice/video.js';
 import { appendRecipePass, readShotRecipe, type RecipePassRole } from '../venice/recipe.js';
 import { clearPendingJob, findPendingJob, recordPendingJob } from '../venice/job-store.js';
-import { SEEDANCE_DRAFT_UPGRADE_RESOLUTION } from 'venice-video-harness/core/venice/models.js';
+import { SEEDANCE_DRAFT_UPGRADE_RESOLUTION, type SeedanceDraftUpgradeResolution } from 'venice-video-harness/core/venice/models.js';
 import type { GenerationUnit, GenerationUnitSegment } from 'venice-video-harness/core/series/types.js';
 import { cutMontageIntoShots } from './montage.js';
 import { archiveExisting, submitVideoQueue } from './video-generator.js';
@@ -77,13 +77,16 @@ export async function readDraftTake(path: string): Promise<DraftTake | null> {
   };
 }
 
-export function draftUpgradeBody(take: DraftTake): Record<string, unknown> {
+export function draftUpgradeBody(
+  take: DraftTake,
+  resolution: SeedanceDraftUpgradeResolution = SEEDANCE_DRAFT_UPGRADE_RESOLUTION,
+): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: take.model,
     prompt: take.prompt,
     draft_task_id: take.draft.taskId,
     duration: take.duration,
-    resolution: SEEDANCE_DRAFT_UPGRADE_RESOLUTION,
+    resolution,
   };
   // Image-to-video lanes reject aspect_ratio; the others require it on the upgrade.
   if (take.aspectRatio && !take.model.includes('image-to-video')) body.aspect_ratio = take.aspectRatio;
@@ -95,8 +98,12 @@ export function draftExpired(take: DraftTake, now: Date = new Date()): boolean {
   return Boolean(take.draft.expiresAt) && new Date(take.draft.expiresAt!).getTime() <= now.getTime();
 }
 
-export async function quoteDraftUpgrade(client: VeniceClient, take: DraftTake): Promise<number> {
-  const { prompt: _prompt, bitrate_mode: _bitrate, ...quoteBody } = draftUpgradeBody(take);
+export async function quoteDraftUpgrade(
+  client: VeniceClient,
+  take: DraftTake,
+  resolution: SeedanceDraftUpgradeResolution = SEEDANCE_DRAFT_UPGRADE_RESOLUTION,
+): Promise<number> {
+  const { prompt: _prompt, bitrate_mode: _bitrate, ...quoteBody } = draftUpgradeBody(take, resolution);
   const res = await client.post<{ quote: number }>(VIDEO_QUOTE_PATH, quoteBody);
   return res.quote;
 }
@@ -180,11 +187,15 @@ function recutMaster(masterPath: string): string[] {
 }
 
 /**
- * Upgrade one approved draft to 1080p. The queue id is recorded before the
+ * Upgrade one approved draft to 1080p or 4k. The queue id is recorded before the
  * first poll, so an interrupted upgrade re-attaches on the next run instead of
  * paying twice.
  */
-export async function upgradeDraftTake(client: VeniceClient, take: DraftTake): Promise<DraftUpgradeResult> {
+export async function upgradeDraftTake(
+  client: VeniceClient,
+  take: DraftTake,
+  resolution: SeedanceDraftUpgradeResolution = SEEDANCE_DRAFT_UPGRADE_RESOLUTION,
+): Promise<DraftUpgradeResult> {
   if (draftExpired(take)) {
     throw new Error(`${take.path}: the draft expired ${take.draft.expiresAt} (drafts upgrade for 7 days). Render it again.`);
   }
@@ -197,7 +208,7 @@ export async function upgradeDraftTake(client: VeniceClient, take: DraftTake): P
     console.log(`  Re-attaching to upgrade ${recorded.queueId} — not re-queueing.`);
     ({ queueId, model } = recorded);
   } else {
-    const res = await submitVideoQueue(client, take.model, draftUpgradeBody(take), hdPath);
+    const res = await submitVideoQueue(client, take.model, draftUpgradeBody(take, resolution), hdPath);
     ({ queue_id: queueId, model } = res);
     await recordPendingJob({ kind: 'video', model, queueId, outputPath: jobKey, prompt: take.prompt, tag: UPGRADE_JOB_TAG });
   }
@@ -212,11 +223,11 @@ export async function upgradeDraftTake(client: VeniceClient, take: DraftTake): P
     kind: 'video-generate',
     role: take.role,
     model: take.model,
-    label: 'draft upgraded to 1080p (same seed, motion and audio)',
+    label: `draft upgraded to ${resolution} (same seed, motion and audio)`,
     prompt: take.prompt,
     duration: take.duration,
     aspectRatio: take.aspectRatio,
-    resolution: SEEDANCE_DRAFT_UPGRADE_RESOLUTION,
+    resolution,
     archivedPrevious: archivedDraft,
     extra: { upgradedFromDraft: take.draft.taskId, queueId, ...(take.bitrateMode ? { bitrateMode: take.bitrateMode } : {}) },
   });

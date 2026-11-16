@@ -27,7 +27,7 @@ DEFAULT_MODEL = "wan-2.6-image-to-video"
 
 
 def draft_capable(model: str) -> bool:
-    """Seedance 2.5 lanes render a 480p draft that upgrades to 1080p by its queue id (not the US private lanes)."""
+    """Seedance 2.5 lanes render a 480p draft that upgrades to 1080p or 4k by its queue id (not the US private lanes)."""
     return model.startswith("seedance-2-5-") and "-us-" not in model
 
 
@@ -263,14 +263,15 @@ def main() -> int:
     ap.add_argument("--quote", action="store_true", help="Show price estimate and exit (no generation)")
     ap.add_argument("--no-validate", action="store_true", help="Skip model validation")
     ap.add_argument("--final", action="store_true", help="Seedance 2.5: render at --resolution now instead of a 480p draft")
-    ap.add_argument("--upgrade-draft", metavar="QUEUE_ID", help="Render an approved Seedance 2.5 draft (its queue id) at 1080p; pass the draft's --model, --prompt, --duration and --aspect-ratio")
+    ap.add_argument("--upgrade-draft", metavar="QUEUE_ID", help="Render an approved Seedance 2.5 draft (its queue id) at --upgrade-to; pass the draft's --model, --prompt, --duration and --aspect-ratio")
+    ap.add_argument("--upgrade-to", choices=["1080p", "4k"], default="1080p", help="The draft upgrade's resolution (default: 1080p)")
     args = ap.parse_args()
-    # Seedance 2.5 renders a 480p draft by default; the upgrade renders the same take at 1080p (7 days).
+    # Seedance 2.5 renders a 480p draft by default; the upgrade renders the same take at 1080p or 4k (7 days).
     draft = draft_capable(args.model) and not args.final and not args.upgrade_draft
     if draft:
         args.resolution = "480p"
     if args.upgrade_draft:
-        args.resolution = "1080p"
+        args.resolution = args.upgrade_to
         if "image-to-video" in args.model:
             args.aspect_ratio = None
 
@@ -478,7 +479,7 @@ def main() -> int:
 
             print(f"\nVideo saved: {filepath.as_posix()}")
             if queue_result.get("is_draft"):
-                print(f"480p draft. Once approved, render it at 1080p (until {metadata['draft']['expires_at']}):")
+                print(f"480p draft. Once approved, render it at 1080p or 4k (--upgrade-to 4k) until {metadata['draft']['expires_at']}:")
                 print(f"  venice-video.py --model {args.model} --prompt '...' --duration {args.duration}"
                       f"{f' --aspect-ratio {args.aspect_ratio}' if args.aspect_ratio else ''} --upgrade-draft {queue_id}")
             print(f"Size: {len(video_data) / 1024 / 1024:.1f}MB")

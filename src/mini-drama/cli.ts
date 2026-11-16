@@ -96,7 +96,7 @@ import {
   DEFAULT_VENICE_SEED_AUDIO_MODEL,
 } from '../venice/audio.js';
 import type { DialogueLine } from '../venice/audio.js';
-import { getMusicModel } from 'venice-video-harness/core/venice/models.js';
+import { getMusicModel, parseDraftUpgradeResolution, SEEDANCE_DRAFT_UPGRADE_RESOLUTION, SEEDANCE_DRAFT_UPGRADE_RESOLUTIONS } from 'venice-video-harness/core/venice/models.js';
 
 import { buildImagePrompt, buildCharacterReferencePromptParts, resolveVideoModel } from './prompt-builder.js';
 import {
@@ -5377,12 +5377,18 @@ program
 
 program
   .command('upgrade-drafts')
-  .description('Render approved Seedance 2.5 drafts at 1080p: the same takes (seed, motion, audio), in place of the 480p drafts')
+  .description('Render approved Seedance 2.5 drafts at 1080p or 4k: the same takes (seed, motion, audio), in place of the 480p drafts')
   .option('-p, --project <dir>', 'Series output directory (with --episode: every draft in the episode)')
   .option('-e, --episode <number>', 'Episode number', parseInt)
   .option('-f, --file <paths...>', 'Approved take(s): a shot clip (a montage or multi-shot clip upgrades its master) or any harness render')
+  .option('-r, --resolution <res>', 'The upgrade\'s resolution: 1080p or 4k', SEEDANCE_DRAFT_UPGRADE_RESOLUTION)
   .option('--yes', 'Confirm the quoted spend and start', false)
-  .action(async (opts: { project?: string; episode?: number; file?: string[]; yes: boolean }) => {
+  .action(async (opts: { project?: string; episode?: number; file?: string[]; resolution: string; yes: boolean }) => {
+    const resolution = parseDraftUpgradeResolution(opts.resolution);
+    if (!resolution) {
+      console.error(`--resolution ${opts.resolution}: a draft upgrades to ${SEEDANCE_DRAFT_UPGRADE_RESOLUTIONS.join(' or ')}.`);
+      process.exit(1);
+    }
     const takes = new Map<string, DraftTake>();
     if (opts.file?.length) {
       for (const file of opts.file) {
@@ -5415,10 +5421,10 @@ program
         console.log(`  expired  ${take.path} (${take.draft.expiresAt}); render it again`);
         continue;
       }
-      const quote = await quoteDraftUpgrade(client, take);
+      const quote = await quoteDraftUpgrade(client, take, resolution);
       total += quote;
       live.push(take);
-      console.log(`  $${quote.toFixed(2)}  ${take.path}  ${take.model} ${take.duration} -> 1080p`);
+      console.log(`  $${quote.toFixed(2)}  ${take.path}  ${take.model} ${take.duration} -> ${resolution}`);
     }
     console.log(`${live.length} draft(s) to upgrade, $${total.toFixed(2)} total.`);
     if (live.length === 0) return;
@@ -5428,8 +5434,8 @@ program
     }
     for (const take of live) {
       console.log(`\nUpgrading ${take.path}`);
-      const result = await upgradeDraftTake(client, take);
-      console.log(`  1080p: ${result.path}${result.archivedDraft ? ` (draft kept as ${result.archivedDraft})` : ''}`);
+      const result = await upgradeDraftTake(client, take, resolution);
+      console.log(`  ${resolution}: ${result.path}${result.archivedDraft ? ` (draft kept as ${result.archivedDraft})` : ''}`);
       if (result.recut.length > 0) console.log(`  Cut again: ${result.recut.length} shot clip(s)`);
     }
   });
