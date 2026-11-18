@@ -91,7 +91,9 @@ export type PlanFindingKind =
   /** A close-up's object that no neighbouring shot of the scene, and no plate of the place, shows. */
   | 'prop-continuity'
   /** The vision plate check (a `readPlates` pass) found no view that carries the shot. */
-  | 'plate-misfit';
+  | 'plate-misfit'
+  /** A cut inside a scene onto the view and shot size of the shot before it: a jump cut, and the set drifts between them. */
+  | 'same-angle';
 
 export interface PlanFinding {
   /** Shot id ("2", "2b"); absent for a finding about the whole plan. */
@@ -761,6 +763,20 @@ export function checkShotPlan(input: PlanCheckInput): PlanFinding[] {
         message: `Shot ${shotId(shot)} shows the ${t.key}, which neither ${others.length > 1 ? `shots ${others.join(' and ')}` : `shot ${others[0]}`} nor ${loc ? `any plate of ${loc.slug}` : 'its location'} shows. Those shots draw that spot from the plate, so the ${t.key} will change at the cut: show it there too, or cast it as an object with a reference.`,
       });
     }
+  });
+
+  // Every cut inside a scene changes the camera angle (Jordan, 2026-11-18):
+  // another view of the place, or another shot size. A cut onto the view and
+  // size of the shot before it plays as a jump cut, and the set drifts between
+  // the two generations. A staged first frame (stage-ref) sets its own framing.
+  input.shots.forEach((shot, i) => {
+    const prevShot = input.shots[i - 1];
+    if (!prevShot || shot.continuity?.from === 'new-scene' || !shot.plateView || shot.stagingRef || prevShot.stagingRef) return;
+    if (placeOf(prevShot) !== placeOf(shot) || prevShot.plateView !== shot.plateView || (prevShot.type ?? '') !== (shot.type ?? '')) return;
+    findings.push({
+      shot: shotId(shot), kind: 'same-angle', severity: 'warn', location: shot.location,
+      message: `Shot ${shotId(shot)} cuts from shot ${shotId(prevShot)} onto the same view of ${placeOf(shot)} (${shot.plateView})${shot.type ? ` at the same size (${shot.type})` : ''}. Every cut changes the angle: stage it on another view (plateView) or at another size (type), and say in the shot where the camera moved.`,
+    });
   });
 
   // A vessel seen at two or more places is drawn fresh at each unless it has its own reference.

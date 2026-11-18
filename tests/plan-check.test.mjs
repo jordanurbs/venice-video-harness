@@ -102,7 +102,7 @@ test('a verb that is also a boat, a dock or a stall is not the thing', () => {
     { shotNumber: 2, location: SQUARE.slug, plateView: 'north', description: 'ANNA pauses by the wellhead; the conversation stalls.', characters: ['ANNA'] },
     { shotNumber: 3, location: SQUARE.slug, plateView: 'north', description: 'ANNA trains her eyes on the wellhead.', characters: ['ANNA'] },
   ];
-  assert.deepEqual(checkShotPlan({ shots, locations: [SQUARE] }), []);
+  assert.deepEqual(checkShotPlan({ shots, locations: [SQUARE] }).filter(f => f.kind !== 'same-angle'), []);
   // The nouns still count: a shot that boards the launch, at a market stall, needs them on the plate.
   const nouns = checkShotPlan({ shots: [{ shotNumber: 4, location: SQUARE.slug, plateView: 'north', description: 'ANNA boards the launch beside the fish stalls.', characters: ['ANNA'] }], locations: [SQUARE] });
   assert.equal(nouns.find(f => f.noun === 'launch')?.severity, 'block');
@@ -234,4 +234,19 @@ test('a deck of cards, a bow tie or a part nobody stands on is not a boat part t
   assert.deepEqual(findings.filter(f => f.severity === 'block'), []);
   const stood = checkShotPlan({ shots: [{ shotNumber: 1, location: SQUARE.slug, plateView: 'north', description: 'ANNA stands on the deck by the wellhead.', characters: ['ANNA'] }], locations: [SQUARE] });
   assert.equal(stood.find(f => f.noun === 'deck')?.severity, 'block');
+});
+
+test('a cut inside a scene onto the same view at the same size warns; another view, another size or a new scene does not', () => {
+  const at = (n, extra) => ({ shotNumber: n, location: STATION.slug, description: 'LEO waits on the platform.', characters: ['LEO'], ...extra });
+  const same = checkShotPlan({ shots: [at(1, { plateView: 'north' }), at(2, { plateView: 'north' })], locations: [STATION] });
+  const finding = same.find(f => f.kind === 'same-angle');
+  assert.equal(finding?.severity, 'warn');
+  assert.equal(finding?.shot, '2');
+  assert.match(finding.message, /onto the same view of harbour-station \(north\)\. Every cut changes the angle/);
+  const turned = checkShotPlan({ shots: [at(1, { plateView: 'north' }), at(2, { plateView: 'east' })], locations: [STATION] });
+  assert.ok(!turned.some(f => f.kind === 'same-angle'));
+  const closer = checkShotPlan({ shots: [at(1, { plateView: 'north', type: 'wide' }), at(2, { plateView: 'north', type: 'close-up' })], locations: [STATION] });
+  assert.ok(!closer.some(f => f.kind === 'same-angle'));
+  const later = checkShotPlan({ shots: [at(1, { plateView: 'north' }), at(2, { plateView: 'north', continuity: { from: 'new-scene' } })], locations: [STATION] });
+  assert.ok(!later.some(f => f.kind === 'same-angle'));
 });

@@ -443,13 +443,14 @@ function placeRoleClause(series: SeriesState, shots: ShotScript[], candidate: Mo
 /**
  * The ordered reference slot plan for a shot-list montage unit.
  *
- * When at least one shot names its `plateView`: first-appearance order,
- * staged views only (`views: 'all'` adds the other canonical views of each
- * place and the cast's second angles; not custom angles). Overflow drops the
- * extra views and second angles first, then later views of a place already
- * shown, then the other place images and storyboard plates from the end;
- * the cast's primary references go last (rule 42). A shot whose image was
- * dropped points at the first image of its place still sent, and that
+ * When at least one shot names its `plateView`: first-appearance order, each
+ * shot's staged view, then (`views: 'views'`, the default) the other
+ * canonical views of each place; `'staged'` sends the staged views only, and
+ * `'all'` adds the cast's second angles too (not custom angles). Overflow
+ * drops the extra views and second angles first, then later views of a place
+ * already shown, then the other place images and storyboard plates from the
+ * end; the cast's primary references go last (rule 42). A shot whose image
+ * was dropped points at the first image of its place still sent, and that
  * image's clause names the shot.
  *
  * When no shot names one: the load a montage always sent (see
@@ -459,12 +460,12 @@ export function buildMontageSlotPlan(
   series: SeriesState,
   shots: ShotScript[],
   modelId: string,
-  options: { views?: 'staged' | 'all' } = {},
+  options: { views?: 'staged' | 'views' | 'all' } = {},
 ): MontageSlotPlan {
   if (!shots.some(shot => shot.plateView)) return buildUnstagedMontageSlotPlan(series, shots, modelId);
 
   const budget = getMaxReferenceImages(modelId);
-  const views = options.views ?? 'staged';
+  const views = options.views ?? 'views';
   const dropped: string[] = [];
   const candidates: MontageCandidate[] = [];
   const byKey = new Map<string, MontageCandidate>();
@@ -508,7 +509,7 @@ export function buildMontageSlotPlan(
     const key = `place:${staged.slug}:${staged.file}`;
     add({ key, essential: true, kind: 'location', path: staged.path, label: staged.slug, roleClause: '', shots: [shot.shotNumber] });
     placeKeyByShot.set(shot.shotNumber, key);
-    if (views === 'all') {
+    if (views !== 'staged') {
       const dir = getLocationDir(series, staged.slug);
       for (const file of locationPlateOrder(shot)) {
         if (file === staged.file) continue;
@@ -516,7 +517,7 @@ export function buildMontageSlotPlan(
         if (!existsSync(path)) continue;
         add({
           key: `place:${staged.slug}:${file}`, essential: false, kind: 'location', path, label: staged.slug,
-          roleClause: `is another view of ${staged.name} (${file.replace(/\.png$/, '')}) — geography only; keep the place consistent with it`,
+          roleClause: `is another view of ${staged.name} (${file.replace(/\.png$/, '')}) — geography only, so the place stays one space when the camera turns; no shot is staged on it`,
         });
       }
     }

@@ -4,6 +4,7 @@ import type {
   ShotScript,
   ShotEnvironment,
   MiniDramaCharacter,
+  PlateView,
   VideoElement,
 } from 'venice-video-harness/core/series/types.js';
 import {
@@ -31,7 +32,7 @@ import type { AestheticProfile } from '../storyboard/prompt-builder.js';
 import { mustRenderAsExactLipSync, parseShotDuration } from './generation-planner.js';
 import { faceCapableTwinId, getMaxPositivePromptChars, getVideoModel, modelWantsSimplePrompt, stagedFrameLane } from 'venice-video-harness/core/venice/models.js';
 import { getLocation } from '../series/manager.js';
-import { buildMontageSlotPlan, buildReferenceSlotPlan, type ReferenceSlot } from './reference-slots.js';
+import { buildMontageSlotPlan, buildReferenceSlotPlan, stagedPlateFor, type ReferenceSlot } from './reference-slots.js';
 import { objectVehicleKind } from './plan-check.js';
 import { shotIdOf } from './shot-paths.js';
 import { pickedPlate } from './staging.js';
@@ -1275,6 +1276,20 @@ function formatBeatSeconds(sec: number): string {
  * each shot names its place and that place's image, and the references come
  * from the montage slot plan (`buildMontageSlotPlan`).
  */
+const COMPASS: PlateView[] = ['north', 'east', 'south', 'west'];
+
+/**
+ * How the camera turned between two shots at one place, from the compass
+ * views they are staged on ("turned 90 degrees to the left and looks west");
+ * '' when either has no view or both share one. Every cut inside a scene
+ * changes the angle (Jordan, 2026-11-18), and the prompt says how.
+ */
+export function angleChange(from?: PlateView, to?: PlateView): string {
+  if (!from || !to || from === to) return '';
+  const turn = (COMPASS.indexOf(to) - COMPASS.indexOf(from) + 4) % 4;
+  return `${turn === 1 ? 'turned 90 degrees to the right' : turn === 2 ? 'turned round 180 degrees' : 'turned 90 degrees to the left'} and looks ${to}`;
+}
+
 function buildShotListMontagePrompt(
   shots: ShotScript[],
   unit: GenerationUnit,
@@ -1284,6 +1299,10 @@ function buildShotListMontagePrompt(
   beats: NonNullable<GenerationUnit['montageBeats']>,
 ): MiniDramaVideoPrompt {
   const plan = buildMontageSlotPlan(series, shots, modelId, { views: resolveMontageReferenceViews(series.videoDefaults) });
+  // A shot's compass view: its plateView, else the first plate on disk, as the slot plan stages it. Only a unit that
+  // names its views says how the camera turned; a script that never named one makes no claim about them.
+  const namesViews = shots.some(shot => shot.plateView);
+  const stagedView = (shot: ShotScript) => (shot.plateView ?? stagedPlateFor(series, shot)?.view) as PlateView | undefined;
   for (const note of plan.dropped) console.warn(`  ⚠ Reference budget (montage): dropped ${note}`);
 
   const castNames = Array.from(new Set(shots.flatMap(shot => shot.characters)));
@@ -1371,6 +1390,8 @@ function buildShotListMontagePrompt(
     const camera = CAMERA_TERMS[shot.cameraMovement?.toLowerCase?.() ?? ''] ?? shot.cameraMovement;
     const rest: string[] = [];
     const previous = shots[i - 1];
+    const turned = previous && previous.location === shot.location && namesViews && !simplePrompt
+      ? angleChange(stagedView(previous), stagedView(shot)) : '';
     if (i > 0 && shot.continuity?.from === 'continuous' && previous?.continuity?.endState && !simplePrompt) {
       rest.push(`It starts where shot ${i} ends: ${substituteTags(previous.continuity.endState).replace(/\.$/, '')}.`);
     }
@@ -1388,7 +1409,8 @@ function buildShotListMontagePrompt(
     const note = (unit.shotNotes?.[shotIdOf(shot)] ?? '').replace(/\s+/g, ' ').trim();
     shotLines.push({
       index: parts.length,
-      head: `${i ? 'Cut to ' : ''}Shot ${i + 1} | ${formatBeatSeconds(beat.startSec)}-${formatBeatSeconds(beat.endSec)}s | ${label}:${camera && !simplePrompt ? ` ${camera.replace(/\.$/, '')}.` : ''}`,
+      head: `${i ? 'Cut to ' : ''}Shot ${i + 1} | ${formatBeatSeconds(beat.startSec)}-${formatBeatSeconds(beat.endSec)}s | ${label}:`
+        + `${turned ? ` New angle: from shot ${i}, the camera has ${turned}.` : ''}${camera && !simplePrompt ? ` ${camera.replace(/\.$/, '')}.` : ''}`,
       desc: substituteTags(shot.description),
       note: note ? substituteTags(/[.!?…]$/.test(note) ? note : `${note}.`) : '',
       blocking: shot.blocking && !simplePrompt ? substituteTags(shot.blocking) : '',

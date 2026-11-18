@@ -150,7 +150,7 @@ test('montageGrammar sequence brings back the SEQUENCE grouping, single inserts 
 test('the montage slot plan: first-appearance order, staged views only, and each place says which shots it serves', () => {
   const { dir, series, journey } = fixture();
   try {
-    const plan = buildMontageSlotPlan(series, journey, MODEL);
+    const plan = buildMontageSlotPlan(series, journey, MODEL, { views: 'staged' });
     assert.deepEqual(slotNames(plan), [
       'character-primary:ANNA:front.png',
       'character-primary:LEO:front.png',
@@ -163,6 +163,16 @@ test('the montage slot plan: first-appearance order, staged views only, and each
     assert.deepEqual([...plan.placeByShot.entries()], [[1, 4], [2, 5], [3, 6], [4, 6]]);
     assert.match(plan.slots[3].roleClause, /^is Market Street \(the north view\), for shot 1 only: the tram stop, the cable tram waiting at the kerb/);
     assert.match(plan.slots[5].roleClause, /for shots 3 and 4 only: the window seat, left of frame, the lighthouse in the window\. It does not set where people, vehicles or props are in any other shot/);
+    // The default (`views`) sends every view of each place, the staged ones carrying their shots, and no second angles.
+    const four = buildMontageSlotPlan(series, journey, MODEL);
+    const fourPlaces = four.slots.filter(s => s.kind === 'location');
+    assert.deepEqual(fourPlaces.map(s => `${s.label}:${s.path.split('/').pop()}`), [
+      'market-street:north.png', 'market-street:south.png', 'market-street:east.png', 'market-street:west.png',
+      'tram-interior:north.png', 'tram-interior:south.png', 'tram-interior:east.png', 'tram-interior:west.png',
+    ]);
+    assert.equal(four.slots.filter(s => s.kind === 'character-angle').length, 0);
+    assert.match(four.slots.find(s => s.path.endsWith('market-street/south.png')).roleClause, /^is another view of Market Street \(south\) — geography only, so the place stays one space when the camera turns; no shot is staged on it/);
+    assert.match(four.slots[four.placeByShot.get(2) - 1].roleClause, /^is Market Street \(the west view\), for shot 2 only/);
     // `all` adds the other canonical views of each place and the second angles, after the essentials they belong to.
     const all = buildMontageSlotPlan(series, journey, MODEL, { views: 'all' });
     assert.equal(all.slots.filter(s => s.kind === 'location').length, 8);
@@ -256,7 +266,7 @@ test('the shot-list prompt: places per shot, Cut to, the abrupt-cut line, a vehi
   const { dir, series, journey } = fixture();
   try {
     const unit = montageUnit(journey, 5, 4, 5, 4);
-    const out = buildMontagePrompt(journey, unit, series);
+    const out = buildMontagePrompt(journey, unit, { ...series, videoDefaults: { ...series.videoDefaults, montageReferenceViews: 'staged' } });
     const p = out.prompt;
     assert.match(p, /^One continuous scene in 4 connected shots, in story order, moving through Market Street, then Tram Interior\. No music/);
     assert.match(p, /References, in the order they first appear:\n@Image1 is ANNA — wearing a yellow raincoat/);
@@ -272,6 +282,16 @@ test('the shot-list prompt: places per shot, Cut to, the abrupt-cut line, a vehi
     assert.doesNotMatch(p, /SEQUENCE:|fast-cut montage|\d+ seconds\./);
     // The @ImageN in the prompt and the push order of reference_image_urls come from the same slot list.
     assert.deepEqual(out.referenceSlots.map(s => s.imageIndex), [1, 2, 3, 4, 5, 6, 7]);
+    // A cut to another view of the same place says how the camera turned.
+    assert.match(p, /Cut to Shot 2 \| 5-9s \| Market Street \(@Image5\): New angle: from shot 1, the camera has turned 90 degrees to the left and looks west\./);
+    assert.doesNotMatch(p, /Cut to Shot 3 [^\n]*New angle/);
+    // The default sends every view of each place: each shot still points at its own staged view.
+    const four = buildMontagePrompt(journey, unit, series);
+    assert.equal(four.referenceSlots.filter(s => s.kind === 'location').length, 8);
+    assert.match(four.prompt, /\nShot 1 \| 0-5s \| Market Street \(@Image4\):/);
+    assert.match(four.prompt, /\nCut to Shot 2 \| 5-9s \| Market Street \(@Image7\): New angle/);
+    assert.match(four.prompt, /\nCut to Shot 3 \| 9-14s \| Tram Interior \(@Image8\):/);
+    assert.match(four.prompt, /@Image5 is another view of Market Street \(south\) — geography only/);
     // The SEQUENCE grammar is one setting away.
     const old = buildMontagePrompt(journey, unit, { ...series, videoDefaults: { ...series.videoDefaults, montageGrammar: 'sequence' } });
     assert.match(old.prompt, /fast-cut montage/);
@@ -330,7 +350,9 @@ test('an over-long shot-list prompt: prose shrinks to 40% at the guard, below th
   const build = (repeat, model = MODEL, blockingRepeat = 20) => {
     const long = journey.map(s => ({ ...s, description: `${s.description} ${'the light moves over the stalls, '.repeat(repeat)}`.trim(), blocking: 'ANNA screen left, LEO screen right. '.repeat(blockingRepeat) }));
     const unit = { ...montageUnit(long, 5, 4, 5, 4), model };
-    return { long, prompt: quietly(() => buildMontagePrompt(long, unit, series).prompt) };
+    // Calibrated on the staged references: the default's extra view clauses take room the prose would otherwise get.
+    const staged = { ...series, videoDefaults: { ...series.videoDefaults, montageReferenceViews: 'staged' } };
+    return { long, prompt: quietly(() => buildMontagePrompt(long, unit, staged).prompt) };
   };
   const line = (prompt, n) => prompt.split('\n').find(l => l.startsWith(`${n > 1 ? 'Cut to ' : ''}Shot ${n} |`));
   try {

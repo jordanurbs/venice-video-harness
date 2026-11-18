@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Changed
+
+- **Every cut changes the camera angle, and a montage sends every view of its
+  places (Jordan, 2026-11-18).** Notes on a board cut where shots inside a
+  scene repeated one plate view: "we should always be changing angles between
+  cuts like this, it should be clear in our prompting along with the attached
+  location plates which should have 4 different angles." Three changes:
+  - `montageReferenceViews` takes `views`, now the default: each shot's staged
+    view, then the other canonical views of its place, with a geography-only
+    clause ("no shot is staged on it"). Over budget the extra views go first.
+    `staged` is the old default (the 2026-10-25 bakeoff found that extra views
+    of two places put one place's action on the other's plate); `all` still
+    adds the cast's second angles. The extra clauses take prompt room, so a
+    long unit's prose shrinks sooner at the 8000-character guard.
+  - The shot-list prompt says how the camera turned when a shot cuts to
+    another view of the same place ("New angle: from shot 1, the camera has
+    turned 90 degrees to the left and looks west"; `angleChange`), from each
+    shot's staged view, only in a unit that names its views.
+  - The plan check warns on a cut inside a scene onto the view and shot size
+    of the shot before it (`same-angle`); a `new-scene` cut or a staged first
+    frame is not checked.
+  Tests: `tests/montage-engine.test.mjs`, `tests/plan-check.test.mjs`.
+
 ### Fixed
 
 - **`generate-location-references --prompt` was ignored on south, east and

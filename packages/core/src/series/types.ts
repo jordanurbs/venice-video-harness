@@ -207,19 +207,22 @@ export interface VideoModelDefaults {
   /**
    * Location references a shot-list montage unit sends when its shots name
    * the view they are staged on (`plateView`).
-   *   - `staged` (default): only the view each shot is staged on (its
-   *     `plateView`, else the first plate on disk), one primary reference per
-   *     cast member.
-   *   - `all`: also the other canonical views of each place in the unit and
-   *     the cast's second angles, in first-appearance order. It adds no
-   *     custom angles and is not the old plan.
+   *   - `views` (default since 2026-11-18): the view each shot is staged on
+   *     (its `plateView`, else the first plate on disk), then the other
+   *     canonical views of each place, one primary reference per cast member.
+   *     Every cut changes the camera angle, and the model needs the place
+   *     from every side to turn the camera in it (Jordan, 2026-11-18).
+   *   - `staged`: only the view each shot is staged on (the default until
+   *     2026-11-18: in the 2026-10-25 bakeoff, sending all the views of two
+   *     places put one place's action on the plate of the other).
+   *   - `all`: `views` plus the cast's second angles, in first-appearance
+   *     order. It adds no custom angles and is not the old plan.
+   * Over budget the extra views go first, before any staged view.
    * A unit where no shot names a `plateView` (every script written before
    * the field existed) sends what a montage always sent, whatever this says:
-   * every view of its location, custom angles and second angles. In the
-   * bakeoff, sending all the views of two places put one place's action on
-   * the plate of the other.
+   * every view of its location, custom angles and second angles.
    */
-  montageReferenceViews?: 'staged' | 'all';
+  montageReferenceViews?: 'staged' | 'views' | 'all';
   /**
    * What happens to a montage render after the cutter has sliced it:
    *   - `true`  — auto-edit: the harness also assembles the cut shots into
@@ -1268,11 +1271,12 @@ export function resolveMontageGrammar(
   return videoDefaults?.montageGrammar === 'sequence' ? 'sequence' : 'shots';
 }
 
-/** Location views a shot-list montage unit sends: staged views (default) or all of them. */
+/** Location views a shot-list montage unit sends: every view of each place (default), staged views only, or all. */
 export function resolveMontageReferenceViews(
   videoDefaults?: Pick<VideoModelDefaults, 'montageReferenceViews'>,
-): 'staged' | 'all' {
-  return videoDefaults?.montageReferenceViews === 'all' ? 'all' : 'staged';
+): 'staged' | 'views' | 'all' {
+  const views = videoDefaults?.montageReferenceViews;
+  return views === 'staged' || views === 'all' ? views : 'views';
 }
 
 /**
